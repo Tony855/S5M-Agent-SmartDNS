@@ -289,7 +289,8 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	select {
 	case err := <-output:
 		if err != nil {
-			diagnostic := strings.TrimSpace(stdout.String() + "\\n" + stderr.String() + "\\n" + err.Error())\n\t\t\treturn "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(diagnostic))
+			diagnostic := strings.TrimSpace(stdout.String() + "\n" + stderr.String() + "\n" + err.Error())
+			return "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(diagnostic))
 		}
 		return "", fmt.Errorf("SmartDNS 配置预检进程意外退出")
 	case <-time.After(350 * time.Millisecond):
