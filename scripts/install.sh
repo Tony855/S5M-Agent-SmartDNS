@@ -157,7 +157,14 @@ log_step "同步 SmartDNS 源码"
 # 已存在目录只允许在来源正确、工作区干净且可快进时更新，绝不覆盖用户本地修改。
 SMARTDNS_REPO="https://github.com/Tony855/S5M-Agent-SmartDNS.git"
 SMARTDNS_BRANCH="main"
-SMARTDNS_DIR="/root/S5M-SmartDNS"
+
+# SmartDNS 仓库必须与当前主控源码目录分开。
+# /root/S5M-SmartDNS 在部分部署中是 S5M-Master 主控源码仓库，
+# 不能将其当作 Agent-SmartDNS 仓库执行 fetch/merge。
+SMARTDNS_DIR="/root/S5M-Agent-SmartDNS"
+if [[ "$(realpath -m "$SMARTDNS_DIR")" == "$(realpath -m "$ROOT")" ]]; then
+  die "SmartDNS 同步目录与当前主控源码目录相同，拒绝操作：$SMARTDNS_DIR"
+fi
 
 sync_smartdns_repository() {
   log_info "正在同步 SmartDNS 源码：$SMARTDNS_DIR（分支：$SMARTDNS_BRANCH）"
