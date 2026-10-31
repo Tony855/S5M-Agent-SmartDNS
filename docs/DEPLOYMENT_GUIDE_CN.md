@@ -2,7 +2,7 @@
 
 本文用于部署已经由 GitHub Actions 构建的完整 S5M Agent 容器镜像。镜像基于 Alpine Linux，内置 Agent、Mihomo、默认配置、启动脚本和健康检查；Agent 文件位于容器内 `/app`，Mihomo 可执行文件位于 `/usr/local/bin/mihomo`。本教程同时覆盖主控安装、镜像包获取、Ubuntu/Debian Docker 部署、RouterOS 容器部署、绑定、验证、升级和故障排查。
 
-> **重要：** 当前工作流生成 GitHub Actions 构建产物（tar 镜像包），不依赖 GHCR 登录或拉取权限。先在仓库 Actions 中确认两个架构的构建与镜像 smoke test 均成功，再下载产物。不要把“工作流已启动”当作构建成功。
+> **重要：** 当前工作流在 main 分支的 AMD64/ARM64 测试成功后发布 GHCR 多架构镜像；PR 验证不会发布镜像。先在仓库 Actions 中确认两个架构的构建与镜像 smoke test 均成功，再下载产物。不要把“工作流已启动”当作构建成功。
 
 ## 1. 部署结构和端口
 
@@ -58,27 +58,28 @@ sudo journalctl -u mihomo -n 100 --no-pager
 
 如果主控已部署且健康检查通过，可以跳过本节。
 
-## 4. 从 GitHub Actions 下载完整镜像包
+## 4. 从 GHCR 获取多架构镜像
 
-1. 打开仓库的 [Actions 工作流](https://github.com/Tony855/S5M-Agent-SmartDNS/actions/workflows/agent-images.yml)。
-2. 选择最近一次对应当前代码提交的 **S5M Agent multi-arch images** 工作流运行记录。
-3. 确认 `Build and publish multi-arch image`（amd64）和 `Build ARM64 RouterOS archive` 两个 job 都成功；各自的 smoke test 必须成功。
-4. 在该运行记录的 **Artifacts** 区域分别下载：
-   - `s5m-agent-linux-amd64`：适用于常见 x86_64 Ubuntu/Debian 主机。
-   - `s5m-agent-linux-arm64`：适用于 ARM64 设备；用于 RouterOS 前必须确认 RouterOS 设备本身支持 ARM64 容器。
-5. 每个下载项是 ZIP 产物包。解压后应找到对应的 `.tar` 镜像归档和 `.tar.sha256` 校验文件。注意：这里的 `.tar` 才是容器镜像，不是源代码压缩包。
-
-在下载文件所在目录执行校验（文件名按实际解压结果填写）：
+当前主线工作流为 `.github/workflows/s5m-agent-smartdns.yml`。PR 阶段分别构建并测试 AMD64/ARM64；只有代码合并并推送到 `main` 后，发布 job 才会在两项测试通过后推送多架构镜像到 GHCR。
 
 ```bash
-sha256sum -c s5m-agent-linux-amd64.tar.sha256
-# ARM64 设备则校验：
-sha256sum -c s5m-agent-linux-arm64.tar.sha256
+sudo docker pull ghcr.io/tony855/s5m-agent-smartdns:dev
+sudo docker image inspect ghcr.io/tony855/s5m-agent-smartdns:dev --format 'OS={{.Os}} ARCH={{.Architecture}}'
 ```
 
-如果校验文件和 tar 不在同一目录，先把两者放在一起再校验。校验失败时不要导入镜像，重新下载产物并确认文件名。
+Docker 会按宿主机架构自动选择 `linux/amd64` 或 `linux/arm64`，无需手动下载不同架构的 Actions Artifact。生产环境建议固定经过验证的版本标签或镜像 digest；`dev` 会随 main 更新，不适合作为不可变版本。
 
-## 5. Ubuntu/Debian：导入并运行镜像
+如需离线传输，可在联网的 Docker 主机拉取对应架构镜像后导出：
+
+```bash
+docker pull --platform linux/amd64 ghcr.io/tony855/s5m-agent-smartdns:dev
+docker save ghcr.io/tony855/s5m-agent-smartdns:dev -o s5m-agent-smartdns-amd64.tar
+sha256sum s5m-agent-smartdns-amd64.tar > s5m-agent-smartdns-amd64.tar.sha256
+```
+
+ARM64 离线导出时将平台改为 `linux/arm64`，并使用不同的 tar 文件名。接收端先运行 `sha256sum -c`，再用 `docker load -i` 导入。RouterOS 本地导入同样使用与设备架构匹配、由 `docker save` 生成的镜像归档；不要把 ZIP/源码包当作镜像 tar。
+
+## 5. Ubuntu/Debian：运行镜像
 
 ### 5.1 安装 Docker Engine
 
@@ -107,14 +108,14 @@ scp s5m-agent-linux-amd64.tar.sha256 user@AGENT_SERVER_IP:/tmp/
 ```bash
 cd /tmp
 sha256sum -c s5m-agent-linux-amd64.tar.sha256
-sudo docker load -i s5m-agent-linux-amd64.tar
+sudo docker pull ghcr.io/tony855/s5m-agent-smartdns:dev
 sudo docker image ls
 ```
 
-确认 `docker load` 输出的镜像名称/标签。Actions 导出的归档标签可能是构建专用标签 `s5m-agent:amd64-test`；以 `docker image ls` 的实际输出为准。为了后续部署命令统一，可以手动打一个本地标签：
+确认 `docker pull` 成功后，为后续部署命令统一打一个本地标签：
 
 ```bash
-sudo docker tag s5m-agent:amd64-test s5m-agent:local
+sudo docker tag ghcr.io/tony855/s5m-agent-smartdns:dev s5m-agent:local
 ```
 
 如果导入后镜像标签与示例不同，将上面的源标签替换为实际标签。
