@@ -60,6 +60,7 @@ createApp({
     let smartdnsLoadGeneration = 0;
     watch(selectedConfigNode, () => {
       smartdnsLoadGeneration++;
+      loadingSmartDNS.value = false;
       smartdnsYaml.value = '';
       smartdnsResult.value = '';
       smartdnsStatus.value = { available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' };
@@ -1222,6 +1223,7 @@ createApp({
         smartdnsYaml.value = String((saved.data || {}).config || '');
         smartdnsResult.value += smartdnsYaml.value ? '；显示的是主控最近保存副本，Agent 回传完成后再次点击刷新获取最新内容' : '；等待 Agent 首次回传';
       } catch (e) {
+        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         smartdnsResult.value = '读取失败：' + (e.message || String(e));
         showMsg(smartdnsResult.value, 'error');
       } finally { if (generation === smartdnsLoadGeneration) loadingSmartDNS.value = false; }
