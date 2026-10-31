@@ -294,6 +294,18 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 		return "", fmt.Errorf("创建 SmartDNS 数据目录失败")
 	}
 
+	// Commands are redelivered until the controller durably stores their ACK.
+	// Treat an identical already-applied config as success without restarting
+	// SmartDNS again, making configure_smartdns safe under ACK loss/replay.
+	if current, readErr := readSmartDNSFileNoFollow(smartDNSConfigPath, 8<<10); readErr == nil {
+		if bytes.Equal(current, data) {
+			sum := sha256.Sum256(bytes.TrimSpace(data))
+			return hex.EncodeToString(sum[:]), nil
+		}
+	} else if !os.IsNotExist(readErr) {
+		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
+	}
+
 	// Validate the candidate with the actual SmartDNS parser on a temporary
 	// loopback port before replacing the live configuration.
 	candidateLines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
