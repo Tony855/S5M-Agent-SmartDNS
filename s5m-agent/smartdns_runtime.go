@@ -292,6 +292,17 @@ func smartDNSConfigAlreadyApplied(path string, candidate []byte) (bool, error) {
 	return bytes.Equal(current, candidate), nil
 }
 
+func smartDNSReplayIsHealthy(path string, candidate []byte, probe func() bool) (bool, error) {
+	applied, err := smartDNSConfigAlreadyApplied(path, candidate)
+	if err != nil || !applied {
+		return false, err
+	}
+	if probe == nil || !probe() {
+		return false, nil
+	}
+	return true, nil
+}
+
 func writeSmartDNSConfig(data []byte) (string, error) {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
@@ -308,20 +319,20 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	// Commands are redelivered until the controller durably stores their ACK.
 	// Treat an identical already-applied config as success without restarting
 	// SmartDNS again, making configure_smartdns safe under ACK loss/replay.
+	replayHealthy, readErr := smartDNSReplayIsHealthy(smartDNSConfigPath, data, probeSmartDNSDNS)
+	if readErr != nil {
+		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
+	}
+	if replayHealthy {
+		sum := sha256.Sum256(bytes.TrimSpace(data))
+		return hex.EncodeToString(sum[:]), nil
+	}
 	alreadyApplied, readErr := smartDNSConfigAlreadyApplied(smartDNSConfigPath, data)
 	if readErr != nil {
 		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
 	}
 	if alreadyApplied {
-		// A matching file is not sufficient evidence of a successful replay:
-		// the daemon may have crashed after the first apply but before its ACK
-		// was persisted. Only acknowledge the duplicate when UDP and TCP DNS
-		// are both answering successfully.
-		if !probeSmartDNSDNS() {
-			return "", fmt.Errorf("SmartDNS 配置文件已是目标版本，但 UDP/TCP DNS 健康检查失败")
-		}
-		sum := sha256.Sum256(bytes.TrimSpace(data))
-		return hex.EncodeToString(sum[:]), nil
+		return "", fmt.Errorf("SmartDNS 配置文件已是目标版本，但 UDP/TCP DNS 健康检查失败")
 	}
 
 	// Validate the candidate with the actual SmartDNS parser on a temporary
