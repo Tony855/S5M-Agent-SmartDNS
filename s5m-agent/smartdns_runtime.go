@@ -21,6 +21,44 @@ import (
 )
 
 const smartDNSConfigPath = "/data/smartdns.conf"
+const smartDNSPreflightOutputLimit = 8 << 10
+
+type boundedDiagnosticBuffer struct {
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	truncated bool
+}
+
+func (b *boundedDiagnosticBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := smartDNSPreflightOutputLimit - b.buffer.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			_, _ = b.buffer.Write(p[:remaining])
+			b.truncated = true
+		} else {
+			_, _ = b.buffer.Write(p)
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	// Report the full write as consumed: the child process must not fail just
+	// because diagnostic output is capped.
+	return len(p), nil
+}
+
+func (b *boundedDiagnosticBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func (b *boundedDiagnosticBuffer) Truncated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.truncated
+}
 
 var smartDNSConfigMu sync.Mutex
 
@@ -278,7 +316,7 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	cmd := exec.CommandContext(ctx, "/usr/sbin/smartdns", "-f", "-x", "-p", "-", "-c", tmpPath)
 	// Capture both streams so configuration parser errors are actionable rather
 	// than being reduced to the generic "exit status 1" from cmd.Wait().
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr boundedDiagnosticBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	output := make(chan error, 1)
@@ -290,6 +328,9 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	case err := <-output:
 		if err != nil {
 			diagnostic := strings.TrimSpace(stdout.String() + "\n" + stderr.String() + "\n" + err.Error())
+			if stdout.Truncated() || stderr.Truncated() {
+				diagnostic += "（预检输出已截断）"
+			}
 			return "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(diagnostic))
 		}
 		return "", fmt.Errorf("SmartDNS 配置预检进程意外退出")
