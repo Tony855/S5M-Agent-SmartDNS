@@ -647,4 +647,32 @@ NGINXEOF
     rollback_install "HTTPS 证书签发失败"
     exit 1
   fi
-  # 显式启用并校验自动续期
+  # 显式启用并校验自动续期  if ! systemctl enable --now certbot.timer || ! systemctl is-active --quiet certbot.timer; then
+    echo "❌ HTTPS 证书已签发，但 certbot.timer 未能启动，无法确认自动续期已启用。" >&2
+    rollback_install "Certbot 自动续期服务启动失败"
+    exit 1
+  fi
+  if ! certbot certificates 2>/dev/null | grep -Fq "Domains: $S5M_DOMAIN"; then
+    echo "❌ Certbot 未列出 $S5M_DOMAIN 的有效证书。" >&2
+    rollback_install "HTTPS 证书登记校验失败"
+    exit 1
+  fi
+  if ! curl -fsS --max-time 10 "https://$S5M_DOMAIN/api/v1/health" >/tmp/s5m-server-https-health.json; then
+    rollback_install "HTTPS 端点健康检查失败"
+    exit 1
+  fi
+  echo "🔐 HTTPS 证书已签发并配置自动续期： https://$S5M_DOMAIN"
+elif [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 1 ]]; then
+  # 已有 HTTPS：只做健康检查，不改配置
+  if ! curl -fsS --max-time 10 "https://$S5M_DOMAIN/api/v1/health" >/tmp/s5m-server-https-health.json; then
+    echo "❌ 检测到现有 HTTPS 配置，但 HTTPS 健康检查失败；为避免覆盖现有配置，安装器停止。请检查 Nginx/证书/服务状态。" >&2
+    exit 1
+  fi
+  echo "✅ 复用现有 HTTPS 配置，不重新签发证书： https://$S5M_DOMAIN"
+fi
+
+# 成功输出
+echo "✅ S5M-Server 安装成功"
+echo "   服务: $UNIT（端口 $PORT）"
+echo "   健康: $(cat /tmp/s5m-server-health.json)"
+if [[ -n "$S5M_DOMAIN" ]]; then echo "   HTTPS: https://$S5M_DOMAIN"; else echo "   HTTPS: 未配置（设置 S5M_DOMAIN 与 S5M_EMAIL 可启用 Let's Encrypt）"; fi
