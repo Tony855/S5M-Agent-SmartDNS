@@ -317,6 +317,8 @@ MIHOMO_HASH_FILE="/opt/S5M-Server/.mihomo-config.md5"
 if [[ -f "$MIHOMO_HASH_FILE" ]]; then cp -a "$MIHOMO_HASH_FILE" "$BACKUP/mihomo-config.md5"; else : > "$BACKUP/mihomo-hash-absent"; fi
 if systemctl is-enabled --quiet mihomo 2>/dev/null; then : > "$BACKUP/mihomo-enabled"; else : > "$BACKUP/mihomo-disabled"; fi
 if systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then : > "$BACKUP/server-enabled"; else : > "$BACKUP/server-disabled"; fi
+if systemctl is-active --quiet mihomo 2>/dev/null; then : > "$BACKUP/mihomo-active"; else : > "$BACKUP/mihomo-inactive"; fi
+if systemctl is-active --quiet "$UNIT" 2>/dev/null; then : > "$BACKUP/server-active"; else : > "$BACKUP/server-inactive"; fi
 
 # 首次配置 HTTPS 前也备份 nginx 站点文件
 if [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 ]]; then
@@ -389,12 +391,12 @@ rollback_install() {
   systemctl daemon-reload
   if [[ -f "$BACKUP/mihomo-enabled" ]]; then systemctl enable mihomo 2>/dev/null || true; else systemctl disable mihomo 2>/dev/null || true; fi
   if [[ -f "$BACKUP/server-enabled" ]]; then systemctl enable "$UNIT" 2>/dev/null || true; else systemctl disable "$UNIT" 2>/dev/null || true; fi
-  if [[ -f "$BACKUP/mihomo.service" ]]; then
+  if [[ -f "$BACKUP/mihomo-active" && -f "$BACKUP/mihomo.service" ]]; then
     systemctl restart mihomo || echo "❌ Mihomo 回滚启动失败，请检查 journalctl -u mihomo" >&2
   else
     systemctl stop mihomo 2>/dev/null || true
   fi
-  if [[ -f "$BACKUP/S5M-Server.bin" ]]; then
+  if [[ -f "$BACKUP/server-active" && -f "$BACKUP/S5M-Server.bin" && -f "$BACKUP/s5m-server.service" ]]; then
     systemctl start "$UNIT" || echo "❌ 旧版 S5M-Server 启动失败，请检查 journalctl -u $UNIT" >&2
   else
     systemctl stop "$UNIT" 2>/dev/null || true
