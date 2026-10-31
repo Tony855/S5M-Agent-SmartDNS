@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"database/sql"
 	"crypto/sha256"
 	"encoding/hex"
@@ -576,7 +577,7 @@ func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) err
 		return fmt.Errorf("生成内核更新命令失败")
 	}
 	if err := a.store.QueueAuthorizedAgentCommand(machineCode, string(payload)); err != nil {
-		if strings.Contains(err.Error(), "pending") {
+		if errors.Is(err, ErrAgentCommandPending) {
 			return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
 		}
 		return fmt.Errorf("Agent 未授权或保存内核更新命令失败: %w", err)
