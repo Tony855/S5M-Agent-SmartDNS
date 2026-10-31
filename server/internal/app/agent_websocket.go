@@ -602,9 +602,10 @@ func (a *App) queueAgentSmartDNSRead(machineCode string) error {
 	token := settings["agent_machine_"+machineCode]
 	if token == "" || token == settings["agent_token"] { return fmt.Errorf("目标 Agent 未授权") }
 	command, _ := json.Marshal(map[string]string{"id":fmt.Sprintf("%d",time.Now().UnixNano()),"type":"read_smartdns_config"})
-	created, err := a.store.CreateSettingIfAbsent("agent_command_"+machineCode,string(command))
-	if err != nil { return err }
-	if !created { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
+	if err := a.store.QueueAgentSmartDNSReadCommand(machineCode, string(command)); err != nil {
+		if strings.Contains(err.Error(), "pending") { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
+		return fmt.Errorf("Agent 授权已失效或读取命令排队失败: %w", err)
+	}
 	a.publishBrowserEvent(map[string]any{"type":"agent.command.queued","machine_code":machineCode,"command_type":"read_smartdns_config","at":time.Now().Unix()})
 	return nil
 }
