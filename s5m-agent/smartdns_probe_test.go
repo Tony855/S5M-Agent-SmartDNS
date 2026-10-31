@@ -768,3 +768,25 @@ func TestBoundedDiagnosticBufferConcurrentWrites(t *testing.T) {
 		t.Fatal("concurrent writes should mark output truncated")
 	}
 }
+
+
+func TestSmartDNSConfigAlreadyApplied(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "smartdns.conf")
+	candidate := []byte("bind 127.0.0.1:6053\\n")
+	if err := os.WriteFile(path, candidate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := smartDNSConfigAlreadyApplied(path, candidate)
+	if err != nil || !applied {
+		t.Fatalf("identical config: applied=%v err=%v", applied, err)
+	}
+	applied, err = smartDNSConfigAlreadyApplied(path, []byte("different config"))
+	if err != nil || applied {
+		t.Fatalf("different config: applied=%v err=%v", applied, err)
+	}
+	missing, err := smartDNSConfigAlreadyApplied(filepath.Join(dir, "missing.conf"), candidate)
+	if err != nil || missing {
+		t.Fatalf("missing config: applied=%v err=%v", missing, err)
+	}
+}
