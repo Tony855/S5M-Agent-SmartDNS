@@ -659,3 +659,39 @@ func TestSafeSmartDNSDiagnosticTruncatesAtUTF8Boundary(t *testing.T) {
 		t.Fatalf("valid prefix was not preserved: %q", got)
 	}
 }
+
+func TestReadSmartDNSConfigAtRejectsSymlinksAndInvalidFiles(t *testing.T) {
+	dir := t.TempDir()
+	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1\n")
+	target := filepath.Join(dir, "target.conf")
+	if err := os.WriteFile(target, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.conf")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSConfigAt(link); err == nil {
+		t.Fatal("symlink configuration must be rejected")
+	}
+	if got, err := readSmartDNSConfigAt(target); err != nil || !bytes.Equal(got, valid) {
+		t.Fatalf("valid regular config read = %q, err=%v", got, err)
+	}
+	empty := filepath.Join(dir, "empty.conf")
+	if err := os.WriteFile(empty, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSConfigAt(empty); err == nil {
+		t.Fatal("empty config must be rejected")
+	}
+	large := filepath.Join(dir, "large.conf")
+	if err := os.WriteFile(large, bytes.Repeat([]byte("x"), (8<<10)+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSConfigAt(large); err == nil {
+		t.Fatal("oversized config must be rejected")
+	}
+	if _, err := readSmartDNSConfigAt(dir); err == nil {
+		t.Fatal("directory must be rejected")
+	}
+}
