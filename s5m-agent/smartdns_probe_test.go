@@ -795,7 +795,7 @@ func TestSmartDNSConfigAlreadyApplied(t *testing.T) {
 func TestSmartDNSReplayRequiresHealthyUDPAndTCPProbe(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "smartdns.conf")
-	candidate := []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver 1.1.1.1\\n")
+	candidate := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1\n")
 	if err := os.WriteFile(path, candidate, 0600); err != nil {
 		t.Fatal(err)
 	}
