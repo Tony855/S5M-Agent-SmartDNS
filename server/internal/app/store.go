@@ -202,12 +202,20 @@ func (s *Store) queueAuthorizedAgentCommand(machineCode, commandJSON string) err
 	if err != nil { return err }
 	defer tx.Rollback()
 	var token, globalToken string
-	if err := tx.QueryRow(`SELECT value FROM settings WHERE key=?`, "agent_machine_"+machineCode).Scan(&token); err != nil {
+	err = tx.QueryRow(`SELECT value FROM settings WHERE key=?`, "agent_machine_"+machineCode).Scan(&token)
+	if err == sql.ErrNoRows {
 		return fmt.Errorf("Agent binding is no longer authorized")
 	}
+	if err != nil {
+		return fmt.Errorf("读取 Agent 绑定授权失败: %w", err)
+	}
 	err = tx.QueryRow(`SELECT value FROM settings WHERE key='agent_token'`).Scan(&globalToken)
-	if err != nil && err != sql.ErrNoRows { return err }
-	if token == "" || token == globalToken { return fmt.Errorf("Agent binding is no longer authorized") }
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("读取全局 Agent 授权配置失败: %w", err)
+	}
+	if token == "" || token == globalToken {
+		return fmt.Errorf("Agent binding is no longer authorized")
+	}
 	result, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, "agent_command_"+machineCode, commandJSON)
 	if err != nil { return err }
 	created, err := result.RowsAffected()
