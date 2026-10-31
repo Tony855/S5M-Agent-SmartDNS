@@ -28,7 +28,7 @@ if [ -s "$CONFIG_PATH" ]; then
 fi
 
 # Never start with an empty or partial config if the packaged default is missing.
-if [ ! -f "$DEFAULT_CONFIG" || [ ! -s "$DEFAULT_CONFIG" ]; then
+if [ ! -f "$DEFAULT_CONFIG" ] || [ ! -s "$DEFAULT_CONFIG" ]; then
   echo "SmartDNS default configuration is missing or empty: $DEFAULT_CONFIG" >&2
   exit 1
 fi
