@@ -57,6 +57,8 @@ if [[ ${#_bootstrap_deps[@]} -gt 0 ]]; then
   fi
 fi
 
+log_step "检测现有 HTTPS 配置"
+
 # 解析 nginx -T 输出，查找已存在的 S5M HTTPS 虚拟主机
 # 只复用 443+ssl+proxy_pass 127.0.0.1:8080 且证书有效的 server 块
 if command -v nginx >/dev/null 2>&1; then
@@ -111,6 +113,8 @@ if [[ -z "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 && -t 0 ]]; then
   fi
 fi
 
+log_step "校验安装参数"
+
 # 域名格式校验
 if [[ -n "$S5M_DOMAIN" && ! "$S5M_DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
   echo "❌ S5M_DOMAIN 格式无效：$S5M_DOMAIN" >&2
@@ -131,6 +135,8 @@ fi
 for f in web/index.html web/app.js web/vendor/vue.global.prod.js web/vendor/element-plus.full.js web/vendor/element-plus.css; do
   if [[ ! -s "$SRC/$f" ]]; then echo "❌ 缺少前端资源: $SRC/$f" >&2; exit 1; fi
 done
+
+log_step "安装系统依赖"
 
 # 安装系统依赖（含可选的 nginx/certbot）
 apt_packages=(ca-certificates curl git build-essential golang-go sqlite3 libcap2-bin openssl python3 gzip)
@@ -360,6 +366,8 @@ for a in d.get("assets", []):
 }
 ensure_mihomo
 
+log_step "准备服务用户和数据目录"
+
 # 创建 s5m-server 系统用户和私有目录
 if ! getent passwd s5m-server >/dev/null; then useradd --system --home-dir "$DB_DIR" --shell /usr/sbin/nologin s5m-server; fi
 install -d -o s5m-server -g s5m-server -m 0750 "$DB_DIR" "$DB_DIR/backups"
@@ -569,6 +577,8 @@ fi
 # config.yaml 权限收紧
 chown s5m-server:s5m-server "$DB_DIR/config.yaml"
 chmod 0600 "$DB_DIR/config.yaml"
+
+log_step "生成 Mihomo 服务配置"
 
 # 写入 mihomo.service
 cat > /etc/systemd/system/mihomo.service <<MIHOMO_SERVICE_EOF
