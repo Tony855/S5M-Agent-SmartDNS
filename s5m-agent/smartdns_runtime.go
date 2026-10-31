@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 	"sync"
 	"time"
 )
@@ -480,7 +481,13 @@ func safeSmartDNSDiagnostic(message string) string {
 	message = smartDNSBearerPattern.ReplaceAllString(message, "${1}[REDACTED]")
 	message = smartDNSCredentialPattern.ReplaceAllString(message, "${1}=[REDACTED]")
 	if len(message) > 500 {
-		message = message[:500] + "…"
+		message = message[:500]
+		// Byte-based truncation can split a multi-byte diagnostic character.
+		// Trim to the last valid UTF-8 boundary before appending the ellipsis.
+		for !utf8.ValidString(message) {
+			message = message[:len(message)-1]
+		}
+		message += "…"
 	}
 	return message
 }
