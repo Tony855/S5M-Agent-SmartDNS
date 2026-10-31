@@ -36,7 +36,9 @@ This document records the currently implemented controller/Agent contract and di
 
 ## UI behavior
 
-The machine-code page uses the existing `s5m_next_token` browser storage key and sends the Bearer token to the authenticated endpoint. It displays an Agent as online when its last config pull was within 90 seconds; this is a UI heuristic, not a health check.
+The machine-code page uses the existing `s5m_next_token` browser storage key and sends the Bearer token to the authenticated endpoint. Agent online status must be based on the controller's persisted timestamp of the latest authenticated WebSocket heartbeat, not on configuration requests or the last config pull. Configuration retrieval is a separate operation and must never refresh the Agent heartbeat timestamp.
+
+The combined Agent + SmartDNS image healthcheck verifies the Agent HTTP API, Mihomo process, and SmartDNS process. The Agent heartbeat reports SmartDNS binary availability, process state, version, config SHA-256, and a real local DNS probe. A missing/non-executable SmartDNS binary and config/version/process/probe failures must produce an actionable `smartdns_last_error`; a running process alone does not imply DNS health.
 
 
 ## Complete per-Agent Mihomo configuration and kernel update workflow
