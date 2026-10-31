@@ -72,31 +72,42 @@ func readSmartDNSConfig() ([]byte, error) {
 // the opened descriptor rather than trusting a path-level Lstat that can race
 // with replacement of the file.
 func readSmartDNSConfigAt(path string) ([]byte, error) {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	data, err := readSmartDNSFileNoFollow(path, 8<<10)
 	if err != nil {
 		return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err)
+	}
+	if err := validateSmartDNSConfig(data); err != nil {
+		return nil, fmt.Errorf("当前 SmartDNS 配置不符合安全策略: %w", err)
+	}
+	return data, nil
+}
+
+// readSmartDNSFileNoFollow reads a bounded regular file without following a
+// symlink. It is also used for rollback snapshots, which must preserve bytes
+// even when an older configuration no longer passes the current policy.
+func readSmartDNSFileNoFollow(path string, maxBytes int64) ([]byte, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("检查 SmartDNS 配置文件失败: %w", err)
+		return nil, err
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("SmartDNS 配置路径不是普通文件")
 	}
-	if info.Size() <= 0 || info.Size() > 8<<10 {
-		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 8 KiB")
+	if info.Size() <= 0 || info.Size() > maxBytes {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 %d 字节", maxBytes)
 	}
-	data, err := io.ReadAll(io.LimitReader(file, (8<<10)+1))
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err)
+		return nil, err
 	}
-	if len(data) == 0 || len(data) > 8<<10 {
-		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 8 KiB")
-	}
-	if err := validateSmartDNSConfig(data); err != nil {
-		return nil, fmt.Errorf("当前 SmartDNS 配置不符合安全策略: %w", err)
+	if len(data) == 0 || int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 %d 字节", maxBytes)
 	}
 	return data, nil
 }
@@ -452,7 +463,7 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 // backupSmartDNSConfig snapshots the live configuration and durably writes
 // its rollback copy before callers are allowed to replace the live file.
 func backupSmartDNSConfig(livePath, backupPath string) ([]byte, bool, error) {
-	oldData, err := os.ReadFile(livePath)
+	oldData, err := readSmartDNSFileNoFollow(livePath, 8<<10)
 	if os.IsNotExist(err) {
 		// A backup from an earlier installation must never be mistaken for
 		// the rollback point of this first-time configuration. Remove it and
@@ -476,7 +487,7 @@ func backupSmartDNSConfig(livePath, backupPath string) ([]byte, bool, error) {
 }
 
 func smartDNSConfigMatches(path string, expected []byte, shouldExist bool) bool {
-	actual, err := os.ReadFile(path)
+	actual, err := readSmartDNSFileNoFollow(path, 8<<10)
 	if !shouldExist {
 		return os.IsNotExist(err)
 	}
