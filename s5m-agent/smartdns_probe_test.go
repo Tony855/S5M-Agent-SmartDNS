@@ -773,7 +773,7 @@ func TestBoundedDiagnosticBufferConcurrentWrites(t *testing.T) {
 func TestSmartDNSConfigAlreadyApplied(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "smartdns.conf")
-	candidate := []byte("bind 127.0.0.1:6053\\n")
+	candidate := []byte("bind 127.0.0.1:6053\n")
 	if err := os.WriteFile(path, candidate, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -788,5 +788,39 @@ func TestSmartDNSConfigAlreadyApplied(t *testing.T) {
 	missing, err := smartDNSConfigAlreadyApplied(filepath.Join(dir, "missing.conf"), candidate)
 	if err != nil || missing {
 		t.Fatalf("missing config: applied=%v err=%v", missing, err)
+	}
+}
+
+
+func TestSmartDNSReplayRequiresHealthyUDPAndTCPProbe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "smartdns.conf")
+	candidate := []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver 1.1.1.1\\n")
+	if err := os.WriteFile(path, candidate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	ok, err := smartDNSReplayIsHealthy(path, candidate, func() bool {
+		called = true
+		return true
+	})
+	if err != nil || !ok || !called {
+		t.Fatalf("healthy replay = %v, err=%v, probe called=%v", ok, err, called)
+	}
+	called = false
+	ok, err = smartDNSReplayIsHealthy(path, candidate, func() bool {
+		called = true
+		return false
+	})
+	if err != nil || ok || !called {
+		t.Fatalf("unhealthy replay = %v, err=%v, probe called=%v", ok, err, called)
+	}
+	called = false
+	ok, err = smartDNSReplayIsHealthy(path, []byte("different"), func() bool {
+		called = true
+		return true
+	})
+	if err != nil || ok || called {
+		t.Fatalf("different config replay = %v, err=%v, probe called=%v", ok, err, called)
 	}
 }
