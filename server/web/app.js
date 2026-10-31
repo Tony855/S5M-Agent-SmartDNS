@@ -1366,8 +1366,8 @@ createApp({
       try {
         const result = await sendBrowserWSControl({ type: 'smartdns.config.apply', machine_code: code, config });
         if (result.ok === false) throw new Error(result.error || '主控拒绝 SmartDNS 配置命令');
-        smartdnsResult.value = result.message || '已排队，等待 Agent 应用回执';
-        showMsg(smartdnsResult.value, 'success');
+        smartdnsResult.value = result.message || '已排队，尚未确认 Agent 应用结果';
+        showMsg(smartdnsResult.value, 'info');
       } catch (e) {
         smartdnsResult.value = '提交失败：' + (e.message || String(e));
         showMsg(smartdnsResult.value, 'error');
