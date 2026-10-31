@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+set -eu
+cd /app
+exec /app/s5m-agent

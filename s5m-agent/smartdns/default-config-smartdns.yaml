@@ -1,0 +1,45 @@
+# S5M Agent default config with local SmartDNS as the primary DNS resolver.
+# Existing /data/config.yaml is intentionally preserved by the init script.
+mixed-port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+ipv6: false
+
+external-controller: 127.0.0.1:8088
+secret: __S5M_GENERATED_SECRET__
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+dns:
+  enable: true
+  listen: 127.0.0.1:5353
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "+.v2net.cc"
+  # Bootstrap and proxy-node hostname lookups use literal-IP resolvers to avoid loops.
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  nameserver:
+    - 127.0.0.1:6053
+
+proxies: []
+proxy-groups: []
+
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - MATCH,DIRECT
+
+tun:
+  enable: false
+  stack: system
+  auto-route: true
+  auto-detect-interface: true

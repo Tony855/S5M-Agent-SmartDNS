@@ -1,0 +1,43 @@
+#!/command/with-contenv sh
+set -eu
+
+MIHOMO_HOME="${MIHOMO_HOME:-/data}"
+CONFIG_PATH="${MIHOMO_HOME}/config.yaml"
+mkdir -p "$MIHOMO_HOME"
+
+# Recover an interrupted kernel upgrade before services start.
+MIHOMO_BIN="/usr/local/bin/mihomo"
+MIHOMO_BACKUP="${MIHOMO_BIN}.previous"
+if [ -e "$MIHOMO_BACKUP" ]; then
+  echo "检测到未完成的 Mihomo 内核升级，尝试恢复旧内核"
+  if [ -x "$MIHOMO_BACKUP" ]; then
+    rm -f "$MIHOMO_BIN"
+    mv "$MIHOMO_BACKUP" "$MIHOMO_BIN"
+    chmod 0755 "$MIHOMO_BIN"
+    echo "已恢复旧 Mihomo 内核"
+  else
+    echo "旧 Mihomo 内核备份不存在或不可执行，拒绝覆盖当前内核" >&2
+    exit 1
+  fi
+fi
+
+# One-time migration from the retired directory; never overwrite current config.
+LEGACY_CONFIG="/data/s5m-next/config.yaml"
+if [ ! -s "$CONFIG_PATH" ] && [ -s "$LEGACY_CONFIG" ]; then
+  cp "$LEGACY_CONFIG" "$CONFIG_PATH"
+  chmod 0600 "$CONFIG_PATH"
+  echo "已将旧 Mihomo 配置迁移到 $CONFIG_PATH"
+fi
+
+if [ ! -s "$CONFIG_PATH" ]; then
+  cp /app/default-config.yaml "$CONFIG_PATH"
+  chmod 0600 "$CONFIG_PATH"
+fi
+
+# Generate a persistent API secret only for known default placeholders.
+if grep -Eq '^secret:[[:space:]]*"?(__S5M_GENERATED_SECRET__|__S5M_MIHOMO_SECRET__|change-this-secret)"?[[:space:]]*$' "$CONFIG_PATH"; then
+  secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d '[:space:]')"
+  [ "${#secret}" -eq 64 ] || { echo "无法生成 Mihomo API secret" >&2; exit 1; }
+  sed -i "s|^secret:.*|secret: \"$secret\"|" "$CONFIG_PATH"
+  chmod 0600 "$CONFIG_PATH"
+fi

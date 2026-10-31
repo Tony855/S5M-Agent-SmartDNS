@@ -1,0 +1,301 @@
+name: S5M Agent + SmartDNS image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "s5m-agent/Dockerfile.smartdns"
+      - "s5m-agent/docker-compose.yml"
+      - "s5m-agent/Dockerfile"
+      - "s5m-agent/Dockerfile.routeros"
+      - "s5m-agent/smartdns/**"
+      - "s5m-agent/main.go"
+      - "s5m-agent/*_test.go"
+      - "s5m-agent/smartdns_runtime.go"
+      - "s5m-agent/go.mod"
+      - "s5m-agent/go.sum"
+      - "s5m-agent/index.html"
+      - "s5m-agent/healthcheck.sh"
+      - "s5m-agent/cont-init.d/**"
+      - "s5m-agent/services/**"
+      - ".github/workflows/s5m-agent-smartdns.yml"
+  push:
+    branches: [main]
+    paths:
+      - "s5m-agent/Dockerfile.smartdns"
+      - "s5m-agent/docker-compose.yml"
+      - "s5m-agent/smartdns/**"
+      - "s5m-agent/main.go"
+      - "s5m-agent/*_test.go"
+      - "s5m-agent/smartdns_runtime.go"
+      - "source/**"
+      - "s5m-agent/go.mod"
+      - "s5m-agent/go.sum"
+      - "s5m-agent/index.html"
+      - "s5m-agent/healthcheck.sh"
+      - "s5m-agent/cont-init.d/**"
+      - "s5m-agent/services/**"
+      - ".github/workflows/s5m-agent-smartdns.yml"
+
+# Do not cancel a multi-architecture build halfway through when another
+# commit lands; queued runs must finish so image validation is trustworthy.
+concurrency:
+  group: s5m-agent-smartdns-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/tony855/s5m-agent-smartdns
+  SMARTDNS_REF: Release48.4
+
+jobs:
+  test-amd64:
+    name: Build and runtime smoke test (linux/amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test SmartDNS config initialization failure handling
+        run: sh s5m-agent/smartdns/tests/config-init-faults.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: s5m-agent/go.mod
+          cache: true
+          cache-dependency-path: s5m-agent/go.sum
+
+      - name: Run Agent unit tests
+        working-directory: s5m-agent
+        run: go test ./...
+
+      - name: Install DNS test client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dnsutils
+
+      - name: Build combined image
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg SMARTDNS_REF="${SMARTDNS_REF}" \
+            -f s5m-agent/Dockerfile.smartdns \
+            -t s5m-agent-smartdns:test .
+
+      - name: Test image contents
+        run: |
+          set -eux
+          grep -q "image: ghcr.io/tony855/s5m-agent-smartdns:dev" s5m-agent/docker-compose.yml
+          ! grep -q "6053:6053" s5m-agent/docker-compose.yml
+          docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
+            test -x /app/s5m-agent
+            test -x /usr/local/bin/mihomo
+            test -x /usr/sbin/smartdns
+            test -x /init
+            test -x /etc/s6-overlay/s6-rc.d/smartdns/run
+            test -s /etc/s6-overlay/s6-rc.d/smartdns/type
+            test -e /etc/s6-overlay/s6-rc.d/user/contents.d/smartdns
+            test -e /etc/s6-overlay/s6-rc.d/mihomo/dependencies.d/smartdns
+            test -s /usr/share/licenses/smartdns/LICENSE
+            test -s /usr/share/licenses/smartdns/SOURCE_COMMIT
+            grep -q "127.0.0.1:6053" /app/default-config.yaml
+            /usr/local/bin/mihomo -v
+            /usr/sbin/smartdns -h >/dev/null 2>&1 || true
+          '
+
+      - name: Test Agent, Mihomo and SmartDNS startup plus UDP/TCP DNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="s5m-agent-smartdns-test"
+          data_dir="$(mktemp -d)"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            sudo rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+
+          docker run -d --name "$container" --restart no \
+            -p 127.0.0.1::80/tcp \
+            -p 127.0.0.1::7890/tcp \
+            -v "$data_dir:/data" \
+            s5m-agent-smartdns:test >/dev/null
+
+          for attempt in $(seq 1 60); do
+            state="$(docker inspect --format '{{.State.Status}}' "$container")"
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
+            if [[ "$state" != "running" ]]; then docker logs "$container" >&2; exit 1; fi
+            if [[ "$health" == "healthy" ]] && docker exec "$container" pidof smartdns >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          docker exec "$container" pidof mihomo >/dev/null
+          docker exec "$container" pidof smartdns >/dev/null
+
+          # Existing operator configuration must survive restart without being overwritten.
+          docker exec "$container" sh -ec 'printf "\\n# s5m-persistence-test\\n" >> /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
+          docker restart "$container" >/dev/null
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
+            if [[ "$health" == "healthy" ]] && docker exec "$container" pidof smartdns >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          docker exec "$container" pidof mihomo >/dev/null
+          docker exec "$container" pidof smartdns >/dev/null
+          docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
+          [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
+
+          agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
+          proxy_port="$(docker port "$container" 7890/tcp | awk -F: 'NR==1 {print $NF}')"
+          [[ -n "$agent_port" && -n "$proxy_port" ]]
+
+          curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
+          nc -z -w 2 127.0.0.1 "$proxy_port"
+
+          # Test the loopback-only resolver from a helper sharing the Agent network namespace.
+          docker run --rm --network "container:$container" alpine:3.24 sh -ec '
+            apk add --no-cache bind-tools >/dev/null
+            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          '
+
+          # The private Mihomo controller API must remain unpublished.
+          if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
+            echo "Mihomo controller API 8088 must not be published" >&2
+            exit 1
+          fi
+
+  build-arm64:
+    name: Build image (linux/arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build ARM64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: s5m-agent/Dockerfile.smartdns
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: s5m-agent-smartdns:arm64-test
+          build-args: |
+            SMARTDNS_REF=${{ env.SMARTDNS_REF }}
+
+      - name: Run ARM64 container startup and DNS smoke test
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="s5m-agent-smartdns-arm64-test"
+          data_dir="$(mktemp -d)"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            sudo rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+
+          docker run -d --name "$container" --restart no \
+            -p 127.0.0.1::80/tcp \
+            -p 127.0.0.1::7890/tcp \
+            -v "$data_dir:/data" \
+            s5m-agent-smartdns:arm64-test >/dev/null
+
+          for attempt in $(seq 1 60); do
+            state="$(docker inspect --format '{{.State.Status}}' "$container")"
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
+            if [[ "$state" != "running" ]]; then docker logs "$container" >&2; exit 1; fi
+            if [[ "$health" == "healthy" ]]; then break; fi
+            sleep 2
+          done
+
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          docker exec "$container" /healthcheck.sh
+          docker exec "$container" pidof mihomo >/dev/null
+          docker exec "$container" pidof smartdns >/dev/null
+
+          # Preserve custom SmartDNS config across a complete container restart.
+          docker exec "$container" sh -ec 'printf "\\n# s5m-persistence-test\\n" >> /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
+          docker restart "$container" >/dev/null
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
+            if [[ "$health" == "healthy" ]] && docker exec "$container" pidof smartdns >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          docker exec "$container" pidof mihomo >/dev/null
+          docker exec "$container" pidof smartdns >/dev/null
+          docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
+          [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
+
+          agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
+          proxy_port="$(docker port "$container" 7890/tcp | awk -F: 'NR==1 {print $NF}')"
+          [[ -n "$agent_port" && -n "$proxy_port" ]]
+          curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
+          nc -z -w 2 127.0.0.1 "$proxy_port"
+
+          # Exercise real UDP and TCP DNS queries through SmartDNS in ARM64 too.
+          docker run --rm --network "container:$container" alpine:3.24 sh -ec '
+            apk add --no-cache bind-tools >/dev/null
+            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          '
+
+          if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
+            echo "Mihomo controller API 8088 must not be published" >&2
+            exit 1
+          fi
+
+  publish:
+    name: Publish multi-arch image to GHCR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/s5m-agent-smartdns'
+    needs: [test-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=dev
+            type=sha,prefix=sha-
+      - name: Build and push AMD64 + ARM64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: s5m-agent/Dockerfile.smartdns
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            SMARTDNS_REF=${{ env.SMARTDNS_REF }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true

@@ -1,0 +1,18 @@
+services:
+  s5m-agent-smartdns:
+    image: ghcr.io/tony855/s5m-agent-smartdns:dev
+    container_name: s5m-agent-smartdns
+    restart: unless-stopped
+    environment:
+      S5M_HOSTNAME: ${S5M_HOSTNAME:-}
+    ports:
+      - "80:80"
+      - "7890:7890"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./data:/data
+    # SmartDNS port 6053 is internal to this container and is intentionally not published.
+    # Keep bridge networking when TUN is enabled; do not use network_mode: host.

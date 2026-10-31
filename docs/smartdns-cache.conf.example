@@ -1,0 +1,21 @@
+# S5M optional SmartDNS cache template
+# Install SmartDNS separately and review the official syntax for your packaged version.
+# This binds only to loopback: do not expose the cache to the public Internet.
+bind 127.0.0.1:6053
+bind-tcp 127.0.0.1:6053
+
+# Cache behavior
+cache-size 4096
+prefetch-domain yes
+serve-expired yes
+
+# Encrypted upstreams only. These queries are encrypted in transit, but by default
+# SmartDNS may connect DIRECTLY to these providers unless host routing/firewall policy
+# explicitly sends these connections through the intended proxy egress.
+server-https https://dns.alidns.com/dns-query
+server-https https://doh.pub/dns-query
+server-tls 1.1.1.1
+server-tls 8.8.8.8
+
+# Avoid enabling audit logging unless query logs are intentionally required.
+audit-enable no

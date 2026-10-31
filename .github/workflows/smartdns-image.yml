@@ -1,0 +1,114 @@
+name: SmartDNS multi-arch image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docker/smartdns/**"
+      - ".github/workflows/smartdns-image.yml"
+  push:
+    branches: [main]
+    tags:
+      - "smartdns-v*"
+    paths:
+      - "docker/smartdns/**"
+      - ".github/workflows/smartdns-image.yml"
+  workflow_dispatch:
+    inputs:
+      smartdns_ref:
+        description: "Official pymumu/smartdns tag, branch, or commit"
+        required: true
+        default: "Release48.4"
+        type: string
+      publish:
+        description: "Publish multi-architecture image to GHCR"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/tony855/smartdns
+  DEFAULT_SMARTDNS_REF: Release48.4
+
+jobs:
+  test:
+    name: Build and smoke-test (linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install DNS test client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dnsutils
+
+      - name: Build test image
+        env:
+          SMARTDNS_REF: ${{ inputs.smartdns_ref || 'Release48.4' }}
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg "SMARTDNS_REF=$SMARTDNS_REF" \
+            -f docker/smartdns/Dockerfile \
+            -t smartdns:test docker/smartdns
+
+      - name: Test UDP and TCP DNS
+        run: sh docker/smartdns/tests/smoke-test.sh smartdns:test
+
+  publish:
+    name: Publish linux/amd64 and linux/arm64 to GHCR
+    needs: test
+    if: >-
+      (github.event_name == 'push' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/smartdns-v'))) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=match,pattern=smartdns-v(.*),group=1
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/smartdns-v') }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        env:
+          SMARTDNS_REF: ${{ inputs.smartdns_ref || 'Release48.4' }}
+        with:
+          context: docker/smartdns
+          file: docker/smartdns/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            SMARTDNS_REF=${{ inputs.smartdns_ref || 'Release48.4' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true

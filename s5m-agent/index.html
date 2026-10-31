@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>S5M 节点设备注册</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #0f172a; color: #f8fafc; padding: 20px; }
+    .card { background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); width: 100%; max-width: 420px; border: 1px solid rgba(255,255,255,0.05); }
+    .logo { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 14px; background: linear-gradient(135deg, #4361ee, #4cc9f0); display: flex; justify-content: center; align-items: center; font-size: 24px; font-weight: 800; color: #fff; }
+    h2 { text-align: center; margin: 0 0 20px; font-size: 22px; font-weight: 600; }
+    label { display: block; margin-bottom: 8px; color: #cbd5e1; font-size: 13px; font-weight: 500; }
+    input { width: 100%; padding: 12px 16px; margin-bottom: 20px; background: rgba(15,23,42,0.6); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-size: 14px; }
+    input:focus { outline: none; border-color: #4361ee; }
+    button { width: 100%; padding: 12px; border: none; border-radius: 8px; background: linear-gradient(135deg, #4361ee, #4cc9f0); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #msg { text-align: center; margin-top: 16px; font-size: 13px; padding: 10px; border-radius: 6px; display: none; }
+    .msg-success { background: rgba(16,185,129,0.1); color: #34d399; }
+    .msg-error { background: rgba(239,68,68,0.1); color: #f87171; }
+    .status { margin-top: 25px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.08); text-align: center; font-size: 13px; color: #cbd5e1; display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #64748b; }
+    .dot.active { background: #10b981; box-shadow: 0 0 8px #10b981; }
+    .dot.error { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+    .machine-box { display: flex; flex-direction: column; align-items: stretch; gap: 10px; background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; margin-bottom: 25px; border: 1px solid rgba(255,255,255,0.05); }
+    .machine-text { font-size: 13px; color: #94a3b8; font-family: monospace; word-break: break-all; max-height: 120px; overflow-y: auto; line-height: 1.4; text-align: left; }
+    .hostname-text { font-size: 14px; color: #e2e8f0; line-height: 1.5; text-align: left; overflow-wrap: anywhere; }
+    .machine-label { color: #64748b; font-size: 11px; margin-bottom: 4px; text-align: left; }
+    .btn-copy { width: 100%; padding: 10px; font-size: 14px; background: rgba(76,201,240,0.15); color: #4cc9f0; border: 1px solid rgba(76,201,240,0.3); border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">S5</div>
+  <h2>节点设备注册</h2>
+  <div class="machine-box">
+    <div><div class="machine-label">主机名</div><div class="hostname-text" id="hostname">读取主机名中...</div></div>
+    <div><div class="machine-label">机器码</div><div class="machine-text" id="machineId">获取机器码中...</div></div>
+    <button class="btn-copy" onclick="copyMachineId()">复制</button>
+  </div>
+  <label>注册密钥</label>
+  <input type="password" id="secret" placeholder="请输入<密钥>绑定设备" autocomplete="off" required oninput="updateBindButton()">
+  <button id="btn" onclick="save()" disabled>绑定设备</button>
+  <div id="msg"></div>
+  <div class="status">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">正在检测状态...</span>
+  </div>
+</div>
+<script>
+  // 修改此变量即可更换 Agent 默认连接的主控服务器地址。
+  const DEFAULT_SERVER_URL = 'https://bind.v2net.cc';
+
+  let currentMachineID = '';
+  let bindingInProgress = false;
+  function updateBindButton() {
+    const btn = document.getElementById('btn');
+    const secret = document.getElementById('secret').value.trim();
+    btn.disabled = bindingInProgress || !secret;
+  }
+  function fetchWithTimeout(url, options = {}, timeout = 3000) {
+    return Promise.race([ fetch(url, options), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout)) ]);
+  }
+  window.onload = async () => {
+    try {
+      try {
+        const hostRes = await fetchWithTimeout('/api/hostname');
+        const hostData = await hostRes.json();
+        document.getElementById('hostname').innerText = hostRes.ok && hostData.hostname ? hostData.hostname : '未知';
+      } catch (_) {
+        document.getElementById('hostname').innerText = '暂不可用';
+      }
+
+      const idRes = await fetchWithTimeout('/api/machine-id');
+      const idData = await idRes.json();
+      if (!idRes.ok || !idData.machine_id) throw new Error(idData.error || '机器标识不可用');
+      currentMachineID = idData.machine_id;
+      document.getElementById('machineId').innerText = currentMachineID;
+      
+      // Read binding state from the Agent API; server address is configured in
+      // DEFAULT_SERVER_URL and is intentionally not exposed in the registration UI.
+      await refreshBindingStatus();
+      window.setInterval(refreshBindingStatus, 3000);
+    } catch(e) { document.getElementById('machineId').innerText = '获取失败'; if (!document.getElementById('hostname').innerText || document.getElementById('hostname').innerText === '读取主机名中...') document.getElementById('hostname').innerText = '读取失败'; setStatus('error', 'Agent 后端无响应'); }
+  };
+  let bindingStatusRequest = false;
+  async function refreshBindingStatus() {
+    if (bindingStatusRequest) return;
+    bindingStatusRequest = true;
+    try {
+      const res = await fetchWithTimeout('/api/config?t=' + Date.now(), {}, 4000);
+      if (!res.ok) throw new Error('状态查询失败');
+      const data = await res.json();
+      const btn = document.getElementById('btn');
+      if (data.config_readable === false) {
+        btn.innerText = data.has_token ? '重新绑定' : '绑定设备';
+        setStatus('error', '设备绑定状态暂不可用，请稍后重试或联系管理员');
+      } else if (data.config_valid === false) {
+        btn.innerText = '重试绑定';
+        setStatus('error', '绑定信息异常，请联系管理员处理');
+      } else if (!data.has_token) {
+        btn.innerText = '绑定设备';
+        setStatus('', data.config_exists ? '未检测到有效绑定<密钥>，请重新绑定' : '设备尚未绑定');
+      } else if (data.connected) {
+        btn.innerText = '重新绑定';
+        setStatus('active', '✅节点设备已绑定成功，连接正常');
+      } else {
+        btn.innerText = '重新绑定';
+        setStatus('', '已保存绑定信息，正在连接主控端…');
+      }
+      updateBindButton();
+    } catch (_) {
+      // Retain the last state when the local API briefly fails.
+    } finally {
+      bindingStatusRequest = false;
+    }
+  }
+
+  function copyMachineId() {
+    if (!currentMachineID) return;
+    var t = document.createElement("textarea"); t.value = currentMachineID; document.body.appendChild(t); t.select();
+    try { document.execCommand('copy'); showMsg('已复制', true); setTimeout(() => document.getElementById('msg').style.display = 'none', 2000); }
+    catch (err) { showMsg('复制失败，请长按选择', false); }
+    document.body.removeChild(t);
+  }
+  function setStatus(state, text) { document.getElementById('statusDot').className = 'dot ' + state; document.getElementById('statusText').innerText = text; }
+  async function save() {
+    let url = String(DEFAULT_SERVER_URL || '').trim().replace(/\/$/, '');
+    const secret = document.getElementById('secret').value.trim();
+    if (!secret) { updateBindButton(); return; }
+    if (!url) return showMsg('主控服务器地址未配置，请联系管理员。', false);
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    if (/^https?:\/\/$/i.test(url)) return showMsg('主控服务器地址配置无效，请联系管理员。', false);
+    const btn = document.getElementById('btn'); bindingInProgress = true; btn.innerText = '正在绑定...'; updateBindButton(); setStatus('', '正在绑定设备…');
+    try {
+      const res = await fetch('/api/bind', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({central_url: url, secret: secret}) });
+      const text = await res.text(); let data = {};
+      try { data = JSON.parse(text); } catch { data = { message: text }; }
+      if (!res.ok) throw new Error(data.error || data.message || '绑定失败');
+      showMsg('绑定请求已提交，正在连接服务器。', true);
+      document.getElementById('secret').value = '';
+      // Registration only persists credentials; the WebSocket connects asynchronously.
+      // Re-enable the button so a failed/expired connection can be retried without reload.
+      btn.innerText = '重新绑定';
+      await refreshBindingStatus();
+    } catch (e) {
+      // Do not expose backend validation details or security configuration to end users.
+      showMsg('绑定失败，请检查服务器地址和注册密钥后重试；如持续失败，请联系管理员。', false);
+      btn.innerText = '重试绑定';
+      setStatus('error', '绑定未成功，请检查填写的<密钥>或服务器地址是否正确');
+    } finally {
+      bindingInProgress = false;
+      updateBindButton();
+    }
+  }
+  function showMsg(text, isSuccess) { const msg = document.getElementById('msg'); msg.innerText = text; msg.className = isSuccess ? 'msg-success' : 'msg-error'; msg.style.display = 'block'; }
+</script>
+</body>
+</html>

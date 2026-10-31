@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+set -eu
+exec /usr/sbin/smartdns -f -x -c /data/smartdns.conf

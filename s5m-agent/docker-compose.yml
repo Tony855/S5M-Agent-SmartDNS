@@ -1,0 +1,19 @@
+services:
+  s5m-agent:
+    image: ghcr.io/tony855/s5m-agent-smartdns:dev
+    container_name: s5m-agent
+    restart: unless-stopped
+    environment:
+      # Pass the host OS hostname; otherwise Docker may expose the container ID.
+      S5M_HOSTNAME: ${S5M_HOSTNAME:-}
+    ports:
+      - "80:80"
+      - "7890:7890"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./data:/data
+    # TUN is opt-in in the first-boot config. When enabled, keep the Agent in
+    # Docker bridge mode; never use network_mode: host for a TUN-enabled Agent.

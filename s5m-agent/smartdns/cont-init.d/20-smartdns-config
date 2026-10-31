@@ -1,0 +1,40 @@
+#!/command/with-contenv sh
+set -eu
+
+CONFIG_PATH="${SMARTDNS_CONFIG_PATH:-/data/smartdns.conf}"
+DEFAULT_CONFIG="${SMARTDNS_DEFAULT_CONFIG:-/etc/smartdns/smartdns.conf}"
+TEMP_CONFIG="${CONFIG_PATH}.new"
+
+mkdir -p "$(dirname "$CONFIG_PATH")"
+
+# Preserve any existing non-empty operator configuration exactly as-is.
+if [ -s "$CONFIG_PATH" ]; then
+  chmod 0600 "$CONFIG_PATH"
+  exit 0
+fi
+
+# Never start with an empty or partial config if the packaged default is missing.
+if [ ! -s "$DEFAULT_CONFIG" ]; then
+  echo "SmartDNS default configuration is missing or empty: $DEFAULT_CONFIG" >&2
+  exit 1
+fi
+
+# Write beside the destination and rename atomically on the same filesystem.
+rm -f "$TEMP_CONFIG"
+umask 077
+if ! cp "$DEFAULT_CONFIG" "$TEMP_CONFIG"; then
+  rm -f "$TEMP_CONFIG"
+  echo "Failed to stage the default SmartDNS configuration" >&2
+  exit 1
+fi
+chmod 0600 "$TEMP_CONFIG"
+if ! mv -f "$TEMP_CONFIG" "$CONFIG_PATH"; then
+  rm -f "$TEMP_CONFIG"
+  echo "Failed to atomically install the default SmartDNS configuration" >&2
+  exit 1
+fi
+
+[ -s "$CONFIG_PATH" ] || {
+  echo "SmartDNS configuration initialization produced an empty file" >&2
+  exit 1
+}

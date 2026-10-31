@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+set -eu
+MIHOMO_HOME="${MIHOMO_HOME:-/data}"
+exec "${MIHOMO_HOME}/bin/mihomo" -d "${MIHOMO_HOME}" -f "${MIHOMO_HOME}/config.yaml"

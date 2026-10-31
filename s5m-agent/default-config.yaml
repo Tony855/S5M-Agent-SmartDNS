@@ -1,0 +1,63 @@
+# 基础设置
+# Existing /data/config.yaml is intentionally preserved by init script.
+mixed-port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+ipv6: false
+
+# 控制接口
+external-controller: 127.0.0.1:8088
+secret: __S5M_GENERATED_SECRET__
+
+# 状态持久化
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+# DNS 设置
+dns:
+  enable: true
+  ipv6: false
+  listen: 127.0.0.1:5353
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - '+.v2net.cc'
+    - "geosite:private"
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  fallback:
+    - https://dns.cloudflare.com/dns-query
+    - https://dns.google/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
+# 代理节点与代理组
+proxies: []
+proxy-groups: []
+
+# 分流规则
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - MATCH,DIRECT
+
+# TUN 设置
+tun:
+  enable: false
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - "any:53"
+    - "tcp://any:53"
