@@ -195,15 +195,12 @@ func (s *Store) CreateSettingIfAbsent(key, value string) (bool, error) {
 	return n == 1, nil
 }
 
-// QueueAgentSmartDNSCommand commits the controller copy and pending command
-// in one transaction so neither can be left half-updated.
-func (s *Store) QueueAgentSmartDNSCommand(machineCode, commandJSON, config string) error {
+// QueueAgentSmartDNSCommand stores only the pending command. The controller's
+// last-known-good config is updated after the Agent confirms successful apply.
+func (s *Store) QueueAgentSmartDNSCommand(machineCode, commandJSON string) error {
 	tx, err := s.db.Begin()
 	if err != nil { return err }
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_config_"+machineCode, config); err != nil {
-		return fmt.Errorf("save SmartDNS config copy: %w", err)
-	}
 	result, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, "agent_command_"+machineCode, commandJSON)
 	if err != nil { return err }
 	created, err := result.RowsAffected()
@@ -264,9 +261,19 @@ func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, messag
 		if marshalErr != nil {
 			return false, false, marshalErr
 		}
-		if pending["type"] == "read_smartdns_config" && status == "success" {
-			if len(config) == 0 || len(config) > 8<<10 { return false, false, fmt.Errorf("invalid SmartDNS config payload") }
-			if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_config_"+machineCode, config); err != nil { return false, false, err }
+		if (pending["type"] == "read_smartdns_config" || pending["type"] == "configure_smartdns") && status == "success" {
+			// Read commands return the on-disk config; configure commands carry
+			// the exact candidate in the pending record. Persist only after success.
+			savedConfig := config
+			if pending["type"] == "configure_smartdns" {
+				savedConfig = pending["config"]
+			}
+			if len(savedConfig) == 0 || len(savedConfig) > 8<<10 {
+				return false, false, fmt.Errorf("invalid SmartDNS config payload")
+			}
+			if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_config_"+machineCode, savedConfig); err != nil {
+				return false, false, err
+			}
 		}
 		if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?)
 			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, resultKey, string(result)); err != nil {
