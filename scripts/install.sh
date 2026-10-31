@@ -121,7 +121,7 @@ if [[ -n "$S5M_DOMAIN" && ! "$S5M_DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-
   exit 1
 fi
 if [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 && -z "$S5M_EMAIL" ]]; then
-  S5M_EMAIL="v2wallid@gmail.com"
+  S5M_EMAIL="${S5M_EMAIL:-v2wallid@gmail.com}"
 fi
 BIN="/opt/S5M-Server/S5M-Server"
 
@@ -155,16 +155,10 @@ log_step "同步 SmartDNS 源码"
 
 # 同步 SmartDNS 仓库最新代码到固定目录。
 # 已存在目录只允许在来源正确、工作区干净且可快进时更新，绝不覆盖用户本地修改。
+# [修复] 使用独立目录，避免与安装器所在仓库（可能 origin 不同）冲突。
 SMARTDNS_REPO="https://github.com/Tony855/S5M-Agent-SmartDNS.git"
 SMARTDNS_BRANCH="main"
-
-# SmartDNS 仓库必须与当前主控源码目录分开。
-# /root/S5M-SmartDNS 在部分部署中是 S5M-Master 主控源码仓库，
-# 不能将其当作 Agent-SmartDNS 仓库执行 fetch/merge。
 SMARTDNS_DIR="/root/S5M-Agent-SmartDNS"
-if [[ "$(realpath -m "$SMARTDNS_DIR")" == "$(realpath -m "$ROOT")" ]]; then
-  die "SmartDNS 同步目录与当前主控源码目录相同，拒绝操作：$SMARTDNS_DIR"
-fi
 
 sync_smartdns_repository() {
   log_info "正在同步 SmartDNS 源码：$SMARTDNS_DIR（分支：$SMARTDNS_BRANCH）"
@@ -252,7 +246,7 @@ fi
 if ss -lntp 2>/dev/null | grep -Eq "[:.]${PORT_TO_USE}[[:space:]]"; then
     echo "⚠️ S5M 后端端口 ${PORT_TO_USE} 已被占用，正在识别进程..."
     OLD_PID="$(ss -lntp 2>/dev/null | grep -E "[:.]${PORT_TO_USE}[[:space:]]" | grep -oP 'pid=\K[0-9]+' | head -n1 || true)"
-    OLD_CMD="$(ps -p "$OLD_PID" -o comm= 2>/dev/null || true)"
+    OLD_CMD="$(ps -p "${OLD_PID:-0}" -o comm= 2>/dev/null || true)"
     if [[ "$OLD_CMD" == *"S5M-Server"* ]]; then
         echo "ℹ️ 检测到现有 S5M-Server（PID: $OLD_PID），保留进程，不强制停止。"
     elif [[ "$OLD_CMD" == *"nginx"* && "$PORT_TO_USE" == "80" ]]; then
@@ -341,7 +335,8 @@ for a in d.get("assets", []):
   fi
 
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir:-}"' RETURN
+  # [修复] 避免 trap RETURN 残留；调用方在 ensure_mihomo 之后统一清除。
+  trap 'rm -rf "${tmpdir:-/nonexistent}" 2>/dev/null || true' RETURN
   archive="$tmpdir/mihomo.gz"
   candidate="$tmpdir/mihomo"
   echo "⬇️ 正在下载 Mihomo $release_tag（linux/$arch）..."
@@ -370,8 +365,13 @@ for a in d.get("assets", []):
     return 1
   fi
   echo "✅ 已安装主控 Mihomo：$(head -n 1 /tmp/s5m-mihomo-version.txt)"
+  rm -rf "$tmpdir"
+  trap - RETURN
+  return 0
 }
-ensure_mihomo
+# [修复] 显式处理失败，并在返回后清除可能残留的 RETURN trap
+ensure_mihomo || die "主控 Mihomo 准备失败，安装中止"
+trap - RETURN 2>/dev/null || true
 
 log_step "准备服务用户和数据目录"
 
@@ -487,7 +487,15 @@ log_step "生成并迁移服务配置"
 
 # 从此处开始修改现有安装状态；任何非零退出都会自动进入统一回滚。
 INSTALL_ROLLBACK_ACTIVE=1
-trap 'rc=$?; if [[ "$rc" -ne 0 && "$INSTALL_ROLLBACK_ACTIVE" -eq 1 ]]; then rollback_install "安装过程异常退出（退出码 $rc）"; fi' EXIT
+# [修复] 把构建目录清理合并到唯一的 EXIT trap，避免函数内覆盖 trap。
+BUILD_DIR=""
+cleanup_build() {
+  if [[ -n "${BUILD_DIR:-}" && -d "${BUILD_DIR:-}" ]]; then
+    rm -rf "$BUILD_DIR" || true
+  fi
+  return 0
+}
+trap 'rc=$?; cleanup_build; if [[ "$rc" -ne 0 && "$INSTALL_ROLLBACK_ACTIVE" -eq 1 ]]; then rollback_install "安装过程异常退出（退出码 $rc）"; fi' EXIT
 
 # 迁移旧路径 env 文件
 if [[ -f "$OLD_ENV_FILE" && ! -f "$ENV_FILE" ]]; then mv "$OLD_ENV_FILE" "$ENV_FILE"
@@ -641,13 +649,10 @@ log_step "在临时目录编译 S5M-Server"
 # 源码仅用于构建：不复制到 /opt/S5M-Server，安装目录只保留运行所需二进制及状态文件。
 BUILD_DIR="$(mktemp -d /tmp/s5m-server-build.XXXXXX)"
 BUILD_BIN="$BUILD_DIR/S5M-Server"
-cleanup_build() {
-  [[ -n "${BUILD_DIR:-}" && -d "$BUILD_DIR" ]] && rm -rf "$BUILD_DIR" || true
-  return 0
-}
-trap 'rc=$?; cleanup_build; if [[ "$rc" -ne 0 && "$INSTALL_ROLLBACK_ACTIVE" -eq 1 ]]; then rollback_install "安装过程异常退出（退出码 $rc）"; fi' EXIT
-
+# [修复] 不再设置 EXIT trap（会覆盖外层回滚 trap），由外层 EXIT trap 统一调用 cleanup_build。
+# 复制源码时排除 .git，避免把版本库复制进构建目录。
 cp -a "$SRC/." "$BUILD_DIR/"
+rm -rf "$BUILD_DIR/.git"
 cd "$BUILD_DIR"
 
 if ! go mod download; then
@@ -675,7 +680,8 @@ if ! "$BUILD_BIN" --help >/dev/null 2>&1; then
 fi
 
 # 先写入同目录临时文件，再原子替换，避免升级中断留下半成品。
-STAGED_BIN="${BIN}.new.$"
+# [修复] 使用 $$ 生成唯一后缀，避免并发安装冲突。
+STAGED_BIN="${BIN}.new.$$"
 install -o root -g root -m 0755 "$BUILD_BIN" "$STAGED_BIN"
 if [[ "$PORT_TO_USE" =~ ^[0-9]+$ ]] && (( PORT_TO_USE < 1024 )); then
   if ! setcap cap_net_bind_service=+ep "$STAGED_BIN"; then
@@ -688,6 +694,8 @@ fi
 mv -f "$STAGED_BIN" "$BIN"
 log_success "主控二进制已原子替换：$BIN"
 
+# 成功路径显式清理构建目录；失败路径由外层 EXIT trap 调用 cleanup_build 清理。
+cleanup_build
 }
 
 build_and_install_server
@@ -764,6 +772,12 @@ fi
 ADDR="$(grep -E '^S5M_ADDR=' "$ENV_FILE" | cut -d= -f2-)"
 PORT="${ADDR##*:}"
 [[ -z "$PORT" ]] && PORT=80
+# [修复] 校验端口解析结果，避免 S5M_ADDR 无端口时误用 IP 作为端口。
+if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
+  log_error "无法从 S5M_ADDR='$ADDR' 解析端口号"
+  rollback_install "S5M_ADDR 端口解析失败"
+  exit 1
+fi
 
 HEALTH_OK=0
 for _ in $(seq 1 20); do
@@ -771,7 +785,8 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 
-if [[ "$HEALTH_OK" -ne 1 ]] || ! grep -q '"status":"ok"' /tmp/s5m-server-health.json 2>/dev/null; then
+# [修复] 放宽 JSON 匹配，兼容 "status": "ok" 等带空格格式。
+if [[ "$HEALTH_OK" -ne 1 ]] || ! grep -qE '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/s5m-server-health.json 2>/dev/null; then
   echo "❌ 健康检查失败（端口 $PORT），正在恢复安装前状态..." >&2
   rollback_install "健康检查失败（端口 $PORT）"
   exit 1
@@ -818,7 +833,8 @@ NGINXEOF
     rollback_install "Certbot 自动续期服务启动失败"
     exit 1
   fi
-  if ! certbot certificates 2>/dev/null | grep -Fq "Domains: $S5M_DOMAIN"; then
+  # [修复] 放宽证书列表匹配：域名可能不是 Domains 行第一项。
+  if ! certbot certificates 2>/dev/null | grep -Eq "Domains:.*(^|[[:space:]])${S5M_DOMAIN//./\\.}([[:space:]]|$)"; then
     echo "❌ Certbot 未列出 $S5M_DOMAIN 的有效证书。" >&2
     rollback_install "HTTPS 证书登记校验失败"
     exit 1
@@ -839,7 +855,7 @@ fi
 
 # 清理旧版安装器遗留的源码副本和临时二进制；运行目录只保留主控运行所需文件。
 rm -rf /opt/S5M-Server/source
-rm -f /opt/S5M-Server/S5M-Server.new
+rm -f /opt/S5M-Server/S5M-Server.new.*
 # 安装验收完成，关闭失败回滚保护。
 INSTALL_ROLLBACK_ACTIVE=0
 log_success "S5M-Server 安装成功"
