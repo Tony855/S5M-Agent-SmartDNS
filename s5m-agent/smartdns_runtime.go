@@ -570,6 +570,11 @@ func probeSmartDNSDNSTCPAt(address string) bool {
 		return false
 	}
 	flags := binary.BigEndian.Uint16(response[2:4])
-	return flags&0x8000 != 0 && flags&0x000f == 0 &&
-		binary.BigEndian.Uint16(response[6:8]) > 0
+	questionCount := binary.BigEndian.Uint16(response[4:6])
+	answerCount := binary.BigEndian.Uint16(response[6:8])
+	// Keep TCP health criteria aligned with the UDP probe: only a complete,
+	// standard NOERROR response to our single question with an answer is healthy.
+	return flags&0x8000 != 0 && flags&0x0200 == 0 &&
+		flags&0x7800 == 0 && flags&0x000f == 0 &&
+		questionCount == 1 && answerCount > 0
 }
