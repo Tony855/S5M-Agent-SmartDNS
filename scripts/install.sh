@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Standardized installer output
+LOG_PREFIX="[S5M]"
+log_info()    { printf "%s [INFO]  %s\n" "$LOG_PREFIX" "$*"; }
+log_success() { printf "%s [OK]    %s\n" "$LOG_PREFIX" "$*"; }
+log_warn()    { printf "%s [WARN]  %s\n" "$LOG_PREFIX" "$*" >&2; }
+log_error()   { printf "%s [ERROR] %s\n" "$LOG_PREFIX" "$*" >&2; }
+log_step()    { printf "\n%s [STEP]  %s\n" "$LOG_PREFIX" "$*"; }
+die()         { local code="${2:-1}"; log_error "$1"; exit "$code"; }
+
+
 APP="S5M-Server"
 UNIT="s5m-server"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # 定位源码目录
-if [[ -f "$ROOT/source/main.go" ]]; then SRC="$ROOT/source"; elif [[ -f "$ROOT/main.go" ]]; then SRC="$ROOT"; else echo "❌ 源码目录不完整" >&2; exit 1; fi
+if [[ -f "$ROOT/source/main.go" ]]; then SRC="$ROOT/source"; elif [[ -f "$ROOT/main.go" ]]; then SRC="$ROOT"; else die "源码目录不完整。请确认仓库包含 source/main.go 或 main.go。"; fi
 
 # 全局路径与变量
 ENV_FILE="/etc/s5m-server.env"
@@ -23,11 +33,13 @@ if [[ -n "${1:-}" && -z "$REQUESTED_DOMAIN" ]]; then
   S5M_DOMAIN="$REQUESTED_DOMAIN"
 fi
 
-[[ $EUID -eq 0 ]] || { echo "请使用 sudo bash scripts/install.sh" >&2; exit 1; }
+[[ $EUID -eq 0 ]] || die "需要 root 权限。请执行：sudo bash scripts/install.sh"
 
 # [修复 P1-7] 先补齐基础依赖，再检测现有 HTTPS
 # 原因：原脚本在 apt 安装前就用 python3/openssl，最小化系统会漏检现有证书
 export DEBIAN_FRONTEND=noninteractive
+
+log_step "准备安装环境"
 _bootstrap_deps=()
 for c in curl python3 openssl; do
   command -v "$c" >/dev/null 2>&1 || _bootstrap_deps+=("$c")
@@ -92,7 +104,7 @@ fi
 # 未检测到现有 HTTPS 且是交互终端时，才询问域名
 if [[ -z "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 && -t 0 ]]; then
   echo "尚未检测到可复用的 S5M HTTPS 配置。"
-  read -r -p "请输入面板域名（留空则暂不配置 HTTPS）: " S5M_DOMAIN
+  read -r -p "[S5M] 面板域名（直接回车表示暂不配置 HTTPS）: " S5M_DOMAIN
   if [[ -n "$S5M_DOMAIN" ]]; then
     read -r -p "Let's Encrypt 邮箱 [v2wallid@gmail.com]: " S5M_EMAIL
     S5M_EMAIL="${S5M_EMAIL:-v2wallid@gmail.com}"
@@ -133,6 +145,8 @@ if ! apt-get install -y -qq "${apt_packages[@]}" > /dev/null; then
   exit 1
 fi
 
+log_step "同步 SmartDNS 源码"
+
 # 同步 SmartDNS 仓库最新代码到固定目录。
 # 已存在目录只允许在来源正确、工作区干净且可快进时更新，绝不覆盖用户本地修改。
 SMARTDNS_REPO="https://github.com/Tony855/S5M-Agent-SmartDNS.git"
@@ -140,7 +154,7 @@ SMARTDNS_BRANCH="main"
 SMARTDNS_DIR="/root/S5M-SmartDNS"
 
 sync_smartdns_repository() {
-  echo "⬇️ 正在同步 S5M-Agent-SmartDNS 最新代码到 $SMARTDNS_DIR ..."
+  log_info "正在同步 SmartDNS 源码：$SMARTDNS_DIR（分支：$SMARTDNS_BRANCH）"
 
   if [[ ! -e "$SMARTDNS_DIR" ]]; then
     if ! git clone --branch "$SMARTDNS_BRANCH" --single-branch "$SMARTDNS_REPO" "$SMARTDNS_DIR"; then
@@ -194,12 +208,14 @@ sync_smartdns_repository() {
 
   local synced_commit
   synced_commit="$(git -C "$SMARTDNS_DIR" rev-parse --short HEAD)"
-  echo "✅ S5M-Agent-SmartDNS 已同步：$SMARTDNS_DIR（$SMARTDNS_BRANCH @ $synced_commit）"
+  log_success "SmartDNS 源码已同步：$SMARTDNS_DIR（$SMARTDNS_BRANCH @ $synced_commit）"
 }
 
 if ! sync_smartdns_repository; then
   exit 1
 fi
+
+log_step "检查服务端口"
 
 # 判断 S5M 后端监听端口
 PORT_TO_USE=""
@@ -234,6 +250,8 @@ if ss -lntp 2>/dev/null | grep -Eq "[:.]${PORT_TO_USE}[[:space:]]"; then
         exit 1
     fi
 fi
+
+log_step "检查主控 Mihomo 内核"
 
 # 确保主控 Mihomo 存在；已存在的正常版本直接复用
 MIHOMO_DIR="/opt/mihomo"
@@ -349,6 +367,8 @@ install -d -m 0755 /opt/S5M-Server /opt/S5M-Server/source
 chown -R s5m-server:s5m-server "$DB_DIR"
 chmod -R go-rwx "$DB_DIR"
 
+log_step "备份现有服务配置与数据"
+
 # ===== 备份快照 =====
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="/var/backups/s5m-server-install-$STAMP"
@@ -439,6 +459,8 @@ rollback_install() {
   # 提示数据库备份位置，供人工恢复
   echo "ℹ️ 安装前数据库备份保留在：$BACKUP/s5m.db（若存在），供人工恢复使用。" >&2
 }
+
+log_step "生成并迁移服务配置"
 
 # 迁移旧路径 env 文件
 if [[ -f "$OLD_ENV_FILE" && ! -f "$ENV_FILE" ]]; then mv "$OLD_ENV_FILE" "$ENV_FILE"
@@ -579,6 +601,8 @@ RestrictSUIDSGID=true
 WantedBy=multi-user.target
 MIHOMO_SERVICE_EOF
 
+log_step "编译 S5M-Server"
+
 # 拷贝源码到安装目录
 rm -rf /opt/S5M-Server/source
 install -d -m 0755 /opt/S5M-Server/source
@@ -637,6 +661,8 @@ RestrictSUIDSGID=true
 WantedBy=multi-user.target
 SERVICEEOF
 
+log_step "启动服务并执行健康检查"
+
 systemctl daemon-reload
 systemctl enable mihomo
 # [修复 P1-4] 只有 unit 或 config 变化（或服务未运行）才重启 mihomo，避免断线
@@ -684,6 +710,8 @@ if [[ "$HEALTH_OK" -ne 1 ]] || ! grep -q '"status":"ok"' /tmp/s5m-server-health.
   rollback_install "健康检查失败（端口 $PORT）"
   exit 1
 fi
+
+log_step "配置并验证 HTTPS"
 
 # 首次配置 HTTPS：写 nginx 站点 + certbot 签发
 if [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 ]]; then
