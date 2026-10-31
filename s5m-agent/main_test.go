@@ -1411,6 +1411,19 @@ func TestReportHeartbeatWebSocketSuccess(t *testing.T) {
 				t.Errorf("unexpected heartbeat payload: %#v", msg)
 				return
 			}
+			wantSmartDNS := map[string]any{
+				"smartdns_available": true,
+				"smartdns_running": true,
+				"smartdns_dns_healthy": true,
+				"smartdns_version": "SmartDNS 1.2026.01",
+				"smartdns_config_sha256": "abc123",
+				"smartdns_last_error": "",
+			}
+			for key, want := range wantSmartDNS {
+				if got := msg.Status[key]; got != want {
+					t.Errorf("heartbeat SmartDNS field %q = %#v, want %#v", key, got, want)
+				}
+			}
 			if err := conn.WriteJSON(map[string]any{"type": "heartbeat.ack", "id": msg.ID, "ok": true}); err != nil {
 				t.Errorf("write ack: %v", err)
 			}
@@ -1423,7 +1436,15 @@ func TestReportHeartbeatWebSocketSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := reportHeartbeat(Config{CentralURL: server.URL, Token: "test-token"}, map[string]any{"mihomo_version": "test-version"})
+	err := reportHeartbeat(Config{CentralURL: server.URL, Token: "test-token"}, map[string]any{
+		"mihomo_version": "test-version",
+		"smartdns_available": true,
+		"smartdns_running": true,
+		"smartdns_dns_healthy": true,
+		"smartdns_version": "SmartDNS 1.2026.01",
+		"smartdns_config_sha256": "abc123",
+		"smartdns_last_error": "",
+	})
 	if err != nil {
 		t.Fatalf("reportHeartbeat() error = %v", err)
 	}
