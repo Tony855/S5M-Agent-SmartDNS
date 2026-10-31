@@ -234,7 +234,11 @@ func (s *Store) UpdateSettings(updates map[string]string) error {
 // AckAgentCommand atomically commits a command result and removes only the matching
 // pending command. A retry is accepted only when the persisted result has the same ID.
 // matched=false means the command was replaced or no longer exists.
-func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, updatedAt int64) (duplicate bool, matched bool, err error) {
+func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, updatedAt int64) (bool, bool, error) {
+	return s.AckAgentCommandWithConfig(machineCode, commandID, status, message, "", updatedAt)
+}
+
+func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, message, config string, updatedAt int64) (duplicate bool, matched bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, false, err
@@ -259,6 +263,10 @@ func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, 
 		})
 		if marshalErr != nil {
 			return false, false, marshalErr
+		}
+		if pending["type"] == "read_smartdns_config" && status == "success" {
+			if len(config) == 0 || len(config) > 8<<10 { return false, false, fmt.Errorf("invalid SmartDNS config payload") }
+			if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_config_"+machineCode, config); err != nil { return false, false, err }
 		}
 		if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?)
 			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, resultKey, string(result)); err != nil {
