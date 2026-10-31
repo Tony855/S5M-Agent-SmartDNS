@@ -551,18 +551,21 @@ cp -a "$SRC/." "$BUILD_DIR/"
 # 拉依赖、完整测试并编译；任何一步失败都不触碰现有主控二进制。
 cd "$BUILD_DIR"
 if ! go mod download; then
-  echo "❌ go mod download 失败（旧版本未受影响），备份在 $BACKUP" >&2
+  rollback_install "Go 依赖下载失败"
+  echo "❌ go mod download 失败，已尝试恢复安装前状态；备份在 $BACKUP" >&2
   exit 1
 fi
 if [[ "${SKIP_TEST:-0}" != "1" ]]; then
   if ! go test ./...; then
-    echo "❌ go test 失败（旧二进制未替换，服务仍在运行），备份在 $BACKUP" >&2
+    rollback_install "Go 单元测试失败"
+    echo "❌ go test 失败，已尝试恢复安装前状态；备份在 $BACKUP" >&2
     echo "   如需跳过测试重新安装，可使用：SKIP_TEST=1 sudo -E bash scripts/install.sh" >&2
     exit 1
   fi
 fi
 if ! go build -trimpath -ldflags='-s -w' -o "$BUILD_DIR/S5M-Server.new" .; then
-  echo "❌ go build 失败（旧版本未受影响，服务仍在运行），备份在 $BACKUP" >&2
+  rollback_install "S5M-Server 编译失败"
+  echo "❌ go build 失败，已尝试恢复安装前状态；备份在 $BACKUP" >&2
   exit 1
 fi
 install -o root -g root -m 0755 "$BUILD_DIR/S5M-Server.new" "$BIN"
