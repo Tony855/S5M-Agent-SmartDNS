@@ -601,18 +601,29 @@ func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) err
 
 func (a *App) queueAgentSmartDNSRead(machineCode string) error {
 	machineCode = strings.TrimSpace(machineCode)
-	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) { return fmt.Errorf("机器码格式无效") }
+	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
+		return fmt.Errorf("机器码格式无效")
+	}
 	commandID, err := newAgentCommandID()
 	if err != nil {
 		return err
 	}
-	command, marshalErr := json.Marshal(map[string]string{"id": commandID, "type": "read_smartdns_config"})
-	if marshalErr != nil { return fmt.Errorf("生成 SmartDNS 读取命令失败: %w", marshalErr) }
+	command, marshalErr := json.Marshal(map[string]string{
+		"id": commandID, "type": "read_smartdns_config",
+	})
+	if marshalErr != nil {
+		return fmt.Errorf("生成 SmartDNS 读取命令失败: %w", marshalErr)
+	}
 	if err := a.store.QueueAgentSmartDNSReadCommand(machineCode, string(command)); err != nil {
-		if errors.Is(err, ErrAgentCommandPending) { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
+		if errors.Is(err, ErrAgentCommandPending) {
+			return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
+		}
 		return fmt.Errorf("Agent 授权已失效或读取命令排队失败: %w", err)
 	}
-	a.publishBrowserEvent(map[string]any{"type":"agent.command.queued","machine_code":machineCode,"command_type":"read_smartdns_config","at":time.Now().Unix()})
+	a.publishBrowserEvent(map[string]any{
+		"type": "agent.command.queued", "machine_code": machineCode,
+		"command_type": "read_smartdns_config", "at": time.Now().Unix(),
+	})
 	return nil
 }
 
