@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, onMounted, onUnmounted, computed } = Vue;
+const { createApp, ref, reactive, onMounted, onUnmounted, computed, watch } = Vue;
 
 createApp({
   setup() {
@@ -57,6 +57,13 @@ createApp({
     const applyingSmartDNS = ref(false);
     const smartdnsResult = ref('');
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
+    let smartdnsLoadGeneration = 0;
+    watch(selectedConfigNode, () => {
+      smartdnsLoadGeneration++;
+      smartdnsYaml.value = '';
+      smartdnsResult.value = '';
+      smartdnsStatus.value = { available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' };
+    });
     let nodeConfigLoadGeneration = 0;
     const publishing = ref(false);
     const updatingKernel = ref(false);
@@ -1193,8 +1200,10 @@ createApp({
       const code = String(selectedConfigNode.value || '').trim();
       if (!code || loadingSmartDNS.value) return;
       loadingSmartDNS.value = true;
+      const generation = ++smartdnsLoadGeneration;
       try {
         const agents = await sendBrowserWSControl({ type: 'agents.list.get' });
+        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         const item = (agents.data || {})[code] || {};
         const status = item.status || {};
         smartdnsStatus.value = {
@@ -1206,14 +1215,16 @@ createApp({
           lastError: String(status.smartdns_last_error || '')
         };
         const requested = await sendBrowserWSControl({ type: 'smartdns.config.read', machine_code: code });
+        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         smartdnsResult.value = requested.message || '已请求 Agent 读取实际配置；请稍后再次刷新';
         const saved = await sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code });
+        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         smartdnsYaml.value = String((saved.data || {}).config || '');
         smartdnsResult.value += smartdnsYaml.value ? '；显示的是主控最近保存副本，Agent 回传完成后再次点击刷新获取最新内容' : '；等待 Agent 首次回传';
       } catch (e) {
         smartdnsResult.value = '读取失败：' + (e.message || String(e));
         showMsg(smartdnsResult.value, 'error');
-      } finally { loadingSmartDNS.value = false; }
+      } finally { if (generation === smartdnsLoadGeneration) loadingSmartDNS.value = false; }
     };
 
     const applySmartDNSConfig = async () => {
