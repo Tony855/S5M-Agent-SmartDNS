@@ -582,3 +582,28 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		}
 	})
 }
+
+func TestSafeSmartDNSDiagnosticRedactsCredentials(t *testing.T) {
+	input := "fetch https://admin:supersecret@example.com/config Bearer abc.def.ghi password=hunter2 token=secret123 api_key=key123"
+	got := safeSmartDNSDiagnostic(input)
+	for _, secret := range []string{"supersecret", "abc.def.ghi", "hunter2", "secret123", "key123", "admin:"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("diagnostic leaked %q: %s", secret, got)
+		}
+	}
+	for _, marker := range []string{"[REDACTED]"} {
+		if !strings.Contains(got, marker) {
+			t.Fatalf("redaction marker %q missing: %s", marker, got)
+		}
+	}
+}
+
+func TestSafeSmartDNSDiagnosticNormalizesAndBoundsOutput(t *testing.T) {
+	got := safeSmartDNSDiagnostic("  first\n\tsecond  " + strings.Repeat("x", 600))
+	if strings.ContainsAny(got, "\n\t") {
+		t.Fatalf("diagnostic whitespace was not normalized: %q", got)
+	}
+	if len(got) > 504 {
+		t.Fatalf("diagnostic exceeds bounded length: %d", len(got))
+	}
+}
