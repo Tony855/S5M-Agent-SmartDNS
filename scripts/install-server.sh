@@ -335,7 +335,12 @@ if [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 ]]; then
 fi
 
 # 回滚函数：快照存在后任何失败都调用它
+ROLLBACK_READY=0
+ROLLBACK_DONE=0
 rollback_install() {
+  [[ "$ROLLBACK_DONE" -eq 1 ]] && return 0
+  ROLLBACK_DONE=1
+  trap - ERR
   local reason="${1:-unknown failure}"
   echo "❌ 安装失败：${reason}，正在恢复安装前的文件和服务配置..." >&2
   systemctl stop "$UNIT" 2>/dev/null || true
@@ -404,6 +409,19 @@ rollback_install() {
   # 提示数据库备份位置，供人工恢复
   echo "ℹ️ 安装前数据库备份保留在：$BACKUP/s5m.db（若存在），供人工恢复使用。" >&2
 }
+
+on_install_error() {
+  local status=$?
+  local line="${BASH_LINENO[0]:-unknown}"
+  if [[ "$ROLLBACK_READY" -eq 1 && "$ROLLBACK_DONE" -eq 0 ]]; then
+    trap - ERR
+    rollback_install "未处理的安装命令失败（退出码 $status，脚本行 $line）"
+  fi
+  exit "$status"
+}
+
+ROLLBACK_READY=1
+trap on_install_error ERR
 
 # 迁移旧路径 env 文件
 if [[ -f "$OLD_ENV_FILE" && ! -f "$ENV_FILE" ]]; then mv "$OLD_ENV_FILE" "$ENV_FILE"
@@ -709,6 +727,10 @@ elif [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 1 ]]; then
   fi
   echo "✅ 复用现有 HTTPS 配置，不重新签发证书： https://$S5M_DOMAIN"
 fi
+
+# 安装全部验证成功后，关闭自动回滚，保留当前新版本。
+ROLLBACK_READY=0
+trap - ERR
 
 # 成功输出
 echo "✅ S5M-Server 安装成功"
