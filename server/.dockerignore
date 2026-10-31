@@ -1,0 +1,14 @@
+.git
+backups
+bin
+node_modules
+runtime
+logs
+*.log
+*.bak*
+*.before-*
+*.backup*
+*.failed*
+*.syntax-error*
+*.broken*
+.env

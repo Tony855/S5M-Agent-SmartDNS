@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>S5M Proxy Service</title>
+<link rel="stylesheet" href="/vendor/element-plus.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app" v-cloak>
+  <div v-if="!token" class="login-wrap">
+    <div class="login-card">
+      <div class="login-brand"><span class="login-mark">S5</span><div><div class="login-title">S5M Proxy</div><div class="login-subtitle">安全代理与实例管理平台</div></div></div><div class="login-divider"></div><div class="login-welcome">欢迎登录</div><div class="login-caption">使用管理员账号继续</div>
+      <el-input v-model="loginUser" placeholder="账号 (默认 admin)" autocomplete="username" inputmode="text" autocapitalize="off" spellcheck="false" style="margin-bottom: 20px;" @keydown.enter="handleLoginEnter"></el-input>
+      <el-input v-model="loginPass" type="password" placeholder="密码" show-password autocomplete="current-password" inputmode="text" autocapitalize="off" spellcheck="false" style="margin-bottom: 25px;" @keydown.enter="handleLoginEnter"></el-input>
+      <el-button type="primary" style="width: 100%; height: 40px; font-size: 16px;" @click="doLogin" :loading="loggingIn">登 录</el-button>
+    </div>
+  </div>
+
+  <el-container v-else class="layout">
+    <el-aside class="aside">
+      <div class="logo">S5M Proxy</div>
+      <el-menu :default-active="page" @select="switchPage">
+        <el-menu-item index="dashboard">系统概览</el-menu-item>
+        <el-menu-item index="proxies">代理管理</el-menu-item>
+        <el-menu-item index="instances">节点实例管理</el-menu-item>
+        <el-menu-item index="config">配置管理</el-menu-item>
+        <el-menu-item index="system">系统运维</el-menu-item>
+      </el-menu>
+    </el-aside>
+
+    <el-main class="main">
+      <div class="top-bar">
+        <div class="topbar-status"><span class="topbar-dot" :class="{ 'realtime-online': realtimeStatus === 'connected', 'realtime-pending': realtimeStatus === 'connecting' || realtimeStatus === 'reconnecting' }"></span><span>{{ realtimeStatus === 'connected' ? '实时通道已连接' : (realtimeStatus === 'connecting' ? '实时通道连接中' : (realtimeStatus === 'reconnecting' ? '实时通道重连中' : '实时通道未连接')) }}</span></div>
+        <el-dropdown trigger="click" @command="handleUserMenu">
+          <button type="button" class="admin-menu-trigger" aria-label="管理员菜单">
+            <span class="admin-avatar" :title="(currentUser || 'admin') + ' · 账户菜单'">{{ (currentUser || 'A').slice(0,1).toUpperCase() }}</span>
+            <span class="admin-chevron">▾</span>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="password">修改管理员密码</el-dropdown-item>
+              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+      <el-dialog v-model="pwdDialog" title="修改管理员密码" width="min(460px, 94vw)" :close-on-click-modal="false" @closed="resetPwdForm">
+        <el-form label-position="top" @submit.prevent="changeAdminPassword">
+          <el-form-item label="当前密码" required><el-input v-model="pwdForm.old" type="password" autocomplete="current-password" show-password placeholder="请输入当前密码" /></el-form-item>
+          <el-form-item label="新密码" required><el-input v-model="pwdForm.new" type="password" autocomplete="new-password" show-password placeholder="至少 6 位" /></el-form-item>
+          <el-form-item label="确认新密码" required><el-input v-model="pwdForm.confirm" type="password" autocomplete="new-password" show-password placeholder="再次输入新密码" /></el-form-item>
+          <p class="password-hint">密码更新成功后，当前登录会话保持有效。请妥善保存新密码。</p>
+        </el-form>
+        <template #footer><el-button @click="pwdDialog=false">取消</el-button><el-button type="primary" :loading="pwdSaving" @click="changeAdminPassword">保存新密码</el-button></template>
+      </el-dialog>
+
+      <el-dialog v-model="kernelUpdateDialog" title="更新节点 Mihomo 内核" width="min(620px, 94vw)" :close-on-click-modal="false">
+        <p class="import-note">目标节点：<strong>{{ kernelUpdateMachineCode }}</strong>。系统自动查询 Mihomo 官方最新稳定版，并根据节点架构选择发行文件、计算 SHA-256。</p>
+        <div v-if="kernelUpdateInfoLoading" class="empty-state">正在查询官方稳定版本并校验发行文件…</div>
+        <div v-else-if="kernelUpdateInfo && kernelUpdateInfo.error" class="empty-state error-state">
+          {{ kernelUpdateInfo.error }}
+          <div style="margin-top:10px"><el-button size="small" @click="loadAgentKernelUpdateInfo">重新查询</el-button></div>
+        </div>
+        <div v-else-if="kernelUpdateInfo" class="node-update-summary">
+          <div class="instance-link-summary">
+            <span>当前版本：<strong>{{ kernelUpdateInfo.current_version || '尚未上报' }}</strong></span>
+            <span>官方稳定版：<strong>{{ kernelUpdateInfo.latest_version }}</strong></span>
+            <span>节点架构：<strong>{{ kernelUpdateInfo.arch }}</strong></span>
+          </div>
+          <p class="section-hint">发行文件：{{ kernelUpdateInfo.asset_name }}</p>
+          <p class="section-hint">SHA-256 已由主控从官方发行文件计算；Agent 执行时仍会自行校验并测试新内核。</p>
+        </div>
+        <template #footer>
+          <el-button @click="kernelUpdateDialog = false">取消</el-button>
+          <el-button @click="loadAgentKernelUpdateInfo" :disabled="kernelUpdateInfoLoading || queueingKernelUpdate">重新检查版本</el-button>
+          <el-button type="primary" :loading="queueingKernelUpdate" :disabled="kernelUpdateInfoLoading || !kernelUpdateInfo || !!kernelUpdateInfo.error || !kernelUpdateSHA256" @click="queueAgentKernelUpdate">一键更新</el-button>
+        </template>
+      </el-dialog>
+      <div v-if="page === 'dashboard'">
+        <div class="grid-cards">
+          <div class="stat-card"><div class="stat-title">Agent 在线节点</div><div class="stat-value">{{ overview.remote_online || 0 }} <span class="stat-total">/ {{ overview.remote_node_total || 0 }}</span></div><div class="section-hint">已连接的远程实例</div></div>
+          <div class="stat-card"><div class="stat-title">Mihomo 健康节点</div><div class="stat-value">{{ overview.remote_mihomo_healthy || 0 }}</div><div class="section-hint">控制 API 可达且内核正常</div></div>
+          <div class="stat-card"><div class="stat-title stat-title-download">实时下载速率</div><div class="stat-value">{{ fmtSpeed(traffic.down) }}</div></div>
+          <div class="stat-card"><div class="stat-title stat-title-upload">实时上传速率</div><div class="stat-value">{{ fmtSpeed(traffic.up) }}</div></div>
+          <div class="stat-card"><div class="stat-title">活跃连接数</div><div class="stat-value">{{ traffic.conns || 0 }}</div></div>
+          <div class="stat-card"><div class="stat-title">累计下载流量</div><div class="stat-value">{{ fmtBytes(overview.downloadTotal) }}</div></div>
+          <div class="stat-card"><div class="stat-title">累计上传流量</div><div class="stat-value">{{ fmtBytes(overview.uploadTotal) }}</div></div>
+          <div class="stat-card"><div class="stat-title">已启用代理</div><div class="stat-value">{{ overview.proxy_enabled || 0 }} / {{ overview.proxy_total || 0 }}</div></div>
+        </div>
+        <div class="card-panel">
+          <div class="card-title dashboard-section-title"><span><strong>远程节点运行状态</strong><small>Agent 连通性、Mihomo 健康、连接与流量</small></span><el-button size="small" @click="loadOverview">刷新数据</el-button></div>
+          <div v-if="!overview.remote_nodes || !overview.remote_nodes.length" class="empty-state">暂无远程节点数据。请先部署并绑定 S5M Agent，且确保 Agent 能访问对应的 Mihomo Controller。</div>
+          <div v-else class="remote-mihomo-table-wrap desktop-remote-table" role="region" aria-label="远程服务器 Mihomo 状态表" tabindex="0">
+            <table class="remote-mihomo-table">
+              <thead><tr><th>远程服务器</th><th>Agent / Mihomo 状态</th><th>版本</th><th>连接数</th><th>实时下载</th><th>实时上传</th><th>累计下载</th><th>累计上传</th><th>最后上报</th></tr></thead>
+              <tbody><tr v-for="node in overview.remote_nodes" :key="node.machine_code">
+                <td><div class="remote-mihomo-main"><span class="remote-dot" :class="node.healthy ? 'good' : (node.online ? 'warn' : 'bad')"></span><div class="remote-mihomo-name"><strong>{{ node.hostname || node.machine_code }}</strong><small>{{ node.machine_code }}</small></div></div></td>
+                <td><div class="remote-mihomo-state"><span :class="node.online ? 'status-badge status-online' : 'status-badge status-offline'">{{ node.online ? 'Agent 在线' : 'Agent 离线' }}</span><span :class="node.healthy ? 'status-badge status-online' : (node.mihomo_api_online ? 'status-badge status-warning' : 'status-badge status-offline')">{{ node.healthy ? 'Mihomo 正常' : (node.mihomo_api_online ? '部分异常' : 'API 不可达') }}</span></div></td>
+                <td><span :class="node.mihomo_version ? '' : 'status-badge status-unknown'">{{ node.mihomo_version || '版本未知' }}</span></td><td>{{ node.connections ?? '—' }}</td>
+                <td>{{ (node.online && node.mihomo_api_online) ? fmtSpeed(node.downloadSpeed || 0) : '—' }}</td><td>{{ (node.online && node.mihomo_api_online) ? fmtSpeed(node.uploadSpeed || 0) : '—' }}</td>
+                <td>{{ fmtBytes(node.downloadTotal || 0) }}</td><td>{{ fmtBytes(node.uploadTotal || 0) }}</td><td>{{ node.updated_at || '尚未上报' }}</td>
+              </tr></tbody>
+            </table>
+          </div>
+          <div v-if="overview.remote_nodes && overview.remote_nodes.length" class="remote-node-cards">
+            <article v-for="node in overview.remote_nodes" :key="'mobile-' + node.machine_code" class="remote-node-card">
+              <div class="remote-node-card-head">
+                <span class="remote-dot" :class="node.healthy ? 'good' : (node.online ? 'warn' : 'bad')"></span>
+                <div class="remote-node-card-name"><strong>{{ node.hostname || node.machine_code }}</strong><small>{{ node.machine_code }}</small></div>
+                <span :class="node.healthy ? 'status-badge status-online' : (node.online ? 'status-badge status-warning' : 'status-badge status-offline')">{{ node.healthy ? '健康' : (node.online ? '异常' : '离线') }}</span>
+              </div>
+              <div class="remote-node-statuses">
+                <span :class="node.online ? 'status-badge status-online' : 'status-badge status-offline'">Agent {{ node.online ? '在线' : '离线' }}</span>
+                <span :class="node.mihomo_api_online ? 'status-badge status-online' : (node.online ? 'status-badge status-warning' : 'status-badge status-offline')">Mihomo API {{ node.mihomo_api_online ? '可达' : (node.online ? '不可达/待检查' : '不可达') }}</span>
+                <span class="remote-node-version" :class="node.mihomo_version ? '' : 'status-badge status-unknown'">{{ node.mihomo_version || '版本未知' }}</span>
+              </div>
+              <div class="remote-node-metrics">
+                <div><small>连接数</small><strong>{{ node.connections ?? '—' }}</strong></div>
+                <div><small>实时下载</small><strong>{{ (node.online && node.mihomo_api_online) ? fmtSpeed(node.downloadSpeed || 0) : '—' }}</strong></div>
+                <div><small>实时上传</small><strong>{{ (node.online && node.mihomo_api_online) ? fmtSpeed(node.uploadSpeed || 0) : '—' }}</strong></div>
+                <div><small>累计下载</small><strong>{{ fmtBytes(node.downloadTotal || 0) }}</strong></div>
+                <div><small>累计上传</small><strong>{{ fmtBytes(node.uploadTotal || 0) }}</strong></div>
+              </div>
+              <div class="remote-node-updated">最后上报：{{ node.updated_at || '尚未上报' }}</div>
+            </article>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="page === 'proxies'">
+        <div class="card-panel">
+          <div class="card-title">
+            <span>代理列表 (共 {{ proxies.length }} 个，当前分组 {{ filteredProxies.length }} 个)</span>
+            <div>
+              <el-button size="small" type="primary" style="margin-right: 10px;" @click="showImport = true">批量导入</el-button>
+              <el-button size="small" type="success" @click="openCreateProxy">新增节点</el-button>
+            </div>
+          </div>
+          
+          <!-- 机器码分组选项卡 -->
+          <div class="group-tabs">
+            <div class="group-tab" :class="{ active: activeGroup === 'ALL' }" @click="activeGroup = 'ALL'">全部节点</div>
+            <div class="group-tab danger" :class="{ active: activeGroup === 'UNBOUND' }" @click="activeGroup = 'UNBOUND'">未绑定 ({{ getUnboundCount() }})</div>
+            <div v-for="code in proxyGroupCodes" :key="code" class="group-tab success" 
+                 :class="{ active: activeGroup === code }" @click="activeGroup = code">
+              {{ code === '__GLOBAL__' ? '全局节点' : '机器: ' + code }} ({{ getMachineCount(code) }})
+            </div>
+          </div>
+
+          <!-- 桌面端表格 -->
+          <el-table class="desktop-table" :data="filteredProxies" style="width: 100%" stripe v-loading="loadingProxies">
+            <el-table-column prop="id" label="ID" width="70"></el-table-column>
+            <el-table-column prop="name" label="名称" min-width="140"></el-table-column>
+            <el-table-column prop="type" label="类型" width="90"></el-table-column>
+            <el-table-column label="服务器" min-width="180"><template #default="scope">{{ scope.row.server }}:{{ scope.row.port }}</template></el-table-column>
+            <el-table-column prop="source_cidr" label="源 IP (CIDR)" min-width="170"></el-table-column>
+            <el-table-column label="关联节点实例" min-width="190">
+              <template #default="scope">
+                <div v-if="scope.row.machine_code === '__GLOBAL__'">
+                  <span style="color:var(--sub);">全局节点</span>
+                  <div class="section-hint" style="margin-top:4px;">同步至所有已授权节点</div>
+                </div>
+                <div v-else-if="scope.row.machine_code">
+                  <span class="machine-tag">{{ scope.row.machine_code }}</span>
+                  <div class="section-hint" style="margin-top:4px;">{{ machineCodeStatus(scope.row.machine_code) }}</div>
+                </div>
+                <span v-else style="color:var(--sub);">未绑定</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="160">
+              <template #default="scope">
+                <el-button size="small" class="btn-action-edit" @click="openEditProxy(scope.row)">编辑</el-button>
+                <el-button size="small" class="btn-action-del" style="margin-left: 6px;" @click="deleteProxy(scope.row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <!-- 手机端卡片 -->
+          <div v-loading="loadingProxies">
+            <div v-for="item in filteredProxies" :key="item.id" class="proxy-mobile-card">
+              <div class="proxy-mobile-row"><div class="proxy-mobile-label">名称</div><div class="proxy-mobile-value"><strong>{{ item.name }}</strong></div></div>
+              <div class="proxy-mobile-row"><div class="proxy-mobile-label">类型/模式</div><div class="proxy-mobile-value">{{ item.type }} / {{ item.mode }}</div></div>
+              <div class="proxy-mobile-row"><div class="proxy-mobile-label">服务器</div><div class="proxy-mobile-value">{{ item.server }}:{{ item.port }}</div></div>
+              <div class="proxy-mobile-row"><div class="proxy-mobile-label">源 IP (CIDR)</div><div class="proxy-mobile-value">{{ item.source_cidr || '0.0.0.0/0' }}</div></div>
+              <div class="proxy-mobile-row">
+                <div class="proxy-mobile-label">关联实例</div><div class="proxy-mobile-value"><span v-if="item.machine_code === '__GLOBAL__'">全局节点</span><span v-else-if="item.machine_code" class="machine-tag">{{ item.machine_code }}</span><span v-else>未绑定</span><div class="section-hint">{{ item.machine_code === '__GLOBAL__' ? '同步至所有已授权节点' : (item.machine_code ? machineCodeStatus(item.machine_code) : '未关联节点实例，不会同步到节点配置') }}</div></div>
+              </div>
+              <div class="proxy-mobile-actions">
+                <el-button size="small" class="btn-action-edit" @click="openEditProxy(item)">编辑</el-button>
+                <el-button size="small" class="btn-action-del" @click="deleteProxy(item)">删除</el-button>
+              </div>
+            </div>
+            <div v-if="!filteredProxies.length && !loadingProxies" style="text-align:center;padding:20px;color:var(--sub);">该分组下暂无代理节点</div>
+          </div>
+        </div>
+
+        <!-- 新增/编辑弹窗 -->
+        <el-dialog v-model="proxyDialog" :title="proxyForm.id ? '编辑节点' : '新增节点'" width="90%" style="max-width: 520px;">
+          <el-form :model="proxyForm" label-width="90px">
+            <el-form-item label="关联节点实例">
+              <el-select v-model="proxyForm.machine_code" placeholder="留空为未绑定；选择全局节点可同步到所有已授权节点" clearable filterable style="width:100%">
+                <el-option label="全局节点（同步到所有已授权节点）" value="__GLOBAL__"></el-option>
+                <el-option v-for="code in availableMachineCodes" :key="code" :label="machineCodeOptionLabel(code)" :value="code"></el-option>
+              </el-select>
+              <div class="section-hint" style="line-height:1.6;margin-top:5px;">选择具体实例后仅进入该实例配置；选择“全局节点”会同步到所有已授权节点；留空则为未绑定，仅保留在主控列表。保存后自动同步 proxies/rules，不覆盖节点其他自定义设置。</div>
+            </el-form-item>
+            <el-form-item label="启用代理">
+              <el-switch v-model="proxyForm.enabled" active-text="启用" inactive-text="禁用"></el-switch>
+            </el-form-item>
+            <el-form-item label="源 IP (CIDR)">
+              <el-input v-model="proxyForm.source_cidr" placeholder="例如 192.168.1.0/24，0.0.0.0/0 表示全部"></el-input>
+            </el-form-item>
+            <el-form-item label="名称"><el-input v-model="proxyForm.name"></el-input></el-form-item>
+            <el-form-item label="运行模式">
+              <el-select v-model="proxyForm.mode" style="width:100%">
+                <el-option label="全局模式（全部走代理）" value="global"></el-option>
+                <el-option label="分流模式（全部按规则匹配）" value="split"></el-option>
+                <el-option label="回国模式（大陆走代理，境外直连）" value="return"></el-option>
+                <el-option label="游戏模式（游戏域名走代理，其余直连）" value="game"></el-option>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="类型">
+              <el-select v-model="proxyForm.type" style="width:100%">
+                <el-option label="socks5" value="socks5"></el-option><el-option label="http" value="http"></el-option>
+                <el-option label="ss" value="ss"></el-option><el-option label="vmess" value="vmess"></el-option><el-option label="vless" value="vless"></el-option><el-option label="trojan" value="trojan"></el-option>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="服务器"><el-input v-model="proxyForm.server"></el-input></el-form-item>
+            <el-form-item label="端口"><el-input-number v-model="proxyForm.port" :min="1" :max="65535" style="width:100%"></el-input-number></el-form-item>
+            <el-form-item label="账号"><el-input v-model="proxyForm.username" placeholder="可选"></el-input></el-form-item>
+            <el-form-item label="密码"><el-input v-model="proxyForm.password" placeholder="留空则保留现有密码；清除请编辑高级参数 JSON"></el-input></el-form-item>
+            <el-form-item label="高级参数 JSON">
+              <el-input v-model="proxyForm.extra_json" type="textarea" :rows="5" placeholder='{"uuid":"...","tls":true,"servername":"...","network":"ws"}'></el-input>
+              <div class="section-hint" style="line-height:1.6;margin-top:5px;">保存时会保留此 JSON 中的 UUID、TLS/SNI、WebSocket 等参数。必须是合法 JSON 对象；仅修改名称或地址时不要清空这些字段。</div>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="proxyDialog = false">取消</el-button>
+            <el-button type="primary" @click="saveProxy" :loading="savingProxy">保存</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 批量导入弹窗 -->
+        <el-dialog v-model="showImport" title="批量导入代理" width="90%" style="max-width: 560px;">
+          <p class="import-note">导入内容将按行提交给后端解析。导入后如需绑定机器码，请在代理列表中编辑对应节点。</p>
+<el-tabs v-model="importTab">
+            <el-tab-pane label="文本粘贴" name="text">
+              <p style="color:var(--sub);font-size:13px;margin-bottom:10px;">
+                支持格式：<code>名称 类型 服务器 端口</code> 或 <code>socks5://user:pass@ip:port</code>
+              </p>
+              <el-input v-model="importText" type="textarea" :rows="8" placeholder="node1 socks5 1.2.3.4 1080&#10;socks5://user:pass@5.6.7.8:1080"></el-input>
+            </el-tab-pane>
+            <el-tab-pane label="上传文件" name="file">
+              <input type="file" accept=".txt,.csv,.json" @change="handleFileUpload" style="margin-top: 10px;" />
+              <div v-if="importTab === 'file' && importText" style="margin-top: 15px; padding: 10px; background: #f0fdf4; border-radius: 4px; color: #166534; font-size: 13px;">
+                文件已解析，共 {{ importText.split('\n').filter(Boolean).length }} 条数据，点击“导入”生效。
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+          <template #footer>
+            <el-button @click="showImport = false">取消</el-button>
+            <el-button type="primary" @click="importProxies" :loading="importing" :disabled="!importText">导入</el-button>
+          </template>
+        </el-dialog>
+      </div>
+
+      <div v-if="page === 'instances'">
+        <!-- Generate an instance token first, as requested. -->
+        <div class="card-panel token-panel">
+          <div class="card-title"><span>生成实例 Token</span><span class="section-hint">用于将 Agent 安全绑定到本控制台</span></div>
+          <div class="token-create-row">
+            <el-input v-model="newMachineCode" placeholder="输入实例机器码" clearable></el-input>
+            <el-button type="primary" @click="generateAgentToken" :loading="generating">生成实例 Token</el-button>
+          </div>
+          <div v-if="generatedToken" class="generated-token-box">
+            <div><div class="token-label">新生成的实例 Token</div><strong class="generated-token-value">{{ generatedToken }}</strong></div>
+            <el-button type="success" @click="safeCopy(generatedToken)">复制 Token</el-button>
+          </div>
+        </div>
+
+        <!-- Unified instance area: registration, status and proxy/config association. -->
+        <div class="card-panel instance-panel">
+          <div class="card-title"><span>节点实例管理</span><el-button size="small" type="primary" :loading="agentLoading || agentRefreshing" :disabled="agentLoading || agentRefreshing" @click="loadAgentsData">刷新节点实例</el-button></div>
+          <p class="import-note">在这里统一管理已注册节点实例，并直接查看该实例关联的代理节点和独立 Mihomo 配置。代理管理中的机器码绑定会自动同步到对应节点配置的 proxies/rules；自定义 YAML 的 DNS、TUN、端口等其他设置会保留。</p>
+
+          <div class="subsection-heading"><span>已注册实例</span><span class="section-hint">共 {{ agentEntries.length }} 个，当前显示 {{ filteredAgentEntries.length }} 个</span></div>
+          <div class="docker-controls" style="margin:10px 0 14px">
+            <el-input v-model="agentSearch" clearable placeholder="搜索机器码、主机名或系统" />
+            <el-select v-model="agentStatusFilter" style="max-width:170px" aria-label="筛选实例状态">
+              <el-option label="全部实例" value="all" />
+              <el-option label="仅在线" value="online" />
+              <el-option label="仅离线" value="offline" />
+            </el-select>
+          </div>
+          <div v-if="agentLoading" class="empty-state">正在加载实例…</div>
+          <div v-else-if="agentLoadError" class="empty-state error-state">{{ agentLoadError }}<div style="margin-top:10px"><el-button size="small" @click="loadAgentsData">重试</el-button></div></div>
+          <div v-else-if="!agentEntries.length" class="empty-state">暂无已注册实例。请先在上方生成实例 Token，并在目标机器部署 Agent。</div>
+          <div v-else-if="!filteredAgentEntries.length" class="empty-state">没有符合搜索条件的实例，请调整关键词或状态筛选。</div>
+          <div v-else class="instance-list">
+            <div v-for="item in filteredAgentEntries" :key="item.code" class="agent-item instance-row">
+              <div class="instance-main">
+                <div class="instance-identity">
+                  <div class="instance-identity-top">
+                    <div class="agent-code">{{ item.code }}</div>
+                    <el-button size="small" plain class="instance-copy-button" @click="safeCopy(item.code)">复制机器码</el-button>
+                  </div>
+                </div>
+                <div class="instance-statuses">
+                  <span :class="item.authorized ? 'status-badge status-online' : 'status-badge status-offline'">{{ item.authorized ? '已授权' : '未授权' }}</span>
+                  <span :class="item.online ? 'status-badge status-online' : 'status-badge status-offline'">{{ item.online ? 'Agent 在线' : 'Agent 离线' }}</span>
+                </div>
+                <div class="instance-host-system">
+                  <span class="instance-host-label">主机与系统</span>
+                  <strong>{{ item.hostname || '主机未知' }} · {{ item.os || '系统未知' }}{{ item.arch ? '/' + item.arch : '' }}</strong>
+                </div>
+              </div>
+              <div class="instance-summary">
+                <div class="instance-summary-secondary">
+                  <span>连接数：<strong>{{ item.connections ?? '—' }}</strong></span>
+                  <span>实时上传：<strong>{{ fmtSpeed(item.uploadSpeed || 0) }}</strong></span>
+                  <span>实时下载：<strong>{{ fmtSpeed(item.downloadSpeed || 0) }}</strong></span>
+                  <span>最后上报：<strong>{{ item.updated_at || '暂无记录' }}</strong></span>
+                  <div class="instance-mihomo-status">
+                    <div class="instance-mihomo-runtime">
+                      <strong class="instance-mihomo-label">Mihomo 运行状态</strong>
+                      <span class="instance-summary-mihomo" :class="!item.online ? 'is-unknown' : (item.mihomoRunning ? 'is-running' : (item.runtimeReported ? 'is-stopped' : 'is-unknown'))">
+                        {{ !item.online ? (item.runtimeReported ? '状态未知（Agent 离线）' : '状态未知') : (item.mihomoRunning ? '运行中' : (item.runtimeReported ? '未运行/异常' : '状态未知')) }}
+                      </span>
+                      <strong class="instance-mihomo-version" v-if="item.mihomoVersion">{{ item.online ? 'v' : '最后上报 v' }}{{ item.mihomoVersion }}</strong>
+                      <span class="instance-mihomo-version is-unknown" v-else>版本未知</span>
+                    </div>
+                    <div class="instance-update-row">
+                      <span class="instance-update-label">更新状态</span>
+                      <span class="instance-summary-update" :class="item.pendingCommand && item.pendingCommand.type === 'update_mihomo' ? 'is-pending' : (item.commandResult && item.commandResult.type === 'update_mihomo' ? (item.commandResult.status === 'success' ? 'is-success' : (item.commandResult.status === 'failed' ? 'is-failed' : 'is-unknown')) : 'is-unknown')">
+                        <template v-if="item.pendingCommand && item.pendingCommand.type === 'update_mihomo'">正在更新 · 目标版本 {{ item.pendingCommand.version || '未知' }}</template>
+                        <template v-else-if="item.commandResult && item.commandResult.type === 'update_mihomo'">{{ item.commandResult.status === 'success' ? '更新成功' : (item.commandResult.status === 'failed' ? '更新失败' : (item.commandResult.status || '状态未知')) }} · {{ item.commandResult.message || '无详细信息' }}{{ item.commandResult.updated_at ? ' · ' + new Date(Number(item.commandResult.updated_at) * 1000).toLocaleString() : '' }}</template>
+                        <template v-else>暂无更新记录</template>
+                      </span>
+                    </div>
+                  </div>
+                  <span>关联代理：<strong>{{ proxyCountForMachine(item.code) }}</strong></span>
+                  <span v-if="item.runtimeMessage || item.lastError" class="instance-summary-error">Agent 状态/错误信息：{{ item.runtimeMessage || item.lastError }}</span>
+                </div>
+              </div>
+              <div class="instance-actions">
+                <el-button size="small" type="primary" plain @click="openProxiesForMachine(item.code)">关联代理（{{ proxyCountForMachine(item.code) }}）</el-button>
+                <el-button size="small" @click="openNodeConfigForMachine(item.code)">独立配置</el-button>
+                <el-button size="small" type="warning" plain @click="openAgentKernelUpdate(item.code)">更新 Mihomo</el-button>
+                <el-button size="small" type="danger" plain @click="deleteAgent(item.code)">撤销绑定</el-button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div v-if="page === 'config'">
+        <div class="card-panel">
+          <div class="card-title">节点独立配置 (YAML)</div>
+          <p class="import-note">每个机器码保存一份独立配置。代理管理中新增、编辑、删除或重新绑定代理时，主控端会自动同步该节点 YAML 的 proxies/rules；其他自定义设置保持不变。保存 YAML 后，Agent 会在下一次拉取时应用。</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+            <el-button type="warning" :loading="retryingNodeConfigSync" @click="retryNodeConfigSync">立即重试同步所有节点</el-button>
+          </div>
+          <p class="import-note">如果之前出现“代理已保存，但节点配置同步失败”，可在修复导致失败的配置问题后点击此按钮。操作会重建所有已授权节点的代理规则，并保留节点 YAML 中其他自定义设置。</p>
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+            <el-select v-model="selectedConfigNode" placeholder="选择要编辑的节点机器码" filterable style="flex:1;min-width:240px;" @change="loadNodeConfig">
+              <el-option v-for="item in agentEntries" :key="item.code" :label="item.code + (item.online ? '（在线）' : '（离线）')" :value="item.code"></el-option>
+            </el-select>
+            <el-button @click="loadAgentsData">刷新节点</el-button>
+            <el-button @click="loadNodeConfig" :disabled="!selectedConfigNode">重新加载 YAML</el-button>
+          </div>
+          <div class="instance-link-summary" style="align-items:center;gap:14px;margin:10px 0;">
+            <div class="config-quick-toggle"><span>TUN</span><el-switch v-model="configTunEnabled" @change="applyConfigQuickSettings" /></div>
+            <div class="config-quick-toggle"><span>DNS</span><el-switch v-model="configDnsEnabled" @change="applyConfigQuickSettings" /></div>
+            <el-input v-model="configDnsNameservers" type="textarea" :rows="2" placeholder="DNS nameserver，每行一个地址" style="min-width:240px;flex:1;" />
+            <el-button size="small" @click="applyConfigQuickSettings" :disabled="!selectedConfigNode">应用快捷设置到 YAML</el-button>
+          </div>
+          <p class="section-hint">快捷设置直接修改下方同一份完整 YAML；检查后再保存。</p>
+          <el-input v-model="configYaml" @input="syncConfigQuickSettingsFromYaml" type="textarea" :rows="18" placeholder="先选择节点，再粘贴或编辑该节点专属的 Mihomo YAML 配置..."></el-input>
+          <div style="display:flex;gap:10px;margin-top:15px;">
+            <el-button type="primary" style="flex:1;" @click="saveNodeConfig" :loading="savingConfig" :disabled="!selectedConfigNode">保存当前节点配置</el-button>
+          </div>
+          <p style="color:var(--sub);font-size:12px;margin-top:10px;">每个机器码独立保存。保存后只有对应节点会获取这份 YAML；未保存配置的节点不会回退到全局 YAML。</p>
+        </div>
+        <div class="card-panel">
+          <div class="card-title">Mihomo 独立配置模板与版本</div>
+          <p class="import-note">保存草稿不会发布；发布新版本不会自动覆盖任何节点。只有明确选择节点、模板版本并确认后，才会备份并应用到所选节点。</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+            <el-tag type="info">当前发布版本：v{{ templateCurrentVersion || 0 }}</el-tag>
+            <el-button @click="loadMihomoTemplate">刷新模板</el-button>
+            <el-button @click="loadTemplateNodeStatus">刷新节点版本状态</el-button>
+          </div>
+          <el-input v-model="templateYaml" type="textarea" :rows="12" placeholder="在这里编辑 Mihomo 模板 YAML；校验通过后保存草稿并发布版本。"></el-input>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+            <el-input v-model="templateNote" placeholder="版本说明（例如：调整 DNS 与 TUN）" style="flex:1;min-width:220px;"></el-input>
+            <el-button :loading="validatingTemplate" @click="validateMihomoTemplateRuntime">真实 Mihomo 内核校验</el-button>
+            <el-button :loading="savingTemplate" @click="saveMihomoTemplate">校验并保存草稿</el-button>
+            <el-button type="primary" :loading="publishingTemplate" @click="publishMihomoTemplate">发布新版本</el-button>
+          </div>
+          <div style="margin-top:16px;font-weight:600;">模板历史版本</div>
+          <div class="template-table-wrap" style="width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:8px;">
+          <el-table :data="templateVersions" size="small" style="width:100%;min-width:760px;">
+            <el-table-column prop="version" label="版本" width="82">
+              <template #default="scope">v{{ scope.row.version }}</template>
+            </el-table-column>
+            <el-table-column prop="note" label="版本说明" min-width="130"></el-table-column>
+            <el-table-column prop="created_at" label="发布时间" min-width="160"></el-table-column>
+            <el-table-column prop="sha256" label="SHA-256" min-width="180"></el-table-column>
+            <el-table-column label="操作" width="100" fixed="right">
+              <template #default="scope">
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="deletingTemplateVersion === scope.row.version"
+                  :disabled="scope.row.version === templateCurrentVersion || deletingTemplateVersion !== 0"
+                  @click="deleteMihomoTemplateVersion(scope.row.version)"
+                >删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          </div>
+          <div style="margin-top:18px;font-weight:600;">节点模板版本状态</div>
+          <div class="template-table-wrap" style="width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:8px;">
+          <el-table :data="templateNodes" size="small" style="width:100%;min-width:620px;">
+            <el-table-column prop="machine_code" label="机器码" min-width="150"></el-table-column>
+            <el-table-column label="绑定版本" width="100">
+              <template #default="scope">{{ scope.row.source === 'independent' ? '独立配置' : (scope.row.template_version ? 'v' + scope.row.template_version : '未追踪') }}</template>
+            </el-table-column>
+            <el-table-column label="最新版本" width="100">
+              <template #default="scope">v{{ scope.row.latest_version || 0 }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="120">
+              <template #default="scope">
+                <el-tag v-if="scope.row.status === 'current'" type="success">已同步</el-tag>
+                <el-tag v-else-if="scope.row.status === 'outdated'" type="warning">待升级</el-tag>
+                <el-tag v-else-if="scope.row.status === 'drifted'" type="danger">配置有差异</el-tag>
+                <el-tag v-else-if="scope.row.status === 'independent'">独立配置</el-tag>
+                <el-tag v-else type="info">未追踪</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          </div>
+          <div style="margin-top:18px;font-weight:600;">显式应用模板到节点</div>
+          <p class="import-note">应用会替换所选节点的完整 YAML，并先保存原配置快照。请确认节点和版本后再执行。</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
+            <el-select v-model="selectedTemplateNode" filterable placeholder="选择目标节点" style="flex:1;min-width:180px;">
+              <el-option v-for="node in templateNodes" :key="node.machine_code" :label="node.machine_code + '（' + (node.status === 'untracked' ? '未追踪' : node.status) + '）'" :value="node.machine_code"></el-option>
+            </el-select>
+            <el-select v-model="selectedTemplateVersion" placeholder="选择模板版本" style="width:160px;">
+              <el-option v-for="version in templateVersions" :key="version.version" :label="'模板 v' + version.version" :value="version.version"></el-option>
+            </el-select>
+            <el-button type="danger" :loading="applyingTemplate" :disabled="!selectedTemplateNode || !selectedTemplateVersion" @click="applyMihomoTemplate">确认应用到所选节点</el-button>
+            <el-button type="warning" :loading="applyingTemplate" :disabled="!selectedTemplateNode" @click="rollbackMihomoTemplate">恢复最近备份</el-button>
+          </div>
+        </div>
+        <div class="card-panel">
+          <div class="card-title">客户端订阅链接</div>
+          <el-input v-model="subUrl" readonly style="margin-bottom: 0;"><template #prepend>订阅地址</template></el-input>
+        </div>
+        
+
+      </div>
+
+      <div v-if="page === 'system'">
+        <div class="card-panel">
+          <div class="card-title">
+            <span>系统运维</span>
+            <el-button size="small" :loading="loadingSystemLogs" @click="loadSystemLogs">刷新日志</el-button>
+          </div>
+          <p class="import-note">显示最近 100 行 S5M 服务日志。日志读取依赖服务器上的 systemd journal 权限。</p>
+          <pre style="max-height:55vh;min-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#101828;color:#e5edf8;padding:14px;border-radius:10px;font-size:12px;">{{ systemLogs || '暂无日志，或尚未加载。点击“刷新日志”读取。' }}</pre>
+        </div>
+        <div class="card-panel">
+          <div class="card-title">数据库备份与恢复</div>
+          <p class="import-note">备份会下载 SQLite 数据库快照。恢复操作会覆盖当前数据库，请务必先备份；仅接受有效的 S5M SQLite 数据库，上传上限 128 MiB。</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <el-button type="primary" @click="downloadBackup">下载数据库备份</el-button>
+            <label class="el-button" :class="{ 'is-loading': restoringBackup }" style="margin-left:0;">
+              {{ restoringBackup ? '正在恢复…' : '选择备份并恢复' }}
+              <input type="file" accept=".db,.sqlite,.sqlite3,application/octet-stream" :disabled="restoringBackup" @change="restoreBackup" style="display:none;">
+            </label>
+          </div>
+        </div>
+        <div class="card-panel">
+          <div class="card-title">主控服务器 Mihomo 内核</div>
+          <p class="import-note">此处仅显示主控服务器本机 Mihomo 状态，不会自动更新或重启，也不会更新各个 Agent 节点。手动更新会替换 /opt/mihomo/mihomo 并重启 mihomo systemd 服务；更新期间代理流量可能中断。Agent 节点内核请在节点实例列表中单独排队更新。</p>
+          <div class="settings-grid" style="margin:16px 0;">
+            <div class="setting-item">
+              <span class="setting-label">当前 Mihomo 版本</span>
+              <strong :class="mainMihomoStatus.version ? '' : 'status-text-unknown'">{{ mainMihomoStatus.version || '未知' }}</strong>
+            </div>
+            <div class="setting-item">
+              <span class="setting-label">systemd 服务状态</span>
+              <el-tag :type="mainMihomoStatus.service === 'active' ? 'success' : (mainMihomoStatus.service === 'activating' ? 'warning' : 'danger')">
+                {{ mainMihomoStatus.service === 'active' ? '运行中' : (mainMihomoStatus.service === 'inactive' ? '已停止' : (mainMihomoStatus.service === 'failed' ? '启动失败' : (mainMihomoStatus.service || '未知'))) }}
+              </el-tag>
+            </div>
+            <div class="setting-item">
+              <span class="setting-label">运行中 API 版本</span>
+              <strong :class="mainMihomoStatus.api_version ? '' : 'status-text-unknown'">{{ mainMihomoStatus.api_version || '未知' }}</strong>
+              <el-tag :type="mainMihomoStatus.api_online && !mainMihomoStatus.version_mismatch ? 'success' : 'danger'" size="small">
+                {{ mainMihomoStatus.version_mismatch ? '版本不一致' : (mainMihomoStatus.api_online ? 'API 可达' : 'API 不可达') }}
+              </el-tag>
+            </div>
+            <div class="setting-item">
+              <span class="setting-label">综合状态</span>
+              <el-tag :type="mainMihomoStatus.online ? 'success' : 'danger'">{{ mainMihomoStatus.online ? '正常' : '异常 / 不可用' }}</el-tag>
+            </div>
+            <div class="setting-item">
+              <span class="setting-label">二进制路径</span>
+              <strong style="overflow-wrap:anywhere;">{{ mainMihomoStatus.binary_path || '/opt/mihomo/mihomo' }}</strong>
+            </div>
+          </div>
+          <el-alert v-if="mainMihomoStatus.queryError || mainMihomoStatus.binary_error || mainMihomoStatus.service_error || mainMihomoStatus.api_error" type="warning" :closable="false" show-icon title="状态诊断">
+            {{ mainMihomoStatus.queryError || mainMihomoStatus.binary_error || mainMihomoStatus.service_error || mainMihomoStatus.api_error }}
+          </el-alert>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+            <el-button :loading="mainMihomoStatus.loading" @click="loadMainMihomoStatus">刷新版本与状态</el-button>
+            <el-button type="primary" :loading="updatingKernel" @click="updateKernel">更新主控 Mihomo 内核</el-button>
+            <el-button @click="recoverMihomoUpdateTask">查询最近更新任务</el-button>
+          </div>
+        </div>
+      </div>
+    </el-main>
+  </el-container>
+</div>
+
+<script src="/vendor/vue.global.prod.js"></script>
+<script src="/vendor/element-plus.full.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
