@@ -477,7 +477,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := []byte("bind 127.0.0.1:6053\\n")
+	config := []byte("bind 127.0.0.1:6053\n")
 	configHash := sha256.Sum256(bytes.TrimSpace(config))
 	good := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
