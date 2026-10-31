@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+var ErrAgentCommandPending = errors.New("pending command already exists")
 
 type Store struct{ db *sql.DB }
 
@@ -220,7 +223,7 @@ func (s *Store) queueAuthorizedAgentCommand(machineCode, commandJSON string) err
 	if err != nil { return err }
 	created, err := result.RowsAffected()
 	if err != nil { return err }
-	if created != 1 { return fmt.Errorf("pending command already exists") }
+	if created != 1 { return ErrAgentCommandPending }
 	return tx.Commit()
 }
 
