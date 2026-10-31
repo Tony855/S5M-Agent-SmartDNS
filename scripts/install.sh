@@ -381,6 +381,11 @@ log_step "备份现有服务配置与数据"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="/var/backups/s5m-server-install-$STAMP"
 install -d -m 0700 "$BACKUP"
+# 记录升级前服务运行状态，回滚时不擅自启动原本已停止的服务。
+MIHOMO_WAS_ACTIVE=0
+SERVER_WAS_ACTIVE=0
+systemctl is-active --quiet mihomo 2>/dev/null && MIHOMO_WAS_ACTIVE=1 || true
+systemctl is-active --quiet "$UNIT" 2>/dev/null && SERVER_WAS_ACTIVE=1 || true
 [[ -f "$DB_DIR/s5m.db" ]] && sqlite3 "$DB_DIR/s5m.db" ".backup '$BACKUP/s5m.db'"
 # 标记文件区分“原本不存在”和“存在但为空”
 if [[ -e "$ENV_FILE" ]]; then cp -a "$ENV_FILE" "$BACKUP/s5m-server.env"; else : > "$BACKUP/env-file-absent"; fi
@@ -456,13 +461,13 @@ rollback_install() {
     fi
   fi
   systemctl daemon-reload
-  if [[ -f "$BACKUP/mihomo.service" ]]; then
-    systemctl restart mihomo || echo "❌ Mihomo 回滚启动失败，请检查 journalctl -u mihomo" >&2
+  if [[ "$MIHOMO_WAS_ACTIVE" == "1" && -f "$BACKUP/mihomo.service" ]]; then
+    systemctl restart mihomo || log_error "Mihomo 回滚启动失败，请检查 journalctl -u mihomo"
   else
     systemctl stop mihomo 2>/dev/null || true
   fi
-  if [[ -f "$BACKUP/S5M-Server.bin" ]]; then
-    systemctl start "$UNIT" || echo "❌ 旧版 S5M-Server 启动失败，请检查 journalctl -u $UNIT" >&2
+  if [[ "$SERVER_WAS_ACTIVE" == "1" && -f "$BACKUP/S5M-Server.bin" ]]; then
+    systemctl start "$UNIT" || log_error "旧版 S5M-Server 启动失败，请检查 journalctl -u $UNIT"
   else
     systemctl stop "$UNIT" 2>/dev/null || true
   fi
@@ -803,6 +808,9 @@ elif [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 1 ]]; then
   echo "✅ 复用现有 HTTPS 配置，不重新签发证书： https://$S5M_DOMAIN"
 fi
 
+# 清理旧版安装器遗留的源码副本和临时二进制；运行目录只保留主控运行所需文件。
+rm -rf /opt/S5M-Server/source
+rm -f /opt/S5M-Server/S5M-Server.new
 # 安装验收完成，关闭失败回滚保护。
 INSTALL_ROLLBACK_ACTIVE=0
 log_success "S5M-Server 安装成功"
