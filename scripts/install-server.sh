@@ -647,7 +647,8 @@ NGINXEOF
     rollback_install "HTTPS 证书签发失败"
     exit 1
   fi
-  # 显式启用并校验自动续期  if ! systemctl enable --now certbot.timer || ! systemctl is-active --quiet certbot.timer; then
+  # 显式启用并校验自动续期
+  if ! systemctl enable --now certbot.timer || ! systemctl is-active --quiet certbot.timer; then
     echo "❌ HTTPS 证书已签发，但 certbot.timer 未能启动，无法确认自动续期已启用。" >&2
     rollback_install "Certbot 自动续期服务启动失败"
     exit 1
