@@ -2209,6 +2209,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			cmd := *commandEnvelope.Command
 			var commandErr error
 			message := ""
+			var commandConfig string
 			switch cmd.Type {
 			case "update_mihomo":
 				message, commandErr = updateMihomoKernel(cmd)
@@ -2216,11 +2217,9 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				var smartDNSConfig []byte
 				smartDNSConfig, commandErr = readSmartDNSConfig()
 				if commandErr == nil {
+					commandConfig = string(smartDNSConfig)
 					message = "已读取 Agent 当前 SmartDNS 配置"
 				}
-				// Keep the payload separate from the diagnostic message; the server
-				// validates and stores it only after the matching successful ACK.
-				_ = smartDNSConfig
 			case "configure_smartdns":
 				var configHash string
 				configHash, commandErr = writeSmartDNSConfig([]byte(cmd.Config))
@@ -2243,15 +2242,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				"command_status": commandStatus, "message": message,
 			}
 			if cmd.Type == "read_smartdns_config" && commandErr == nil {
-				config, readErr := readSmartDNSConfig()
-				if readErr != nil {
-					commandStatus = "failed"
-					message = readErr.Error()
-					ackPayload["command_status"] = commandStatus
-					ackPayload["message"] = message
-				} else {
-					ackPayload["config"] = string(config)
-				}
+				ackPayload["config"] = commandConfig
 			}
 			if err := writeAgentWSJSON(conn, ackPayload); err != nil {
 				return fmt.Errorf("命令已执行但 ACK 发送失败（服务端将按命令 ID 幂等重投）: %w", err)
