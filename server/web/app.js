@@ -449,7 +449,7 @@ createApp({
       if (v === 'dashboard') loadOverview();
       if (v === 'proxies') { loadProxies(); loadAgentsData(); }
       if (v === 'instances') { loadAgentsData(); loadProxies(); }
-      if (v === 'config') { loadAgentsData(); loadSettings(); loadMihomoTemplate(); loadTemplateNodeStatus(); }
+      if (v === 'config') { loadAgentsData(); loadSettings(); }
       if (v === 'system') { loadSystemLogs(); loadMainMihomoStatus(); }
     };
 
@@ -1315,9 +1315,6 @@ createApp({
       configYaml, configTunEnabled, configDnsEnabled, configDnsNameservers, syncConfigQuickSettingsFromYaml, applyConfigQuickSettings,
       selectedConfigNode, savingConfig, publishing, updatingKernel,
       smartdnsYaml, loadingSmartDNS, applyingSmartDNS, smartdnsResult, smartdnsStatus, loadSmartDNSConfig, applySmartDNSConfig,
-      templateYaml, templateNote, templateVersions, templateCurrentVersion, templateNodes,
-      selectedTemplateNode, selectedTemplateVersion, savingTemplate, validatingTemplate, publishingTemplate, applyingTemplate, deletingTemplateVersion,
-      loadMihomoTemplate, loadTemplateNodeStatus, saveMihomoTemplate, validateMihomoTemplateRuntime, publishMihomoTemplate, deleteMihomoTemplateVersion, applyMihomoTemplate, rollbackMihomoTemplate,
       kernelUpdateDialog, kernelUpdateMachineCode, kernelUpdateVersion, kernelUpdateSHA256, queueingKernelUpdate, kernelUpdateInfo, kernelUpdateInfoLoading,
       openAgentKernelUpdate, loadAgentKernelUpdateInfo, queueAgentKernelUpdate,
       systemLogs, loadingSystemLogs, restoringBackup, loadSystemLogs, downloadBackup, restoreBackup,
