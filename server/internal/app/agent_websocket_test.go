@@ -1508,3 +1508,24 @@ func TestSmartDNSCommandsCannotQueueAfterAgentBindingRevocation(t *testing.T) {
 		t.Fatalf("revoked Agent received a pending command: %#v", settings)
 	}
 }
+
+
+func TestNewAgentCommandIDUsesUniqueHexadecimalIdentifiers(t *testing.T) {
+	seen := make(map[string]struct{}, 256)
+	for i := 0; i < 256; i++ {
+		id, err := newAgentCommandID()
+		if err != nil {
+			t.Fatalf("newAgentCommandID: %v", err)
+		}
+		if len(id) != 32 {
+			t.Fatalf("command ID length = %d, want 32", len(id))
+		}
+		if _, err := hex.DecodeString(id); err != nil {
+			t.Fatalf("command ID is not hexadecimal: %q: %v", id, err)
+		}
+		if _, exists := seen[id]; exists {
+			t.Fatalf("duplicate command ID generated: %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
