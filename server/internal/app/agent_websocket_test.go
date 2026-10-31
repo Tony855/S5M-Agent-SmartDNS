@@ -1487,3 +1487,24 @@ func TestSmartDNSControllerCopyChangesOnlyAfterSuccessfulApply(t *testing.T) {
 		t.Fatalf("successful apply did not update controller config: got=%q err=%v", got, err)
 	}
 }
+
+
+func TestSmartDNSCommandsCannotQueueAfterAgentBindingRevocation(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	if err := app.store.DeleteAgentBinding(code); err != nil {
+		t.Fatalf("revoke Agent binding: %v", err)
+	}
+	if err := app.store.QueueAgentSmartDNSReadCommand(code, `{"id":"read-after-revoke","type":"read_smartdns_config"}`); err == nil {
+		t.Fatal("SmartDNS read command queued after Agent binding revocation")
+	}
+	if err := app.store.QueueAgentSmartDNSCommand(code, `{"id":"apply-after-revoke","type":"configure_smartdns","config":"candidate"}`); err == nil {
+		t.Fatal("SmartDNS apply command queued after Agent binding revocation")
+	}
+	settings, err := app.store.GetSettings()
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if settings["agent_command_"+code] != "" {
+		t.Fatalf("revoked Agent received a pending command: %#v", settings)
+	}
+}
