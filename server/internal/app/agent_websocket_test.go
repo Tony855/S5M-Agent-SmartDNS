@@ -1452,3 +1452,36 @@ func TestAgentWebSocketIsClosedImmediatelyAfterAuthorizationRevocation(t *testin
 		t.Fatalf("unexpected WebSocket close error: %v", err)
 	}
 }
+
+
+func TestSmartDNSControllerCopyChangesOnlyAfterSuccessfulApply(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	const previous = "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 8.8.8.8"
+	const candidate = "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1"
+	if err := app.store.UpdateSettings(map[string]string{"smartdns_config_" + code: previous}); err != nil {
+		t.Fatalf("seed previous config: %v", err)
+	}
+	failedCommand := `{"id":"smartdns-failed-apply","type":"configure_smartdns","config":"` + candidate + `"}`
+	if err := app.store.QueueAgentSmartDNSCommand(code, failedCommand); err != nil {
+		t.Fatalf("queue failed apply: %v", err)
+	}
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-failed-apply", "failed", "validation failed", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("ack failed apply: matched=%v err=%v", matched, err)
+	}
+	got, err := app.store.GetSetting("smartdns_config_" + code)
+	if err != nil || got != previous {
+		t.Fatalf("failed apply replaced last-known-good config: got=%q err=%v", got, err)
+	}
+
+	successCommand := `{"id":"smartdns-success-apply","type":"configure_smartdns","config":"` + candidate + `"}`
+	if err := app.store.QueueAgentSmartDNSCommand(code, successCommand); err != nil {
+		t.Fatalf("queue successful apply: %v", err)
+	}
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-success-apply", "success", "applied", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("ack successful apply: matched=%v err=%v", matched, err)
+	}
+	got, err = app.store.GetSetting("smartdns_config_" + code)
+	if err != nil || got != candidate {
+		t.Fatalf("successful apply did not update controller config: got=%q err=%v", got, err)
+	}
+}
