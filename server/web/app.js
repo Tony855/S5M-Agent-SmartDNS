@@ -1218,13 +1218,18 @@ createApp({
           configHash: String(status.smartdns_config_sha256 || ''),
           lastError: String(status.smartdns_last_error || '')
         };
-        const requested = await sendBrowserWSControl({ type: 'smartdns.config.read', machine_code: code });
-        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
-        smartdnsResult.value = requested.message || '已请求 Agent 读取实际配置；请稍后再次刷新';
         const saved = await sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code });
         if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         smartdnsYaml.value = String((saved.data || {}).config || '');
-        smartdnsResult.value += smartdnsYaml.value ? '；显示的是主控最近保存副本，Agent 回传完成后再次点击刷新获取最新内容' : '；等待 Agent 首次回传';
+        smartdnsResult.value = smartdnsYaml.value ? '已加载主控最近保存的配置副本' : '主控尚无该节点的 SmartDNS 配置副本';
+        try {
+          const requested = await sendBrowserWSControl({ type: 'smartdns.config.read', machine_code: code });
+          if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+          smartdnsResult.value += '；' + (requested.message || '已请求 Agent 回传实际配置，稍后再次刷新');
+        } catch (readError) {
+          if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+          smartdnsResult.value += '；Agent 实时读取请求未排队：' + (readError.message || String(readError));
+        }
       } catch (e) {
         if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         smartdnsResult.value = '读取失败：' + (e.message || String(e));
