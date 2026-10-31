@@ -1016,6 +1016,10 @@ func TestAgentWebSocketHeartbeatRevalidatesAuthorizationAfterBindingRemoval(t *t
 		t.Fatalf("read welcome: %v", err)
 	}
 
+	// SmartDNS configuration is private node state and must be removed with the credential.
+	if err := app.store.UpdateSettings(map[string]string{"smartdns_config_" + code: "private resolver config"}); err != nil {
+		t.Fatalf("seed SmartDNS config: %v", err)
+	}
 	// Simulate binding removal after handshake authentication but before the
 	// connection-generation invalidation becomes visible to this socket.
 	if err := app.store.DeleteAgentBinding(code); err != nil {
@@ -1049,6 +1053,9 @@ func TestAgentWebSocketHeartbeatRevalidatesAuthorizationAfterBindingRemoval(t *t
 	}
 	if settings["agent_status_"+code] != "" || settings["agent_lastseen_"+code] != "" {
 		t.Fatalf("heartbeat after binding removal was persisted: %#v", settings)
+	}
+	if settings["smartdns_config_"+code] != "" {
+		t.Fatalf("SmartDNS config survived Agent binding revocation: %#v", settings)
 	}
 }
 
