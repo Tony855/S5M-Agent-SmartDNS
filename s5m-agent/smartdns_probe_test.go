@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -725,5 +726,45 @@ func TestReadSmartDNSConfigAtRejectsSymlinksAndInvalidFiles(t *testing.T) {
 	}
 	if _, err := readSmartDNSConfigAt(dir); err == nil {
 		t.Fatal("directory must be rejected")
+	}
+}
+
+
+func TestReadSmartDNSFileNoFollowRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.conf")
+	link := filepath.Join(dir, "smartdns.conf")
+	if err := os.WriteFile(target, []byte("bind 127.0.0.1:6053\\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSFileNoFollow(link, 8<<10); err == nil {
+		t.Fatal("expected symlink read to be rejected")
+	}
+	if _, err := backupSmartDNSConfig(link, link+".previous"); err == nil {
+		t.Fatal("expected symlink rollback snapshot to be rejected")
+	}
+}
+
+func TestBoundedDiagnosticBufferConcurrentWrites(t *testing.T) {
+	var output boundedDiagnosticBuffer
+	const writers = 8
+	const each = smartDNSPreflightOutputLimit
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for i := 0; i < writers; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = output.Write(bytes.Repeat([]byte("z"), each))
+		}()
+	}
+	wg.Wait()
+	if got := len(output.String()); got != smartDNSPreflightOutputLimit {
+		t.Fatalf("concurrent buffer length = %d, want %d", got, smartDNSPreflightOutputLimit)
+	}
+	if !output.Truncated() {
+		t.Fatal("concurrent writes should mark output truncated")
 	}
 }
