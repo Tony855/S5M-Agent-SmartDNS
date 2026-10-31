@@ -94,31 +94,15 @@ uname -m
 
 请确保 Docker 服务正常，且主机 CPU 与下载镜像架构匹配。
 
-### 5.2 将镜像包传到 Agent 服务器
-
-例如从管理电脑用 SCP 传输（把 IP、路径替换为实际值）：
+### 5.2 拉取镜像
 
 ```bash
-scp s5m-agent-linux-amd64.tar user@AGENT_SERVER_IP:/tmp/
-scp s5m-agent-linux-amd64.tar.sha256 user@AGENT_SERVER_IP:/tmp/
-```
-
-在 Agent 服务器上校验并导入：
-
-```bash
-cd /tmp
-sha256sum -c s5m-agent-linux-amd64.tar.sha256
 sudo docker pull ghcr.io/tony855/s5m-agent-smartdns:dev
-sudo docker image ls
-```
-
-确认 `docker pull` 成功后，为后续部署命令统一打一个本地标签：
-
-```bash
+sudo docker image ls ghcr.io/tony855/s5m-agent-smartdns
 sudo docker tag ghcr.io/tony855/s5m-agent-smartdns:dev s5m-agent:local
 ```
 
-如果导入后镜像标签与示例不同，将上面的源标签替换为实际标签。
+若 GHCR 包设置为私有，先使用有读取 packages 权限的账号登录；不要把访问令牌写入脚本或公开日志。离线导入方式见第 4 节。
 
 ### 5.3 创建数据目录并启动容器
 
