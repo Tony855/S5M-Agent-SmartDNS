@@ -363,6 +363,51 @@ func TestRestoreSmartDNSConfigWhenPreviousConfigDoesNotExist(t *testing.T) {
 	}
 }
 
+func TestProbeSmartDNSDNSTCPAtRejectsInvalidDNSResponses(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags uint16
+		qd    uint16
+		an    uint16
+	}{
+		{name: "not a response", flags: 0x0100, qd: 1, an: 1},
+		{name: "truncated", flags: 0x8380, qd: 1, an: 1},
+		{name: "NXDOMAIN", flags: 0x8183, qd: 1, an: 0},
+		{name: "SERVFAIL", flags: 0x8182, qd: 1, an: 0},
+		{name: "empty question", flags: 0x8180, qd: 0, an: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil { t.Fatal(err) }
+			defer listener.Close()
+			done := make(chan error, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil { done <- err; return }
+				defer conn.Close()
+				var size [2]byte
+				if _, err = io.ReadFull(conn, size[:]); err != nil { done <- err; return }
+				query := make([]byte, int(binary.BigEndian.Uint16(size[:])))
+				if _, err = io.ReadFull(conn, query); err != nil { done <- err; return }
+				binary.BigEndian.PutUint16(query[2:4], tt.flags)
+				binary.BigEndian.PutUint16(query[4:6], tt.qd)
+				binary.BigEndian.PutUint16(query[6:8], tt.an)
+				if tt.an > 0 {
+					query = append(query, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 1, 2, 3, 4)
+				}
+				binary.BigEndian.PutUint16(size[:], uint16(len(query)))
+				if _, err = conn.Write(size[:]); err == nil { _, err = conn.Write(query) }
+				done <- err
+			}()
+			if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
+				t.Fatal("probe accepted an invalid DNS response")
+			}
+			if err := <-done; err != nil { t.Fatal(err) }
+		})
+	}
+}
+
 func TestProbeSmartDNSDNSTCPAtRejectsMismatchedTransactionID(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
