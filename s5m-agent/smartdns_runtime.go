@@ -93,7 +93,20 @@ func validateSmartDNSConfig(data []byte) error {
 
 func smartDNSBinaryAvailable() bool {
 	info, err := os.Stat("/usr/sbin/smartdns")
-	return err == nil && !info.IsDir()
+	return err == nil && !info.IsDir() && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0
+}
+
+// appendSmartDNSStatusError preserves the first actionable diagnostic while
+// allowing status collection to report independent failures when no earlier
+// failure has already been recorded.
+func appendSmartDNSStatusError(status map[string]any, message string) {
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+	previous, _ := status["smartdns_last_error"].(string)
+	if strings.TrimSpace(previous) == "" {
+		status["smartdns_last_error"] = message
+	}
 }
 
 func collectSmartDNSStatus(status map[string]any) {
@@ -114,15 +127,21 @@ func collectSmartDNSStatus(status map[string]any) {
 	}
 	if output, err := exec.Command("/usr/sbin/smartdns", "-v").CombinedOutput(); err == nil {
 		version := strings.TrimSpace(string(output))
-		if len(version) > 128 {
-			version = version[:128]
+		if version == "" {
+			appendSmartDNSStatusError(status, "SmartDNS 版本命令返回空结果")
+		} else {
+			if len(version) > 128 {
+				version = version[:128]
+			}
+			status["smartdns_version"] = version
 		}
-		status["smartdns_version"] = version
+	} else {
+		appendSmartDNSStatusError(status, "读取 SmartDNS 版本失败: "+safeSmartDNSDiagnostic(strings.TrimSpace(string(output)+" "+err.Error())))
 	}
-	if err := exec.Command("pidof", "smartdns").Run(); err == nil {
+	if output, err := exec.Command("pidof", "smartdns").CombinedOutput(); err == nil && len(bytes.TrimSpace(output)) > 0 {
 		status["smartdns_running"] = true
-	} else if status["smartdns_last_error"] == "" {
-		status["smartdns_last_error"] = "SmartDNS 进程未运行"
+	} else {
+		appendSmartDNSStatusError(status, "SmartDNS 进程未运行或进程检测失败")
 	}
 	if status["smartdns_running"] == true {
 		if probeSmartDNSDNS() {
