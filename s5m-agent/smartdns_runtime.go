@@ -281,6 +281,17 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	}
 }
 
+func smartDNSConfigAlreadyApplied(path string, candidate []byte) (bool, error) {
+	current, err := readSmartDNSFileNoFollow(path, 8<<10)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(current, candidate), nil
+}
+
 func writeSmartDNSConfig(data []byte) (string, error) {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
@@ -297,13 +308,13 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	// Commands are redelivered until the controller durably stores their ACK.
 	// Treat an identical already-applied config as success without restarting
 	// SmartDNS again, making configure_smartdns safe under ACK loss/replay.
-	if current, readErr := readSmartDNSFileNoFollow(smartDNSConfigPath, 8<<10); readErr == nil {
-		if bytes.Equal(current, data) {
-			sum := sha256.Sum256(bytes.TrimSpace(data))
-			return hex.EncodeToString(sum[:]), nil
-		}
-	} else if !os.IsNotExist(readErr) {
+	alreadyApplied, readErr := smartDNSConfigAlreadyApplied(smartDNSConfigPath, data)
+	if readErr != nil {
 		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
+	}
+	if alreadyApplied {
+		sum := sha256.Sum256(bytes.TrimSpace(data))
+		return hex.EncodeToString(sum[:]), nil
 	}
 
 	// Validate the candidate with the actual SmartDNS parser on a temporary
