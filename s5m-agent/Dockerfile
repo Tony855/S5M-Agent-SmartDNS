@@ -57,7 +57,7 @@ RUN set -eux; \
     tar -Jxpf /tmp/s6-overlay-${s6_arch}.tar.xz -C /out
 
 FROM alpine:${ALPINE_VERSION} AS runtime
-LABEL org.opencontainers.image.source="https://github.com/Tony855/S5M-Master"
+LABEL org.opencontainers.image.source="https://github.com/Tony855/S5M-Agent-SmartDNS"
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S s5m && adduser -S -D -H -G s5m s5m \
     && mkdir -p /data /app
