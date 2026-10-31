@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
-	"unicode/utf8"
 	"sync"
+	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const smartDNSConfigPath = "/data/smartdns.conf"
