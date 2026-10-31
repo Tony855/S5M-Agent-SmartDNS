@@ -378,15 +378,25 @@ func (a *App) handleBrowserEventsWebSocket(w http.ResponseWriter, r *http.Reques
 		case "smartdns.config.get":
 			code := strings.TrimSpace(message.MachineCode)
 			if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(code) {
-				_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":false,"error":"机器码格式无效"})
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "机器码格式无效"})
+				continue
+			}
+			settings, err := a.store.GetSettings()
+			if err != nil {
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "读取 Agent 授权失败"})
+				continue
+			}
+			token := settings["agent_machine_"+code]
+			if token == "" || token == settings["agent_token"] {
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "目标 Agent 未授权"})
 				continue
 			}
 			value, err := a.store.GetSetting("smartdns_config_" + code)
 			if err != nil && err != sql.ErrNoRows {
-				_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":false,"error":"读取 SmartDNS 配置失败"})
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "读取 SmartDNS 配置失败"})
 				continue
 			}
-			_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":true,"data":map[string]string{"config":value}})
+			_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": true, "data": map[string]string{"config": value, "source": "controller_saved_copy"}})
 		case "smartdns.config.apply":
 			if err := a.queueAgentSmartDNSConfig(message.MachineCode, message.Config); err != nil {
 				_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":false,"error":err.Error()})
@@ -579,20 +589,32 @@ func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) err
 
 func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	machineCode = strings.TrimSpace(machineCode)
-	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) { return fmt.Errorf("机器码格式无效") }
-	if strings.TrimSpace(config) == "" || len(config) > 256<<10 { return fmt.Errorf("SmartDNS 配置不能为空且不能超过 256 KiB") }
+	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
+		return fmt.Errorf("机器码格式无效")
+	}
+	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
+		return fmt.Errorf("SmartDNS 配置不能为空且不能超过 8 KiB（Agent 安全限制）")
+	}
 	settings, err := a.store.GetSettings()
-	if err != nil { return fmt.Errorf("读取 Agent 授权失败") }
+	if err != nil {
+		return fmt.Errorf("读取 Agent 授权失败")
+	}
 	token := settings["agent_machine_"+machineCode]
-	if token == "" || token == settings["agent_token"] { return fmt.Errorf("目标 Agent 未授权") }
-	command := map[string]string{"id":fmt.Sprintf("%d",time.Now().UnixNano()),"type":"configure_smartdns","config":config}
+	if token == "" || token == settings["agent_token"] {
+		return fmt.Errorf("目标 Agent 未授权")
+	}
+	command := map[string]string{"id": fmt.Sprintf("%d", time.Now().UnixNano()), "type": "configure_smartdns", "config": config}
 	payload, err := json.Marshal(command)
-	if err != nil { return fmt.Errorf("生成 SmartDNS 配置命令失败") }
-	created, err := a.store.CreateSettingIfAbsent("agent_command_"+machineCode,string(payload))
-	if err != nil { return fmt.Errorf("保存 SmartDNS 配置命令失败") }
-	if !created { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
-	if err := a.store.UpdateSettings(map[string]string{"smartdns_config_"+machineCode:config}); err != nil { return fmt.Errorf("命令已排队，但保存 SmartDNS 配置副本失败: %w",err) }
-	a.publishBrowserEvent(map[string]any{"type":"agent.command.queued","machine_code":machineCode,"command_id":command["id"],"command_type":command["type"],"at":time.Now().Unix()})
+	if err != nil {
+		return fmt.Errorf("生成 SmartDNS 配置命令失败")
+	}
+	if err := a.store.QueueAgentSmartDNSCommand(machineCode, string(payload), config); err != nil {
+		if strings.Contains(err.Error(), "pending") {
+			return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
+		}
+		return fmt.Errorf("原子保存 SmartDNS 配置和命令失败: %w", err)
+	}
+	a.publishBrowserEvent(map[string]any{"type": "agent.command.queued", "machine_code": machineCode, "command_id": command["id"], "command_type": command["type"], "at": time.Now().Unix()})
 	return nil
 }
 
