@@ -171,7 +171,7 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 func isInternalSettingKey(key string) bool {
 	for _, prefix := range []string{
 		"agent_machine_", "agent_mihomo_secret_", "agent_secret_", "agent_command_",
-		"agent_command_result_", "agent_lastseen_", "agent_status_", "mihomo_secret_",
+		"agent_command_result_", "smartdns_config_", "agent_lastseen_", "agent_status_", "mihomo_secret_",
 	} {
 		if strings.HasPrefix(key, prefix) {
 			return true
