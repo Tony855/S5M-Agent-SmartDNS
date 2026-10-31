@@ -17,7 +17,7 @@ COPY s5m-agent/smartdns_runtime.go ./smartdns_runtime.go
 RUN mkdir -p /out && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/s5m-agent .
 
 FROM alpine:${ALPINE_VERSION} AS mihomo-fetch
-LABEL org.opencontainers.image.source="https://github.com/Tony855/S5M-Master"
+LABEL org.opencontainers.image.source="https://github.com/Tony855/S5M-Agent-SmartDNS"
 ARG TARGETARCH
 ARG MIHOMO_VERSION
 ARG MIHOMO_AMD64_SHA256
