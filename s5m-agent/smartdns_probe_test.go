@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"encoding/binary"
 	"io"
 	"net"
@@ -453,4 +457,121 @@ func TestSmartDNSBinaryInfoAvailability(t *testing.T) {
 	if smartDNSBinaryInfoAvailable(nil) {
 		t.Fatal("nil file info must not be considered an available binary")
 	}
+}
+
+
+func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "smartdns")
+	if err := os.WriteFile(binary, []byte("binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	binaryInfo, err := os.Stat(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := []byte("bind 127.0.0.1:6053\\n")
+	configHash := sha256.Sum256(bytes.TrimSpace(config))
+	good := smartDNSStatusDependencies{
+		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
+		readConfig: func(string) ([]byte, error) { return config, nil },
+		version:    func() ([]byte, error) { return []byte("SmartDNS 1.2026"), nil },
+		process:    func() ([]byte, error) { return []byte("1234"), nil },
+		probe:      func() bool { return true },
+	}
+	assert := func(t *testing.T, status map[string]any, key string, want any) {
+		t.Helper()
+		if got := status[key]; got != want {
+			t.Fatalf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+
+	t.Run("healthy", func(t *testing.T) {
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, good)
+		assert(t, status, "smartdns_available", true)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_version", "SmartDNS 1.2026")
+		assert(t, status, "smartdns_config_sha256", hex.EncodeToString(configHash[:]))
+		assert(t, status, "smartdns_last_error", "")
+	})
+
+	t.Run("missing binary", func(t *testing.T) {
+		deps := good
+		deps.binaryInfo = func() (os.FileInfo, error) { return nil, os.ErrNotExist }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_available", false)
+		assert(t, status, "smartdns_running", false)
+		assert(t, status, "smartdns_dns_healthy", false)
+		assert(t, status, "smartdns_last_error", "SmartDNS 二进制不存在、不可执行或文件类型无效")
+	})
+
+	t.Run("config read failure still collects runtime state", func(t *testing.T) {
+		deps := good
+		deps.readConfig = func(string) ([]byte, error) { return nil, os.ErrPermission }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_available", true)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", true)
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "读取 SmartDNS 配置失败") {
+			t.Fatalf("config diagnostic missing: %q", got)
+		}
+	})
+
+	t.Run("version command failure", func(t *testing.T) {
+		deps := good
+		deps.version = func() ([]byte, error) { return []byte("version unavailable"), os.ErrPermission }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", true)
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "读取 SmartDNS 版本失败") {
+			t.Fatalf("version diagnostic missing: %q", got)
+		}
+	})
+
+	t.Run("empty version output", func(t *testing.T) {
+		deps := good
+		deps.version = func() ([]byte, error) { return nil, nil }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_version", "")
+		assert(t, status, "smartdns_last_error", "SmartDNS 版本命令返回空结果")
+	})
+
+	t.Run("process detection failure", func(t *testing.T) {
+		deps := good
+		deps.process = func() ([]byte, error) { return nil, os.ErrNotExist }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_available", true)
+		assert(t, status, "smartdns_running", false)
+		assert(t, status, "smartdns_dns_healthy", false)
+		assert(t, status, "smartdns_last_error", "SmartDNS 进程未运行或进程检测失败")
+	})
+
+	t.Run("DNS probe failure", func(t *testing.T) {
+		deps := good
+		deps.probe = func() bool { return false }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", false)
+		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
+	})
+
+	t.Run("first failure diagnostic wins", func(t *testing.T) {
+		deps := good
+		deps.readConfig = func(string) ([]byte, error) { return nil, os.ErrPermission }
+		deps.version = func() ([]byte, error) { return nil, os.ErrPermission }
+		deps.process = func() ([]byte, error) { return nil, os.ErrNotExist }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "读取 SmartDNS 配置失败") {
+			t.Fatalf("first diagnostic was not preserved: %q", got)
+		}
+	})
 }
