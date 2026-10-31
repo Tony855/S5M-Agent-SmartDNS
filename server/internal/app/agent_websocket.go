@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
