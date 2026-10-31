@@ -80,6 +80,10 @@ jobs:
           assert '"$BACKUP/server-active"' in installer
           assert 'systemctl restart mihomo || echo' in installer
           assert 'systemctl start "$UNIT" || echo' in installer
+          assert 'trap on_install_error ERR' in installer
+          assert 'ROLLBACK_READY=1' in installer
+          assert 'ROLLBACK_READY=0' in installer
+          assert 'trap - ERR' in installer
           print("Native S5M-Server installer and rollback contract verified.")
           PY
 
