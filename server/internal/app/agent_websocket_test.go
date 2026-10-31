@@ -1280,7 +1280,7 @@ func TestAckAgentWSCommandRedactsSensitiveResultBeforePersisting(t *testing.T) {
 		t.Fatalf("queue pending command: %v", err)
 	}
 	message := "token=super-secret failed at /tmp/private/config.yaml"
-	if err := app.ackAgentWSCommand(code, "cmd-redact", "failed", message); err != nil {
+	if err := app.ackAgentWSCommand(code, "cmd-redact", "failed", message, ""); err != nil {
 		t.Fatalf("ack command: %v", err)
 	}
 	settings, err := app.store.GetSettings()
