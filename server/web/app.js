@@ -1346,9 +1346,11 @@ createApp({
           configHash: String(status.smartdns_config_sha256 || ''),
           lastError: String(status.smartdns_last_error || '')
         };
+        const requested = await sendBrowserWSControl({ type: 'smartdns.config.read', machine_code: code });
+        smartdnsResult.value = requested.message || '已请求 Agent 读取实际配置；请稍后再次刷新';
         const saved = await sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code });
         smartdnsYaml.value = String((saved.data || {}).config || '');
-        smartdnsResult.value = smartdnsYaml.value ? '已加载主控保存的节点配置' : '主控尚无该节点配置副本；请粘贴配置后提交';
+        smartdnsResult.value += smartdnsYaml.value ? '；当前保存副本已加载（请确认 Agent 回传时间）' : '；尚无可用配置回传';
       } catch (e) {
         smartdnsResult.value = '读取失败：' + (e.message || String(e));
         showMsg(smartdnsResult.value, 'error');
