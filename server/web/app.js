@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, onMounted, onUnmounted, computed } = Vue;
+const { createApp, ref, reactive, onMounted, onUnmounted, computed, watch } = Vue;
 
 createApp({
   setup() {
@@ -52,19 +52,23 @@ createApp({
     const configDnsNameservers = ref('');
     const selectedConfigNode = ref('');
     const savingConfig = ref(false);
+    const smartdnsYaml = ref('');
+    const loadingSmartDNS = ref(false);
+    const applyingSmartDNS = ref(false);
+    const smartdnsResult = ref('');
+    const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
+    let smartdnsLoadGeneration = 0;
+    let smartdnsApplyGeneration = 0;
+    watch(selectedConfigNode, () => {
+      smartdnsLoadGeneration++;
+      smartdnsApplyGeneration++;
+      applyingSmartDNS.value = false;
+      loadingSmartDNS.value = false;
+      smartdnsYaml.value = '';
+      smartdnsResult.value = '';
+      smartdnsStatus.value = { available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' };
+    });
     let nodeConfigLoadGeneration = 0;
-    const templateYaml = ref('');
-    const templateNote = ref('');
-    const templateVersions = ref([]);
-    const templateCurrentVersion = ref(0);
-    const templateNodes = ref([]);
-    const selectedTemplateNode = ref('');
-    const selectedTemplateVersion = ref(null);
-    const savingTemplate = ref(false);
-    const validatingTemplate = ref(false);
-    const publishingTemplate = ref(false);
-    const deletingTemplateVersion = ref(0);
-    const applyingTemplate = ref(false);
     const publishing = ref(false);
     const updatingKernel = ref(false);
     const kernelUpdateDialog = ref(false);
@@ -456,7 +460,7 @@ createApp({
       if (v === 'dashboard') loadOverview();
       if (v === 'proxies') { loadProxies(); loadAgentsData(); }
       if (v === 'instances') { loadAgentsData(); loadProxies(); }
-      if (v === 'config') { loadAgentsData(); loadSettings(); loadMihomoTemplate(); loadTemplateNodeStatus(); }
+      if (v === 'config') { loadAgentsData(); loadSettings(); }
       if (v === 'system') { loadSystemLogs(); loadMainMihomoStatus(); }
     };
 
@@ -1024,135 +1028,6 @@ createApp({
       } catch (e) { showMsg(e.message || '删除失败', 'error'); }
     };
 
-    const loadMihomoTemplate = async () => {
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.get' });
-        const data = result.data || {};
-        templateYaml.value = data.draft_yaml || '';
-        templateVersions.value = Array.isArray(data.versions) ? data.versions : [];
-        templateCurrentVersion.value = Number(data.current_version || 0);
-        if (!selectedTemplateVersion.value && templateCurrentVersion.value) selectedTemplateVersion.value = templateCurrentVersion.value;
-      } catch (e) { showMsg(e.message || '读取模板失败', 'error'); }
-    };
-
-    const loadTemplateNodeStatus = async () => {
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.nodes.get' });
-        const data = result.data || {};
-        templateNodes.value = Array.isArray(data.nodes) ? data.nodes : [];
-        if (!selectedTemplateNode.value && templateNodes.value.length) selectedTemplateNode.value = templateNodes.value[0].machine_code;
-      } catch (e) { showMsg(e.message || '读取节点版本状态失败', 'error'); }
-    };
-
-    const validateMihomoTemplateRuntime = async () => {
-      if (!String(templateYaml.value || '').trim()) { showMsg('模板 YAML 不能为空', 'warning'); return; }
-      if (validatingTemplate.value) return;
-      validatingTemplate.value = true;
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.validate', yaml: templateYaml.value });
-        const data = result.data || result;
-        showMsg(data.message || 'Mihomo 内核校验通过', 'success');
-      } catch (e) { showMsg(e.message || 'Mihomo 内核校验失败', 'error'); }
-      finally { validatingTemplate.value = false; }
-    };
-
-    const saveMihomoTemplate = async () => {
-      if (!String(templateYaml.value || '').trim()) { showMsg('模板 YAML 不能为空', 'warning'); return; }
-      if (savingTemplate.value) return;
-      savingTemplate.value = true;
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.save', yaml: templateYaml.value });
-        const data = result.data || result;
-        showMsg(data.message || '模板草稿已保存', 'success');
-        await loadMihomoTemplate();
-      } catch (e) { showMsg(e.message || '保存模板草稿失败', 'error'); }
-      finally { savingTemplate.value = false; }
-    };
-
-    const publishMihomoTemplate = async () => {
-      if (!confirm('发布新的模板版本？发布只创建版本，不会自动覆盖任何节点。')) return;
-      if (publishingTemplate.value) return;
-      publishingTemplate.value = true;
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.publish', note: templateNote.value || '' });
-        const data = result.data || result;
-        templateNote.value = '';
-        showMsg((data.message || '模板已发布') + '（v' + data.version + '）', 'success');
-        await loadMihomoTemplate();
-        await loadTemplateNodeStatus();
-      } catch (e) { showMsg(e.message || '发布模板失败', 'error'); }
-      finally { publishingTemplate.value = false; }
-    };
-
-    const deleteMihomoTemplateVersion = async (version) => {
-      const target = Number(version || 0);
-      if (!Number.isInteger(target) || target < 1) return showMsg('模板版本号无效', 'warning');
-      if (target === Number(templateCurrentVersion.value || 0)) return showMsg('不能删除当前发布版本，请先发布新版本', 'warning');
-      const item = templateVersions.value.find(v => Number(v.version) === target);
-      const note = item && item.note ? '（' + item.note + '）' : '';
-      try {
-        await ElementPlus.ElMessageBox.confirm(
-          '确定删除历史模板 v' + target + note + '？若仍有节点绑定该版本，服务器会拒绝删除。此操作不可撤销。',
-          '删除 Mihomo 模板版本',
-          { type: 'warning', confirmButtonText: '删除版本', cancelButtonText: '取消' }
-        );
-      } catch (_) { return; }
-      if (deletingTemplateVersion.value) return;
-      deletingTemplateVersion.value = target;
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.delete', version: String(target) });
-        const data = result.data || result;
-        if (data.bound_nodes) {
-          // Keep any server-provided bound-node details visible if deletion is rejected.
-        }
-        if (Number(selectedTemplateVersion.value) === target) selectedTemplateVersion.value = null;
-        showMsg(data.message || ('模板历史版本 v' + target + ' 已删除'), 'success');
-        await loadMihomoTemplate();
-        await loadTemplateNodeStatus();
-      } catch (e) {
-        let message = e.message || '删除模板版本失败';
-        // The API may include exact nodes still bound to the requested version.
-        if (e && e.bound_nodes && Array.isArray(e.bound_nodes) && e.bound_nodes.length) {
-          message += '；绑定节点：' + e.bound_nodes.join('、');
-        }
-        showMsg(message, 'error');
-      }
-      finally { deletingTemplateVersion.value = 0; }
-    };
-
-    const rollbackMihomoTemplate = async () => {
-      const code = String(selectedTemplateNode.value || '').trim();
-      if (!code) { showMsg('请先选择要恢复的节点', 'warning'); return; }
-      if (!confirm('确定恢复节点 ' + code + ' 最近一次备份？当前配置会先再次备份，以便需要时反向恢复。')) return;
-      if (applyingTemplate.value) return;
-      applyingTemplate.value = true;
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.rollback', machine_code: code, confirm: true });
-        const data = result.data || result;
-        showMsg(data.message || '节点配置已恢复', 'success');
-        await loadTemplateNodeStatus();
-        if (selectedConfigNode.value === code) await loadNodeConfig();
-      } catch (e) { showMsg(e.message || '恢复节点配置失败', 'error'); }
-      finally { applyingTemplate.value = false; }
-    };
-
-    const applyMihomoTemplate = async () => {
-      const code = String(selectedTemplateNode.value || '').trim();
-      const version = Number(selectedTemplateVersion.value || 0);
-      if (!code || !version) { showMsg('请选择目标节点和模板版本', 'warning'); return; }
-      if (!confirm('警告：这将替换节点 ' + code + ' 的完整 Mihomo YAML，并在应用前备份现有配置。确认应用模板 v' + version + '？')) return;
-      if (applyingTemplate.value) return;
-      applyingTemplate.value = true;
-      try {
-        const result = await sendBrowserWSControl({ type: 'mihomo.template.apply', machine_code: code, template_version: version, confirm: true });
-        const data = result.data || result;
-        showMsg(data.message || '模板已应用到节点', 'success');
-        await loadTemplateNodeStatus();
-        if (selectedConfigNode.value === code) await loadNodeConfig();
-      } catch (e) { showMsg(e.message || '应用模板失败', 'error'); }
-      finally { applyingTemplate.value = false; }
-    };
-
     const yamlIndent = line => {
       const match = String(line || '').match(/^ */);
       return match ? match[0].length : 0;
@@ -1325,6 +1200,65 @@ createApp({
       } finally { savingConfig.value = false; }
     };
 
+    const loadSmartDNSConfig = async () => {
+      const code = String(selectedConfigNode.value || '').trim();
+      if (!code || loadingSmartDNS.value) return;
+      loadingSmartDNS.value = true;
+      const generation = ++smartdnsLoadGeneration;
+      try {
+        const agents = await sendBrowserWSControl({ type: 'agents.list.get' });
+        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+        const item = (agents.data || {})[code] || {};
+        const status = item.status || {};
+        smartdnsStatus.value = {
+          available: status.smartdns_available === true,
+          running: status.smartdns_running === true,
+          dnsHealthy: status.smartdns_dns_healthy === true,
+          version: String(status.smartdns_version || ''),
+          configHash: String(status.smartdns_config_sha256 || ''),
+          lastError: String(status.smartdns_last_error || '')
+        };
+        const saved = await sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code });
+        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+        smartdnsYaml.value = String((saved.data || {}).config || '');
+        smartdnsResult.value = smartdnsYaml.value ? '已加载主控最近保存的配置副本' : '主控尚无该节点的 SmartDNS 配置副本';
+        try {
+          const requested = await sendBrowserWSControl({ type: 'smartdns.config.read', machine_code: code });
+          if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+          smartdnsResult.value += '；' + (requested.message || '已请求 Agent 回传实际配置，稍后再次刷新');
+        } catch (readError) {
+          if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+          smartdnsResult.value += '；Agent 实时读取请求未排队：' + (readError.message || String(readError));
+        }
+      } catch (e) {
+        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+        smartdnsResult.value = '读取失败：' + (e.message || String(e));
+        showMsg(smartdnsResult.value, 'error');
+      } finally { if (generation === smartdnsLoadGeneration) loadingSmartDNS.value = false; }
+    };
+
+    const applySmartDNSConfig = async () => {
+      const code = String(selectedConfigNode.value || '').trim();
+      const config = String(smartdnsYaml.value || '');
+      if (!code) return showMsg('请先选择 Agent 节点', 'warning');
+      if (!config.trim()) return showMsg('SmartDNS 配置不能为空', 'warning');
+      if (applyingSmartDNS.value) return;
+      if (!confirm('确认将 SmartDNS 配置发送到节点 ' + code + ' 并应用？此操作只影响 SmartDNS。')) return;
+      applyingSmartDNS.value = true;
+      const generation = ++smartdnsApplyGeneration;
+      try {
+        const result = await sendBrowserWSControl({ type: 'smartdns.config.apply', machine_code: code, config });
+        if (generation !== smartdnsApplyGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+        if (result.ok === false) throw new Error(result.error || '主控拒绝 SmartDNS 配置命令');
+        smartdnsResult.value = result.message || '已排队，尚未确认 Agent 应用结果';
+        showMsg(smartdnsResult.value, 'info');
+      } catch (e) {
+        if (generation !== smartdnsApplyGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+        smartdnsResult.value = '提交失败：' + (e.message || String(e));
+        showMsg(smartdnsResult.value, 'error');
+      } finally { if (generation === smartdnsApplyGeneration) applyingSmartDNS.value = false; }
+    };
+
     const safeCopy = async (text) => {
       try {
         if (navigator.clipboard && window.isSecureContext) {
@@ -1404,9 +1338,7 @@ createApp({
       retryingNodeConfigSync, retryNodeConfigSync,
       configYaml, configTunEnabled, configDnsEnabled, configDnsNameservers, syncConfigQuickSettingsFromYaml, applyConfigQuickSettings,
       selectedConfigNode, savingConfig, publishing, updatingKernel,
-      templateYaml, templateNote, templateVersions, templateCurrentVersion, templateNodes,
-      selectedTemplateNode, selectedTemplateVersion, savingTemplate, validatingTemplate, publishingTemplate, applyingTemplate, deletingTemplateVersion,
-      loadMihomoTemplate, loadTemplateNodeStatus, saveMihomoTemplate, validateMihomoTemplateRuntime, publishMihomoTemplate, deleteMihomoTemplateVersion, applyMihomoTemplate, rollbackMihomoTemplate,
+      smartdnsYaml, loadingSmartDNS, applyingSmartDNS, smartdnsResult, smartdnsStatus, loadSmartDNSConfig, applySmartDNSConfig,
       kernelUpdateDialog, kernelUpdateMachineCode, kernelUpdateVersion, kernelUpdateSHA256, queueingKernelUpdate, kernelUpdateInfo, kernelUpdateInfoLoading,
       openAgentKernelUpdate, loadAgentKernelUpdateInfo, queueAgentKernelUpdate,
       systemLogs, loadingSystemLogs, restoringBackup, loadSystemLogs, downloadBackup, restoreBackup,

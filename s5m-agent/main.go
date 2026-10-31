@@ -1336,10 +1336,16 @@ func processAgentCommandWebSocket(cfg Config) error {
 	}
 	cmd := *envelope.Command
 	var runErr error
+	var data []byte
 	message := ""
 	switch cmd.Type {
 	case "update_mihomo":
 		message, runErr = updateMihomoKernel(cmd)
+	case "read_smartdns_config":
+		data, runErr = readSmartDNSConfig()
+		if runErr == nil {
+			message = "已读取 Agent 当前 SmartDNS 配置"
+		}
 	case "configure_smartdns":
 		var configHash string
 		configHash, runErr = writeSmartDNSConfig([]byte(cmd.Config))
@@ -1360,7 +1366,7 @@ func processAgentCommandWebSocket(cfg Config) error {
 	// The command may take longer than the initial connection deadlines (for
 	// example, downloading and restarting Mihomo). Refresh the deadline for the
 	// ACK write instead of reusing the deadline set before command execution.
-	if err := writeAgentWSJSON(conn, map[string]string{"type": "command.ack", "id": cmd.ID, "command_status": status, "message": message}); err != nil {
+	if err := writeAgentWSJSON(conn, map[string]any{"type": "command.ack", "id": cmd.ID, "command_status": status, "message": message, "config": string(data)}); err != nil {
 		return fmt.Errorf("命令已执行但 WebSocket ACK 发送失败，主控端可能重新投递: %w", err)
 	}
 	var ack struct {
@@ -2205,9 +2211,17 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			cmd := *commandEnvelope.Command
 			var commandErr error
 			message := ""
+			var commandConfig string
 			switch cmd.Type {
 			case "update_mihomo":
 				message, commandErr = updateMihomoKernel(cmd)
+			case "read_smartdns_config":
+				var smartDNSConfig []byte
+				smartDNSConfig, commandErr = readSmartDNSConfig()
+				if commandErr == nil {
+					commandConfig = string(smartDNSConfig)
+					message = "已读取 Agent 当前 SmartDNS 配置"
+				}
 			case "configure_smartdns":
 				var configHash string
 				configHash, commandErr = writeSmartDNSConfig([]byte(cmd.Config))
@@ -2225,10 +2239,14 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			if len(message) > 2048 {
 				message = message[:2048]
 			}
-			if err := writeAgentWSJSON(conn, map[string]string{
+			ackPayload := map[string]any{
 				"type": "command.ack", "id": cmd.ID,
 				"command_status": commandStatus, "message": message,
-			}); err != nil {
+			}
+			if cmd.Type == "read_smartdns_config" && commandErr == nil {
+				ackPayload["config"] = commandConfig
+			}
+			if err := writeAgentWSJSON(conn, ackPayload); err != nil {
 				return fmt.Errorf("命令已执行但 ACK 发送失败（服务端将按命令 ID 幂等重投）: %w", err)
 			}
 			var ack struct {

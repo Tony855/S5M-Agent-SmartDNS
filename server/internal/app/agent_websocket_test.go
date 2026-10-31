@@ -1016,6 +1016,10 @@ func TestAgentWebSocketHeartbeatRevalidatesAuthorizationAfterBindingRemoval(t *t
 		t.Fatalf("read welcome: %v", err)
 	}
 
+	// SmartDNS configuration is private node state and must be removed with the credential.
+	if err := app.store.UpdateSettings(map[string]string{"smartdns_config_" + code: "private resolver config"}); err != nil {
+		t.Fatalf("seed SmartDNS config: %v", err)
+	}
 	// Simulate binding removal after handshake authentication but before the
 	// connection-generation invalidation becomes visible to this socket.
 	if err := app.store.DeleteAgentBinding(code); err != nil {
@@ -1049,6 +1053,9 @@ func TestAgentWebSocketHeartbeatRevalidatesAuthorizationAfterBindingRemoval(t *t
 	}
 	if settings["agent_status_"+code] != "" || settings["agent_lastseen_"+code] != "" {
 		t.Fatalf("heartbeat after binding removal was persisted: %#v", settings)
+	}
+	if settings["smartdns_config_"+code] != "" {
+		t.Fatalf("SmartDNS config survived Agent binding revocation: %#v", settings)
 	}
 }
 
@@ -1280,7 +1287,7 @@ func TestAckAgentWSCommandRedactsSensitiveResultBeforePersisting(t *testing.T) {
 		t.Fatalf("queue pending command: %v", err)
 	}
 	message := "token=super-secret failed at /tmp/private/config.yaml"
-	if err := app.ackAgentWSCommand(code, "cmd-redact", "failed", message); err != nil {
+	if err := app.ackAgentWSCommand(code, "cmd-redact", "failed", message, ""); err != nil {
 		t.Fatalf("ack command: %v", err)
 	}
 	settings, err := app.store.GetSettings()
@@ -1443,5 +1450,82 @@ func TestAgentWebSocketIsClosedImmediatelyAfterAuthorizationRevocation(t *testin
 	}
 	if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		t.Fatalf("unexpected WebSocket close error: %v", err)
+	}
+}
+
+
+func TestSmartDNSControllerCopyChangesOnlyAfterSuccessfulApply(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	const previous = "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 8.8.8.8"
+	const candidate = "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1"
+	if err := app.store.UpdateSettings(map[string]string{"smartdns_config_" + code: previous}); err != nil {
+		t.Fatalf("seed previous config: %v", err)
+	}
+	failedPayload, err := json.Marshal(map[string]string{"id": "smartdns-failed-apply", "type": "configure_smartdns", "config": candidate})
+	if err != nil { t.Fatalf("marshal failed command: %v", err) }
+	if err := app.store.QueueAgentSmartDNSCommand(code, string(failedPayload)); err != nil {
+		t.Fatalf("queue failed apply: %v", err)
+	}
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-failed-apply", "failed", "validation failed", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("ack failed apply: matched=%v err=%v", matched, err)
+	}
+	got, err := app.store.GetSetting("smartdns_config_" + code)
+	if err != nil || got != previous {
+		t.Fatalf("failed apply replaced last-known-good config: got=%q err=%v", got, err)
+	}
+
+	successPayload, err := json.Marshal(map[string]string{"id": "smartdns-success-apply", "type": "configure_smartdns", "config": candidate})
+	if err != nil { t.Fatalf("marshal successful command: %v", err) }
+	if err := app.store.QueueAgentSmartDNSCommand(code, string(successPayload)); err != nil {
+		t.Fatalf("queue successful apply: %v", err)
+	}
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-success-apply", "success", "applied", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("ack successful apply: matched=%v err=%v", matched, err)
+	}
+	got, err = app.store.GetSetting("smartdns_config_" + code)
+	if err != nil || got != candidate {
+		t.Fatalf("successful apply did not update controller config: got=%q err=%v", got, err)
+	}
+}
+
+
+func TestSmartDNSCommandsCannotQueueAfterAgentBindingRevocation(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	if err := app.store.DeleteAgentBinding(code); err != nil {
+		t.Fatalf("revoke Agent binding: %v", err)
+	}
+	if err := app.store.QueueAgentSmartDNSReadCommand(code, `{"id":"read-after-revoke","type":"read_smartdns_config"}`); err == nil {
+		t.Fatal("SmartDNS read command queued after Agent binding revocation")
+	}
+	if err := app.store.QueueAgentSmartDNSCommand(code, `{"id":"apply-after-revoke","type":"configure_smartdns","config":"candidate"}`); err == nil {
+		t.Fatal("SmartDNS apply command queued after Agent binding revocation")
+	}
+	settings, err := app.store.GetSettings()
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if settings["agent_command_"+code] != "" {
+		t.Fatalf("revoked Agent received a pending command: %#v", settings)
+	}
+}
+
+
+func TestNewAgentCommandIDUsesUniqueHexadecimalIdentifiers(t *testing.T) {
+	seen := make(map[string]struct{}, 256)
+	for i := 0; i < 256; i++ {
+		id, err := newAgentCommandID()
+		if err != nil {
+			t.Fatalf("newAgentCommandID: %v", err)
+		}
+		if len(id) != 32 {
+			t.Fatalf("command ID length = %d, want 32", len(id))
+		}
+		if _, err := hex.DecodeString(id); err != nil {
+			t.Fatalf("command ID is not hexadecimal: %q: %v", id, err)
+		}
+		if _, exists := seen[id]; exists {
+			t.Fatalf("duplicate command ID generated: %q", id)
+		}
+		seen[id] = struct{}{}
 	}
 }

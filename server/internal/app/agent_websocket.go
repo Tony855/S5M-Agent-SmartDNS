@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -374,6 +377,40 @@ func (a *App) handleBrowserEventsWebSocket(w http.ResponseWriter, r *http.Reques
 				}
 			}
 			_ = client.writeJSON(reply)
+		case "smartdns.config.get":
+			code := strings.TrimSpace(message.MachineCode)
+			if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(code) {
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "机器码格式无效"})
+				continue
+			}
+			settings, err := a.store.GetSettings()
+			if err != nil {
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "读取 Agent 授权失败"})
+				continue
+			}
+			token := settings["agent_machine_"+code]
+			if token == "" || token == settings["agent_token"] {
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "目标 Agent 未授权"})
+				continue
+			}
+			value, err := a.store.GetSetting("smartdns_config_" + code)
+			if err != nil && err != sql.ErrNoRows {
+				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": "读取 SmartDNS 配置失败"})
+				continue
+			}
+			_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": true, "data": map[string]string{"config": value, "source": "controller_saved_copy"}})
+		case "smartdns.config.read":
+			if err := a.queueAgentSmartDNSRead(message.MachineCode); err != nil {
+				_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":false,"error":err.Error()})
+			} else {
+				_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":true,"message":"已请求 Agent 回传当前磁盘配置，请稍后刷新"})
+			}
+		case "smartdns.config.apply":
+			if err := a.queueAgentSmartDNSConfig(message.MachineCode, message.Config); err != nil {
+				_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":false,"error":err.Error()})
+				continue
+			}
+			_ = client.writeJSON(map[string]any{"type":"request.result","request_id":message.RequestID,"ok":true,"message":"SmartDNS 配置已排队，等待 Agent 应用"})
 		case "agent.mihomo.update":
 			if err := a.queueAgentMihomoUpdate(message.MachineCode, message.Version, message.SHA256); err != nil {
 				_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": message.RequestID, "ok": false, "error": err.Error()})
@@ -466,6 +503,7 @@ type agentWSMessage struct {
 	ConfigHash    string         `json:"config_sha256,omitempty"`
 	CommandStatus string         `json:"command_status,omitempty"`
 	Message       string         `json:"message,omitempty"`
+	Config        string         `json:"config,omitempty"`
 }
 
 // validateAgentWSStatus rejects malformed telemetry before it reaches persistent
@@ -525,6 +563,14 @@ func validateAgentWSStatus(status map[string]any) error {
 	return nil
 }
 
+func newAgentCommandID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("生成 Agent 命令 ID 失败: %w", err)
+	}
+	return hex.EncodeToString(id[:]), nil
+}
+
 func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) error {
 	machineCode = strings.TrimSpace(machineCode)
 	version = strings.TrimSpace(version)
@@ -534,27 +580,77 @@ func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) err
 		!regexp.MustCompile("^[a-f0-9]{64}$").MatchString(sha256sum) {
 		return fmt.Errorf("机器码、版本号或 SHA-256 格式无效")
 	}
-	settings, err := a.store.GetSettings()
+	commandID, err := newAgentCommandID()
 	if err != nil {
-		return fmt.Errorf("读取 Agent 授权失败")
+		return err
 	}
-	token := settings["agent_machine_"+machineCode]
-	if token == "" || token == settings["agent_token"] {
-		return fmt.Errorf("目标 Agent 未授权")
-	}
-	command := map[string]string{"id": fmt.Sprintf("%d", time.Now().UnixNano()), "type": "update_mihomo", "version": version, "sha256": sha256sum}
+	command := map[string]string{"id": commandID, "type": "update_mihomo", "version": version, "sha256": sha256sum}
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return fmt.Errorf("生成内核更新命令失败")
 	}
-	created, err := a.store.CreateSettingIfAbsent("agent_command_"+machineCode, string(payload))
-	if err != nil {
-		return fmt.Errorf("保存内核更新命令失败")
-	}
-	if !created {
-		return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
+	if err := a.store.QueueAuthorizedAgentCommand(machineCode, string(payload)); err != nil {
+		if errors.Is(err, ErrAgentCommandPending) {
+			return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
+		}
+		return fmt.Errorf("Agent 未授权或保存内核更新命令失败: %w", err)
 	}
 	a.publishBrowserEvent(map[string]any{"type": "agent.command.queued", "machine_code": machineCode, "command_id": command["id"], "command_type": command["type"], "version": version, "at": time.Now().Unix()})
+	return nil
+}
+
+func (a *App) queueAgentSmartDNSRead(machineCode string) error {
+	machineCode = strings.TrimSpace(machineCode)
+	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
+		return fmt.Errorf("机器码格式无效")
+	}
+	commandID, err := newAgentCommandID()
+	if err != nil {
+		return err
+	}
+	command, marshalErr := json.Marshal(map[string]string{
+		"id": commandID, "type": "read_smartdns_config",
+	})
+	if marshalErr != nil {
+		return fmt.Errorf("生成 SmartDNS 读取命令失败: %w", marshalErr)
+	}
+	if err := a.store.QueueAgentSmartDNSReadCommand(machineCode, string(command)); err != nil {
+		if errors.Is(err, ErrAgentCommandPending) {
+			return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
+		}
+		return fmt.Errorf("Agent 授权已失效或读取命令排队失败: %w", err)
+	}
+	a.publishBrowserEvent(map[string]any{
+		"type": "agent.command.queued", "machine_code": machineCode,
+		"command_type": "read_smartdns_config", "at": time.Now().Unix(),
+	})
+	return nil
+}
+
+func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
+	machineCode = strings.TrimSpace(machineCode)
+	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
+		return fmt.Errorf("机器码格式无效")
+	}
+	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
+		return fmt.Errorf("SmartDNS 配置不能为空且不能超过 8 KiB（Agent 安全限制）")
+	}
+	commandID, err := newAgentCommandID()
+	if err != nil {
+		return err
+	}
+	command := map[string]string{"id": commandID, "type": "configure_smartdns", "config": config}
+	payload, err := json.Marshal(command)
+	if err != nil {
+		return fmt.Errorf("生成 SmartDNS 配置命令失败")
+	}
+	if err := a.store.QueueAgentSmartDNSCommand(machineCode, string(payload)); err != nil {
+		if errors.Is(err, ErrAgentCommandPending) {
+			return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
+		}
+		return fmt.Errorf("原子保存 SmartDNS 配置和命令失败: %w", err)
+	}
+	a.publishBrowserEvent(map[string]any{"type": "agent.command.queued", "machine_code": machineCode, "command_id": command["id"], "command_type": command["type"], "at": time.Now().Unix()})
 	return nil
 }
 
@@ -694,7 +790,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			case "command.request":
 				err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
 			case "command.ack":
-				err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message)
+				err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
 			}
 			a.agentWSMu.Unlock()
 			if err != nil {
@@ -883,14 +979,15 @@ func (a *App) sendAgentWSCommand(conn *websocket.Conn, machineCode, requestID st
 
 // ackAgentWSCommand persists an ACK only for the currently pending command.
 // Duplicate ACKs are accepted only when the prior result has the same command ID.
-func (a *App) ackAgentWSCommand(machineCode, commandID, status, message string) error {
+func (a *App) ackAgentWSCommand(machineCode, commandID, status, message, config string) error {
 	if strings.TrimSpace(commandID) == "" || (status != "success" && status != "failed") || len(message) > 2048 {
 		return fmt.Errorf("命令 ID、状态或结果消息无效")
 	}
 	// Treat Agent-provided command output as untrusted: redact credentials and
 	// local filesystem paths before persisting it or publishing it to the UI.
 	message = sanitizeAgentWebSocketText(message)
-	_, matched, err := a.store.AckAgentCommand(machineCode, commandID, status, message, time.Now().Unix())
+	if len(config) > 8<<10 { return fmt.Errorf("Agent 返回的 SmartDNS 配置超过 8 KiB") }
+	_, matched, err := a.store.AckAgentCommandWithConfig(machineCode, commandID, status, message, config, time.Now().Unix())
 	if err != nil {
 		return fmt.Errorf("原子保存命令结果失败: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+var ErrAgentCommandPending = errors.New("pending command already exists")
 
 type Store struct{ db *sql.DB }
 
@@ -195,6 +198,53 @@ func (s *Store) CreateSettingIfAbsent(key, value string) (bool, error) {
 	return n == 1, nil
 }
 
+// queueAuthorizedAgentCommand serializes authorization checks and command insertion
+// with binding revocation, so a command cannot be queued for a just-revoked Agent.
+func (s *Store) queueAuthorizedAgentCommand(machineCode, commandJSON string) error {
+	tx, err := s.db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	var token, globalToken string
+	err = tx.QueryRow(`SELECT value FROM settings WHERE key=?`, "agent_machine_"+machineCode).Scan(&token)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("Agent binding is no longer authorized")
+	}
+	if err != nil {
+		return fmt.Errorf("读取 Agent 绑定授权失败: %w", err)
+	}
+	err = tx.QueryRow(`SELECT value FROM settings WHERE key='agent_token'`).Scan(&globalToken)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("读取全局 Agent 授权配置失败: %w", err)
+	}
+	if token == "" || token == globalToken {
+		return fmt.Errorf("Agent binding is no longer authorized")
+	}
+	result, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, "agent_command_"+machineCode, commandJSON)
+	if err != nil { return err }
+	created, err := result.RowsAffected()
+	if err != nil { return err }
+	if created != 1 { return ErrAgentCommandPending }
+	return tx.Commit()
+}
+
+// QueueAuthorizedAgentCommand atomically verifies the Agent binding and inserts
+// any supported Agent command. It shares the same revocation-safe transaction as
+// SmartDNS commands so all command types enforce the same authorization boundary.
+func (s *Store) QueueAuthorizedAgentCommand(machineCode, commandJSON string) error {
+	return s.queueAuthorizedAgentCommand(machineCode, commandJSON)
+}
+
+// QueueAgentSmartDNSCommand queues a config candidate without changing the
+// last-known-good controller copy; ACK success performs that update.
+func (s *Store) QueueAgentSmartDNSCommand(machineCode, commandJSON string) error {
+	return s.queueAuthorizedAgentCommand(machineCode, commandJSON)
+}
+
+// QueueAgentSmartDNSReadCommand atomically verifies the binding and queues a read.
+func (s *Store) QueueAgentSmartDNSReadCommand(machineCode, commandJSON string) error {
+	return s.queueAuthorizedAgentCommand(machineCode, commandJSON)
+}
+
 func (s *Store) UpdateSettings(updates map[string]string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -217,7 +267,11 @@ func (s *Store) UpdateSettings(updates map[string]string) error {
 // AckAgentCommand atomically commits a command result and removes only the matching
 // pending command. A retry is accepted only when the persisted result has the same ID.
 // matched=false means the command was replaced or no longer exists.
-func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, updatedAt int64) (duplicate bool, matched bool, err error) {
+func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, updatedAt int64) (bool, bool, error) {
+	return s.AckAgentCommandWithConfig(machineCode, commandID, status, message, "", updatedAt)
+}
+
+func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, message, config string, updatedAt int64) (duplicate bool, matched bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, false, err
@@ -242,6 +296,20 @@ func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, 
 		})
 		if marshalErr != nil {
 			return false, false, marshalErr
+		}
+		if (pending["type"] == "read_smartdns_config" || pending["type"] == "configure_smartdns") && status == "success" {
+			// Read commands return the on-disk config; configure commands carry
+			// the exact candidate in the pending record. Persist only after success.
+			savedConfig := config
+			if pending["type"] == "configure_smartdns" {
+				savedConfig = pending["config"]
+			}
+			if len(savedConfig) == 0 || len(savedConfig) > 8<<10 {
+				return false, false, fmt.Errorf("invalid SmartDNS config payload")
+			}
+			if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_config_"+machineCode, savedConfig); err != nil {
+				return false, false, err
+			}
 		}
 		if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?)
 			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, resultKey, string(result)); err != nil {
@@ -458,7 +526,7 @@ func (s *Store) DeleteAgentBinding(machineCode string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, key := range []string{"agent_machine_" + machineCode, "agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
+	for _, key := range []string{"agent_machine_" + machineCode, "agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "smartdns_config_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
 		if _, err := tx.Exec(`DELETE FROM settings WHERE key=?`, key); err != nil {
 			return err
 		}

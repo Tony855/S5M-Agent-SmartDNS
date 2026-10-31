@@ -10,9 +10,42 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestBoundedDiagnosticBufferCapsOutput(t *testing.T) {
+	var output boundedDiagnosticBuffer
+	large := bytes.Repeat([]byte("x"), smartDNSPreflightOutputLimit+1024)
+	written, err := output.Write(large)
+	if err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if written != len(large) {
+		t.Fatalf("Write consumed %d bytes, want %d", written, len(large))
+	}
+	if got := len(output.String()); got != smartDNSPreflightOutputLimit {
+		t.Fatalf("buffer length = %d, want %d", got, smartDNSPreflightOutputLimit)
+	}
+	if !output.Truncated() {
+		t.Fatal("buffer did not report truncated output")
+	}
+}
+
+func TestBoundedDiagnosticBufferAcceptsExactLimit(t *testing.T) {
+	var output boundedDiagnosticBuffer
+	data := bytes.Repeat([]byte("a"), smartDNSPreflightOutputLimit)
+	if _, err := output.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if output.Truncated() {
+		t.Fatal("exact-limit output must not be marked truncated")
+	}
+	if output.String() != string(data) {
+		t.Fatal("buffer content differs from input")
+	}
+}
 
 func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 	tests := []struct {
@@ -657,5 +690,137 @@ func TestSafeSmartDNSDiagnosticTruncatesAtUTF8Boundary(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, strings.Repeat("a", 499)) {
 		t.Fatalf("valid prefix was not preserved: %q", got)
+	}
+}
+
+func TestReadSmartDNSConfigAtRejectsSymlinksAndInvalidFiles(t *testing.T) {
+	dir := t.TempDir()
+	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1\n")
+	target := filepath.Join(dir, "target.conf")
+	if err := os.WriteFile(target, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.conf")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSConfigAt(link); err == nil {
+		t.Fatal("symlink configuration must be rejected")
+	}
+	if got, err := readSmartDNSConfigAt(target); err != nil || !bytes.Equal(got, valid) {
+		t.Fatalf("valid regular config read = %q, err=%v", got, err)
+	}
+	empty := filepath.Join(dir, "empty.conf")
+	if err := os.WriteFile(empty, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSConfigAt(empty); err == nil {
+		t.Fatal("empty config must be rejected")
+	}
+	large := filepath.Join(dir, "large.conf")
+	if err := os.WriteFile(large, bytes.Repeat([]byte("x"), (8<<10)+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSConfigAt(large); err == nil {
+		t.Fatal("oversized config must be rejected")
+	}
+	if _, err := readSmartDNSConfigAt(dir); err == nil {
+		t.Fatal("directory must be rejected")
+	}
+}
+
+
+func TestReadSmartDNSFileNoFollowRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.conf")
+	link := filepath.Join(dir, "smartdns.conf")
+	if err := os.WriteFile(target, []byte("bind 127.0.0.1:6053\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmartDNSFileNoFollow(link, 8<<10); err == nil {
+		t.Fatal("expected symlink read to be rejected")
+	}
+	if _, _, err := backupSmartDNSConfig(link, link+".previous"); err == nil {
+		t.Fatal("expected symlink rollback snapshot to be rejected")
+	}
+}
+
+func TestBoundedDiagnosticBufferConcurrentWrites(t *testing.T) {
+	var output boundedDiagnosticBuffer
+	const writers = 8
+	const each = smartDNSPreflightOutputLimit
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for i := 0; i < writers; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = output.Write(bytes.Repeat([]byte("z"), each))
+		}()
+	}
+	wg.Wait()
+	if got := len(output.String()); got != smartDNSPreflightOutputLimit {
+		t.Fatalf("concurrent buffer length = %d, want %d", got, smartDNSPreflightOutputLimit)
+	}
+	if !output.Truncated() {
+		t.Fatal("concurrent writes should mark output truncated")
+	}
+}
+
+
+func TestSmartDNSConfigAlreadyApplied(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "smartdns.conf")
+	candidate := []byte("bind 127.0.0.1:6053\n")
+	if err := os.WriteFile(path, candidate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := smartDNSConfigAlreadyApplied(path, candidate)
+	if err != nil || !applied {
+		t.Fatalf("identical config: applied=%v err=%v", applied, err)
+	}
+	applied, err = smartDNSConfigAlreadyApplied(path, []byte("different config"))
+	if err != nil || applied {
+		t.Fatalf("different config: applied=%v err=%v", applied, err)
+	}
+	missing, err := smartDNSConfigAlreadyApplied(filepath.Join(dir, "missing.conf"), candidate)
+	if err != nil || missing {
+		t.Fatalf("missing config: applied=%v err=%v", missing, err)
+	}
+}
+
+
+func TestSmartDNSReplayRequiresHealthyUDPAndTCPProbe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "smartdns.conf")
+	candidate := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1\n")
+	if err := os.WriteFile(path, candidate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	ok, err := smartDNSReplayIsHealthy(path, candidate, func() bool {
+		called = true
+		return true
+	})
+	if err != nil || !ok || !called {
+		t.Fatalf("healthy replay = %v, err=%v, probe called=%v", ok, err, called)
+	}
+	called = false
+	ok, err = smartDNSReplayIsHealthy(path, candidate, func() bool {
+		called = true
+		return false
+	})
+	if err != nil || ok || !called {
+		t.Fatalf("unhealthy replay = %v, err=%v, probe called=%v", ok, err, called)
+	}
+	called = false
+	ok, err = smartDNSReplayIsHealthy(path, []byte("different"), func() bool {
+		called = true
+		return true
+	})
+	if err != nil || ok || called {
+		t.Fatalf("different config replay = %v, err=%v, probe called=%v", ok, err, called)
 	}
 }

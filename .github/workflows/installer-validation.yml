@@ -72,6 +72,9 @@ jobs:
       - name: Run ShellCheck errors
         run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh
 
+      - name: Check embedded web JavaScript syntax
+        run: node --check server/web/app.js
+
       - name: Test and build bundled S5M-Server source
         uses: actions/setup-go@v5
         with:

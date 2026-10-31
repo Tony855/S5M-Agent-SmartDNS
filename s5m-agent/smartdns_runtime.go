@@ -14,14 +14,103 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 	"sync"
+	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const smartDNSConfigPath = "/data/smartdns.conf"
+const smartDNSPreflightOutputLimit = 8 << 10
+
+type boundedDiagnosticBuffer struct {
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	truncated bool
+}
+
+func (b *boundedDiagnosticBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := smartDNSPreflightOutputLimit - b.buffer.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			_, _ = b.buffer.Write(p[:remaining])
+			b.truncated = true
+		} else {
+			_, _ = b.buffer.Write(p)
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	// Report the full write as consumed: the child process must not fail just
+	// because diagnostic output is capped.
+	return len(p), nil
+}
+
+func (b *boundedDiagnosticBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func (b *boundedDiagnosticBuffer) Truncated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.truncated
+}
 
 var smartDNSConfigMu sync.Mutex
+
+func readSmartDNSConfig() ([]byte, error) {
+	smartDNSConfigMu.Lock()
+	defer smartDNSConfigMu.Unlock()
+	return readSmartDNSConfigAt(smartDNSConfigPath)
+}
+
+// readSmartDNSConfigAt opens the file without following symlinks, then validates
+// the opened descriptor rather than trusting a path-level Lstat that can race
+// with replacement of the file.
+func readSmartDNSConfigAt(path string) ([]byte, error) {
+	data, err := readSmartDNSFileNoFollow(path, 8<<10)
+	if err != nil {
+		return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err)
+	}
+	if err := validateSmartDNSConfig(data); err != nil {
+		return nil, fmt.Errorf("当前 SmartDNS 配置不符合安全策略: %w", err)
+	}
+	return data, nil
+}
+
+// readSmartDNSFileNoFollow reads a bounded regular file without following a
+// symlink. It is also used for rollback snapshots, which must preserve bytes
+// even when an older configuration no longer passes the current policy.
+func readSmartDNSFileNoFollow(path string, maxBytes int64) ([]byte, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("SmartDNS 配置路径不是普通文件")
+	}
+	if info.Size() <= 0 || info.Size() > maxBytes {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 %d 字节", maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 || int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 %d 字节", maxBytes)
+	}
+	return data, nil
+}
 
 // Indirect directory sync so failure handling can be exercised deterministically.
 var smartDNSDirectorySync = syncSmartDNSDirectory
@@ -192,6 +281,28 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	}
 }
 
+func smartDNSConfigAlreadyApplied(path string, candidate []byte) (bool, error) {
+	current, err := readSmartDNSFileNoFollow(path, 8<<10)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(current, candidate), nil
+}
+
+func smartDNSReplayIsHealthy(path string, candidate []byte, probe func() bool) (bool, error) {
+	applied, err := smartDNSConfigAlreadyApplied(path, candidate)
+	if err != nil || !applied {
+		return false, err
+	}
+	if probe == nil || !probe() {
+		return false, nil
+	}
+	return true, nil
+}
+
 func writeSmartDNSConfig(data []byte) (string, error) {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
@@ -203,6 +314,25 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	}
 	if err := os.MkdirAll("/data", 0700); err != nil {
 		return "", fmt.Errorf("创建 SmartDNS 数据目录失败")
+	}
+
+	// Commands are redelivered until the controller durably stores their ACK.
+	// Treat an identical already-applied config as success without restarting
+	// SmartDNS again, making configure_smartdns safe under ACK loss/replay.
+	replayHealthy, readErr := smartDNSReplayIsHealthy(smartDNSConfigPath, data, probeSmartDNSDNS)
+	if readErr != nil {
+		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
+	}
+	if replayHealthy {
+		sum := sha256.Sum256(bytes.TrimSpace(data))
+		return hex.EncodeToString(sum[:]), nil
+	}
+	alreadyApplied, readErr := smartDNSConfigAlreadyApplied(smartDNSConfigPath, data)
+	if readErr != nil {
+		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
+	}
+	if alreadyApplied {
+		return "", fmt.Errorf("SmartDNS 配置文件已是目标版本，但 UDP/TCP DNS 健康检查失败")
 	}
 
 	// Validate the candidate with the actual SmartDNS parser on a temporary
@@ -236,6 +366,11 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/usr/sbin/smartdns", "-f", "-x", "-p", "-", "-c", tmpPath)
+	// Capture both streams so configuration parser errors are actionable rather
+	// than being reduced to the generic "exit status 1" from cmd.Wait().
+	var stdout, stderr boundedDiagnosticBuffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	output := make(chan error, 1)
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("SmartDNS 配置预检启动失败: %w", err)
@@ -244,12 +379,29 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	select {
 	case err := <-output:
 		if err != nil {
-			return "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(err.Error()))
+			diagnostic := strings.TrimSpace(stdout.String() + "\n" + stderr.String() + "\n" + err.Error())
+			if stdout.Truncated() || stderr.Truncated() {
+				diagnostic += "（预检输出已截断）"
+			}
+			return "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(diagnostic))
 		}
 		return "", fmt.Errorf("SmartDNS 配置预检进程意外退出")
 	case <-time.After(350 * time.Millisecond):
 		_ = cmd.Process.Kill()
-		<-output
+		waitErr := <-output
+		// A parser failure can race the 350 ms startup window. Do not treat
+		// an already-exited nonzero process as a successful long-running check.
+		// ExitCode -1 means the process was terminated by our kill signal.
+		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() != -1 {
+			if waitErr != nil {
+				diagnostic := strings.TrimSpace(stdout.String() + "\n" + stderr.String() + "\n" + waitErr.Error())
+				if stdout.Truncated() || stderr.Truncated() {
+					diagnostic += "（预检输出已截断）"
+				}
+				return "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(diagnostic))
+			}
+			return "", fmt.Errorf("SmartDNS 配置预检进程意外退出")
+		}
 	case <-ctx.Done():
 		_ = cmd.Process.Kill()
 		<-output
@@ -365,7 +517,7 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 // backupSmartDNSConfig snapshots the live configuration and durably writes
 // its rollback copy before callers are allowed to replace the live file.
 func backupSmartDNSConfig(livePath, backupPath string) ([]byte, bool, error) {
-	oldData, err := os.ReadFile(livePath)
+	oldData, err := readSmartDNSFileNoFollow(livePath, 8<<10)
 	if os.IsNotExist(err) {
 		// A backup from an earlier installation must never be mistaken for
 		// the rollback point of this first-time configuration. Remove it and
@@ -389,7 +541,7 @@ func backupSmartDNSConfig(livePath, backupPath string) ([]byte, bool, error) {
 }
 
 func smartDNSConfigMatches(path string, expected []byte, shouldExist bool) bool {
-	actual, err := os.ReadFile(path)
+	actual, err := readSmartDNSFileNoFollow(path, 8<<10)
 	if !shouldExist {
 		return os.IsNotExist(err)
 	}
