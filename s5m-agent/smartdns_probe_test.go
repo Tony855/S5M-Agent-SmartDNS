@@ -645,3 +645,17 @@ func TestSafeSmartDNSDiagnosticNormalizesAndBoundsOutput(t *testing.T) {
 		t.Fatalf("diagnostic exceeds bounded length: %d", len(got))
 	}
 }
+
+func TestSafeSmartDNSDiagnosticTruncatesAtUTF8Boundary(t *testing.T) {
+	input := strings.Repeat("a", 499) + "中" + strings.Repeat("b", 20)
+	got := safeSmartDNSDiagnostic(input)
+	if !strings.Contains(got, "…") {
+		t.Fatalf("expected truncation marker: %q", got)
+	}
+	if strings.ToValidUTF8(got, "") != got {
+		t.Fatalf("diagnostic is not valid UTF-8: %q", got)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("a", 499)) {
+		t.Fatalf("valid prefix was not preserved: %q", got)
+	}
+}
