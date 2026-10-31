@@ -1343,7 +1343,9 @@ func processAgentCommandWebSocket(cfg Config) error {
 		message, runErr = updateMihomoKernel(cmd)
 	case "read_smartdns_config":
 		data, runErr = readSmartDNSConfig()
-		if runErr == nil { message = "已读取 Agent 当前 SmartDNS 配置" }
+		if runErr == nil {
+			message = "已读取 Agent 当前 SmartDNS 配置"
+		}
 	case "configure_smartdns":
 		var configHash string
 		configHash, runErr = writeSmartDNSConfig([]byte(cmd.Config))
