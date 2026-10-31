@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 	"sync"
 	"time"
@@ -26,13 +27,39 @@ var smartDNSConfigMu sync.Mutex
 func readSmartDNSConfig() ([]byte, error) {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
-	info, err := os.Lstat(smartDNSConfigPath)
-	if err != nil { return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err) }
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 { return nil, fmt.Errorf("SmartDNS 配置路径不是普通文件") }
-	if info.Size() <= 0 || info.Size() > 8<<10 { return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 8 KiB") }
-	data, err := os.ReadFile(smartDNSConfigPath)
-	if err != nil { return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err) }
-	if err := validateSmartDNSConfig(data); err != nil { return nil, fmt.Errorf("当前 SmartDNS 配置不符合安全策略: %w", err) }
+	return readSmartDNSConfigAt(smartDNSConfigPath)
+}
+
+// readSmartDNSConfigAt opens the file without following symlinks, then validates
+// the opened descriptor rather than trusting a path-level Lstat that can race
+// with replacement of the file.
+func readSmartDNSConfigAt(path string) ([]byte, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("检查 SmartDNS 配置文件失败: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("SmartDNS 配置路径不是普通文件")
+	}
+	if info.Size() <= 0 || info.Size() > 8<<10 {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 8 KiB")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, (8<<10)+1))
+	if err != nil {
+		return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err)
+	}
+	if len(data) == 0 || len(data) > 8<<10 {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 8 KiB")
+	}
+	if err := validateSmartDNSConfig(data); err != nil {
+		return nil, fmt.Errorf("当前 SmartDNS 配置不符合安全策略: %w", err)
+	}
 	return data, nil
 }
 
