@@ -734,7 +734,7 @@ func TestReadSmartDNSFileNoFollowRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.conf")
 	link := filepath.Join(dir, "smartdns.conf")
-	if err := os.WriteFile(target, []byte("bind 127.0.0.1:6053\\n"), 0600); err != nil {
+	if err := os.WriteFile(target, []byte("bind 127.0.0.1:6053\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, link); err != nil {
@@ -743,7 +743,7 @@ func TestReadSmartDNSFileNoFollowRejectsSymlink(t *testing.T) {
 	if _, err := readSmartDNSFileNoFollow(link, 8<<10); err == nil {
 		t.Fatal("expected symlink read to be rejected")
 	}
-	if _, err := backupSmartDNSConfig(link, link+".previous"); err == nil {
+	if _, _, err := backupSmartDNSConfig(link, link+".previous"); err == nil {
 		t.Fatal("expected symlink rollback snapshot to be rejected")
 	}
 }
