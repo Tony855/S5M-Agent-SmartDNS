@@ -402,3 +402,38 @@ func TestProbeSmartDNSDNSTCPAtRejectsMismatchedTransactionID(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+
+func TestAppendSmartDNSStatusErrorPreservesFirstDiagnostic(t *testing.T) {
+	status := map[string]any{"smartdns_last_error": ""}
+	appendSmartDNSStatusError(status, "")
+	if got := status["smartdns_last_error"]; got != "" {
+		t.Fatalf("empty diagnostic changed status: %#v", got)
+	}
+	appendSmartDNSStatusError(status, "读取版本失败")
+	appendSmartDNSStatusError(status, "进程未运行")
+	if got := status["smartdns_last_error"]; got != "读取版本失败" {
+		t.Fatalf("first actionable diagnostic was not preserved: %#v", got)
+	}
+}
+
+func TestSmartDNSBinaryAvailabilityRejectsNonExecutableAndDirectory(t *testing.T) {
+	for _, mode := range []os.FileMode{0600, 0700} {
+		path := filepath.Join(t.TempDir(), "smartdns")
+		if mode.IsDir() {
+			if err := os.Mkdir(path, mode); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(path, []byte("not executable"), mode); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		available := info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0
+		if available {
+			t.Fatalf("mode %o should not be considered an executable SmartDNS binary", mode)
+		}
+	}
+}
