@@ -37,11 +37,8 @@ on:
       - "s5m-agent/services/**"
       - ".github/workflows/s5m-agent-smartdns.yml"
 
-# Do not cancel a multi-architecture build halfway through when another
-# commit lands; queued runs must finish so image validation is trustworthy.
-concurrency:
-  group: s5m-agent-smartdns-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+# Validation jobs may run concurrently across commits. Only GHCR publication
+# is serialized because all main-branch runs update the shared image tags.
 
 permissions:
   contents: read
@@ -261,6 +258,9 @@ jobs:
     name: Publish multi-arch image to GHCR
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test-amd64, build-arm64]
+    concurrency:
+      group: s5m-agent-smartdns-publish-${{ github.ref }}
+      queue: max
     runs-on: ubuntu-latest
     permissions:
       contents: read
