@@ -1350,7 +1350,7 @@ createApp({
         smartdnsResult.value = requested.message || '已请求 Agent 读取实际配置；请稍后再次刷新';
         const saved = await sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code });
         smartdnsYaml.value = String((saved.data || {}).config || '');
-        smartdnsResult.value += smartdnsYaml.value ? '；当前保存副本已加载（请确认 Agent 回传时间）' : '；尚无可用配置回传';
+        smartdnsResult.value += smartdnsYaml.value ? '；显示的是主控最近保存副本，Agent 回传完成后再次点击刷新获取最新内容' : '；等待 Agent 首次回传';
       } catch (e) {
         smartdnsResult.value = '读取失败：' + (e.message || String(e));
         showMsg(smartdnsResult.value, 'error');
