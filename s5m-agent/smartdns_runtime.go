@@ -468,8 +468,17 @@ func waitForSmartDNSHealthy(timeout time.Duration) bool {
 	return false
 }
 
+var (
+	smartDNSURLUserInfoPattern = regexp.MustCompile(`(?i)(https?://)[^/@\\s]+@`)
+	smartDNSBearerPattern      = regexp.MustCompile(`(?i)(bearer\\s+)[^\\s,;]+`)
+	smartDNSCredentialPattern  = regexp.MustCompile(`(?i)\\b(password|passwd|token|secret|api[_-]?key)=([^\\s&;]+)`)
+)
+
 func safeSmartDNSDiagnostic(message string) string {
 	message = strings.Join(strings.Fields(message), " ")
+	message = smartDNSURLUserInfoPattern.ReplaceAllString(message, "${1}[REDACTED]@")
+	message = smartDNSBearerPattern.ReplaceAllString(message, "${1}[REDACTED]")
+	message = smartDNSCredentialPattern.ReplaceAllString(message, "${1}=[REDACTED]")
 	if len(message) > 500 {
 		message = message[:500] + "…"
 	}
