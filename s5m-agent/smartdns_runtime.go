@@ -23,6 +23,19 @@ const smartDNSConfigPath = "/data/smartdns.conf"
 
 var smartDNSConfigMu sync.Mutex
 
+func readSmartDNSConfig() ([]byte, error) {
+	smartDNSConfigMu.Lock()
+	defer smartDNSConfigMu.Unlock()
+	info, err := os.Lstat(smartDNSConfigPath)
+	if err != nil { return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err) }
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 { return nil, fmt.Errorf("SmartDNS 配置路径不是普通文件") }
+	if info.Size() <= 0 || info.Size() > 8<<10 { return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 8 KiB") }
+	data, err := os.ReadFile(smartDNSConfigPath)
+	if err != nil { return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err) }
+	if err := validateSmartDNSConfig(data); err != nil { return nil, fmt.Errorf("当前 SmartDNS 配置不符合安全策略: %w", err) }
+	return data, nil
+}
+
 // Indirect directory sync so failure handling can be exercised deterministically.
 var smartDNSDirectorySync = syncSmartDNSDirectory
 
