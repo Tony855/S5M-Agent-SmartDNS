@@ -590,6 +590,7 @@ fi
 chown s5m-server:s5m-server "$DB_DIR/config.yaml"
 chmod 0600 "$DB_DIR/config.yaml"
 
+write_mihomo_service() {
 log_step "生成 Mihomo 服务配置"
 
 # 写入 mihomo.service
@@ -623,6 +624,11 @@ RestrictSUIDSGID=true
 WantedBy=multi-user.target
 MIHOMO_SERVICE_EOF
 
+}
+
+write_mihomo_service
+
+build_and_install_server() {
 log_step "在临时目录编译 S5M-Server"
 
 # 源码仅用于构建：不复制到 /opt/S5M-Server，安装目录只保留运行所需二进制及状态文件。
@@ -675,6 +681,11 @@ fi
 mv -f "$STAGED_BIN" "$BIN"
 log_success "主控二进制已原子替换：$BIN"
 
+}
+
+build_and_install_server
+
+write_server_service() {
 # 写入 s5m-server.service
 cat > /etc/systemd/system/s5m-server.service <<SERVICEEOF
 [Unit]
@@ -704,6 +715,10 @@ RestrictSUIDSGID=true
 [Install]
 WantedBy=multi-user.target
 SERVICEEOF
+
+}
+
+write_server_service
 
 log_step "启动服务并执行健康检查"
 
