@@ -58,8 +58,11 @@ createApp({
     const smartdnsResult = ref('');
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
     let smartdnsLoadGeneration = 0;
+    let smartdnsApplyGeneration = 0;
     watch(selectedConfigNode, () => {
       smartdnsLoadGeneration++;
+      smartdnsApplyGeneration++;
+      applyingSmartDNS.value = false;
       loadingSmartDNS.value = false;
       smartdnsYaml.value = '';
       smartdnsResult.value = '';
@@ -1237,15 +1240,18 @@ createApp({
       if (applyingSmartDNS.value) return;
       if (!confirm('确认将 SmartDNS 配置发送到节点 ' + code + ' 并应用？此操作只影响 SmartDNS。')) return;
       applyingSmartDNS.value = true;
+      const generation = ++smartdnsApplyGeneration;
       try {
         const result = await sendBrowserWSControl({ type: 'smartdns.config.apply', machine_code: code, config });
+        if (generation !== smartdnsApplyGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         if (result.ok === false) throw new Error(result.error || '主控拒绝 SmartDNS 配置命令');
         smartdnsResult.value = result.message || '已排队，尚未确认 Agent 应用结果';
         showMsg(smartdnsResult.value, 'info');
       } catch (e) {
+        if (generation !== smartdnsApplyGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
         smartdnsResult.value = '提交失败：' + (e.message || String(e));
         showMsg(smartdnsResult.value, 'error');
-      } finally { applyingSmartDNS.value = false; }
+      } finally { if (generation === smartdnsApplyGeneration) applyingSmartDNS.value = false; }
     };
 
     const safeCopy = async (text) => {
