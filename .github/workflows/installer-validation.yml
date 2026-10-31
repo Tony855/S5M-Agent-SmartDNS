@@ -5,10 +5,14 @@ on:
     branches: [main]
     paths:
       - "scripts/install.sh"
+      - "scripts/install-server.sh"
+      - "server/**"
       - ".github/workflows/installer-validation.yml"
   pull_request:
     paths:
       - "scripts/install.sh"
+      - "scripts/install-server.sh"
+      - "server/**"
       - ".github/workflows/installer-validation.yml"
   workflow_dispatch:
 
@@ -17,30 +21,47 @@ permissions:
 
 jobs:
   validate-installer:
-    name: Validate install.sh
+    name: Validate native S5M-Server installer
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Check Bash syntax
-        run: bash -n scripts/install.sh
+        run: |
+          bash -n scripts/install.sh
+          bash -n scripts/install-server.sh
 
-      - name: Verify this entry point installs only the master controller
+      - name: Verify self-contained server installer contract
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          script = Path("scripts/install.sh").read_text(encoding="utf-8")
-          assert 'https://github.com/Tony855/S5M-Master.git' in script
-          assert 'MASTER_BRANCH="main"' in script
-          assert 'exec bash "$MASTER_DIR/scripts/install.sh" "$@"' in script
-          assert 'source/main.go' in script and 'source/go.mod' in script
-          assert 'docker run' not in script.lower()
-          assert 'docker compose' not in script.lower()
-          assert 'docker-compose' not in script.lower()
-          assert 's5m-agent-smartdns' not in script.lower()
-          print("Master-only installer contract verified.")
+          entry = Path("scripts/install.sh").read_text(encoding="utf-8")
+          installer = Path("scripts/install-server.sh").read_text(encoding="utf-8")
+
+          assert "https://github.com/Tony855/S5M-Agent-SmartDNS.git" in entry
+          assert 'REPO_BRANCH="main"' in entry
+          assert 'REPO_DIR="/root/S5M-Agent-SmartDNS"' in entry
+          assert 'exec bash "$INSTALLER" "$@"' in entry
+          assert 'server/main.go' in entry and 'server/go.mod' in entry
+          assert "S5M-Master" not in entry
+          assert "MASTER_DIR" not in entry
+
+          assert 'SRC="$ROOT/server"' in installer
+          assert 'go test ./...' in installer
+          assert 'go build -trimpath' in installer
+          assert 'BIN="/opt/S5M-Server/S5M-Server"' in installer
+          assert 'BUILD_DIR="$(mktemp -d /tmp/s5m-server-build.' in installer
+          assert 'trap \'rm -rf "$BUILD_DIR"\' EXIT' in installer
+          assert "S5M-Master" not in installer
+          assert "docker run" not in entry.lower()
+          assert "docker compose" not in entry.lower()
+          assert "docker-compose" not in entry.lower()
+          assert "docker run" not in installer.lower()
+          assert "docker compose" not in installer.lower()
+          assert "docker-compose" not in installer.lower()
+          print("Native S5M-Server installer contract verified.")
           PY
 
       - name: Install ShellCheck
@@ -49,4 +70,17 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck errors
-        run: shellcheck --severity=error scripts/install.sh
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh
+
+      - name: Test and build bundled S5M-Server source
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache-dependency-path: server/go.sum
+
+      - name: Go tests
+        working-directory: server
+        run: |
+          go mod download
+          go test ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/S5M-Server .
