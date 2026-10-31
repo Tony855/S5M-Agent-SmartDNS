@@ -35,6 +35,20 @@ if run_init >/dev/null 2>&1; then fail "empty default config must fail"; fi
 pass "empty default config fails closed"
 
 reset_case
+printf 'do-not-touch\n' > "$ROOT/data/target.conf"
+ln -s "$ROOT/data/target.conf" "$ROOT/data/smartdns.conf"
+if run_init >/dev/null 2>&1; then fail "symlink config path must fail"; fi
+[ -L "$ROOT/data/smartdns.conf" ] || fail "symlink config path was replaced"
+[ "$(cat "$ROOT/data/target.conf")" = "do-not-touch" ] || fail "symlink target was modified"
+pass "symlink config path is rejected without touching its target"
+
+reset_case
+rm -rf "$ROOT/data/smartdns.conf"
+mkdir "$ROOT/data/smartdns.conf"
+if run_init >/dev/null 2>&1; then fail "directory config path must fail"; fi
+[ -d "$ROOT/data/smartdns.conf" ] || fail "directory config path was replaced"
+pass "non-regular config path is rejected"
+reset_case
 cat > "$BIN/cp" <<'WRAPPER'
 #!/bin/sh
 [ "${FAIL_CP:-0}" = 1 ] && exit 73
@@ -43,7 +57,7 @@ WRAPPER
 chmod +x "$BIN/cp"
 if FAIL_CP=1 run_init >/dev/null 2>&1; then fail "copy failure must fail"; fi
 [ ! -e "$ROOT/data/smartdns.conf" ] || fail "copy failure left destination"
-[ ! -e "$ROOT/data/smartdns.conf.new" ] || fail "copy failure left temp file"
+[ -z "$(find "$ROOT/data" -maxdepth 1 -name "smartdns.conf.tmp.*" -print -quit)" ] || fail "copy failure left temp file"
 pass "copy failure cleans staging file and fails"
 
 reset_case
@@ -57,14 +71,14 @@ chmod +x "$BIN/mv"
 if FAIL_MV=1 run_init >/dev/null 2>&1; then fail "atomic rename failure must fail"; fi
 [ -f "$ROOT/data/smartdns.conf" ] || fail "rename failure removed existing destination"
 [ ! -s "$ROOT/data/smartdns.conf" ] || fail "rename failure replaced destination"
-[ ! -e "$ROOT/data/smartdns.conf.new" ] || fail "rename failure left temp file"
+[ -z "$(find "$ROOT/data" -maxdepth 1 -name "smartdns.conf.tmp.*" -print -quit)" ] || fail "rename failure left temp file"
 pass "atomic rename failure leaves original destination untouched"
 
 reset_case
 run_init || fail "initialization should succeed"
 cmp -s "$ROOT/default/smartdns.conf" "$ROOT/data/smartdns.conf" || fail "default content mismatch"
 [ "$(stat -c %a "$ROOT/data/smartdns.conf")" = 600 ] || fail "new config mode is not 0600"
-[ ! -e "$ROOT/data/smartdns.conf.new" ] || fail "successful init left temp file"
+[ -z "$(find "$ROOT/data" -maxdepth 1 -name "smartdns.conf.tmp.*" -print -quit)" ] || fail "successful init left temp file"
 pass "successful initialization installs complete 0600 config"
 
 reset_case
