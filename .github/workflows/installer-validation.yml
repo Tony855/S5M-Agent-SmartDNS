@@ -26,6 +26,23 @@ jobs:
       - name: Check Bash syntax
         run: bash -n scripts/install.sh
 
+      - name: Verify this entry point installs only the master controller
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          script = Path("scripts/install.sh").read_text(encoding="utf-8")
+          assert 'https://github.com/Tony855/S5M-Master.git' in script
+          assert 'MASTER_BRANCH="main"' in script
+          assert 'exec bash "$MASTER_DIR/scripts/install.sh" "$@"' in script
+          assert 'source/main.go' in script and 'source/go.mod' in script
+          assert 'docker run' not in script.lower()
+          assert 'docker compose' not in script.lower()
+          assert 'docker-compose' not in script.lower()
+          assert 's5m-agent-smartdns' not in script.lower()
+          print("Master-only installer contract verified.")
+          PY
+
       - name: Install ShellCheck
         run: |
           sudo apt-get update
