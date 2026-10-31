@@ -3,9 +3,23 @@ set -eu
 
 CONFIG_PATH="${SMARTDNS_CONFIG_PATH:-/data/smartdns.conf}"
 DEFAULT_CONFIG="${SMARTDNS_DEFAULT_CONFIG:-/etc/smartdns/smartdns.conf}"
-TEMP_CONFIG="${CONFIG_PATH}.new"
+CONFIG_DIR="$(dirname "$CONFIG_PATH")"
+TEMP_CONFIG=""
 
-mkdir -p "$(dirname "$CONFIG_PATH")"
+cleanup() {
+  if [ -n "$TEMP_CONFIG" ]; then
+    rm -f "$TEMP_CONFIG"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+mkdir -p "$CONFIG_DIR"
+
+# Never follow a volume-provided symlink or replace a directory/device node.
+if [ -L "$CONFIG_PATH" ] || { [ -e "$CONFIG_PATH" ] && [ ! -f "$CONFIG_PATH" ]; }; then
+  echo "SmartDNS configuration path must be a regular file, not a symlink or special file" >&2
+  exit 1
+fi
 
 # Preserve any existing non-empty operator configuration exactly as-is.
 if [ -s "$CONFIG_PATH" ]; then
@@ -14,25 +28,29 @@ if [ -s "$CONFIG_PATH" ]; then
 fi
 
 # Never start with an empty or partial config if the packaged default is missing.
-if [ ! -s "$DEFAULT_CONFIG" ]; then
+if [ ! -f "$DEFAULT_CONFIG" || [ ! -s "$DEFAULT_CONFIG" ]; then
   echo "SmartDNS default configuration is missing or empty: $DEFAULT_CONFIG" >&2
   exit 1
 fi
 
-# Write beside the destination and rename atomically on the same filesystem.
-rm -f "$TEMP_CONFIG"
+# Create an unpredictable staging file beside the destination. Keeping it in
+# the same directory guarantees that the final rename is atomic on this filesystem.
 umask 077
+TEMP_CONFIG="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
 if ! cp "$DEFAULT_CONFIG" "$TEMP_CONFIG"; then
-  rm -f "$TEMP_CONFIG"
   echo "Failed to stage the default SmartDNS configuration" >&2
   exit 1
 fi
 chmod 0600 "$TEMP_CONFIG"
+if [ ! -s "$TEMP_CONFIG" ]; then
+  echo "Staged SmartDNS configuration is empty" >&2
+  exit 1
+fi
 if ! mv -f "$TEMP_CONFIG" "$CONFIG_PATH"; then
-  rm -f "$TEMP_CONFIG"
   echo "Failed to atomically install the default SmartDNS configuration" >&2
   exit 1
 fi
+TEMP_CONFIG=""
 
 [ -s "$CONFIG_PATH" ] || {
   echo "SmartDNS configuration initialization produced an empty file" >&2
