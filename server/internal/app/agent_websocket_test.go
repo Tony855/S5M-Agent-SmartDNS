@@ -1461,8 +1461,9 @@ func TestSmartDNSControllerCopyChangesOnlyAfterSuccessfulApply(t *testing.T) {
 	if err := app.store.UpdateSettings(map[string]string{"smartdns_config_" + code: previous}); err != nil {
 		t.Fatalf("seed previous config: %v", err)
 	}
-	failedCommand := `{"id":"smartdns-failed-apply","type":"configure_smartdns","config":"` + candidate + `"}`
-	if err := app.store.QueueAgentSmartDNSCommand(code, failedCommand); err != nil {
+	failedPayload, err := json.Marshal(map[string]string{"id": "smartdns-failed-apply", "type": "configure_smartdns", "config": candidate})
+	if err != nil { t.Fatalf("marshal failed command: %v", err) }
+	if err := app.store.QueueAgentSmartDNSCommand(code, string(failedPayload)); err != nil {
 		t.Fatalf("queue failed apply: %v", err)
 	}
 	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-failed-apply", "failed", "validation failed", "", time.Now().Unix()); err != nil || !matched {
@@ -1473,8 +1474,9 @@ func TestSmartDNSControllerCopyChangesOnlyAfterSuccessfulApply(t *testing.T) {
 		t.Fatalf("failed apply replaced last-known-good config: got=%q err=%v", got, err)
 	}
 
-	successCommand := `{"id":"smartdns-success-apply","type":"configure_smartdns","config":"` + candidate + `"}`
-	if err := app.store.QueueAgentSmartDNSCommand(code, successCommand); err != nil {
+	successPayload, err := json.Marshal(map[string]string{"id": "smartdns-success-apply", "type": "configure_smartdns", "config": candidate})
+	if err != nil { t.Fatalf("marshal successful command: %v", err) }
+	if err := app.store.QueueAgentSmartDNSCommand(code, string(successPayload)); err != nil {
 		t.Fatalf("queue successful apply: %v", err)
 	}
 	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-success-apply", "success", "applied", "", time.Now().Unix()); err != nil || !matched {
