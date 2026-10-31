@@ -388,7 +388,20 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 		return "", fmt.Errorf("SmartDNS 配置预检进程意外退出")
 	case <-time.After(350 * time.Millisecond):
 		_ = cmd.Process.Kill()
-		<-output
+		waitErr := <-output
+		// A parser failure can race the 350 ms startup window. Do not treat
+		// an already-exited nonzero process as a successful long-running check.
+		// ExitCode -1 means the process was terminated by our kill signal.
+		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() != -1 {
+			if waitErr != nil {
+				diagnostic := strings.TrimSpace(stdout.String() + "\n" + stderr.String() + "\n" + waitErr.Error())
+				if stdout.Truncated() || stderr.Truncated() {
+					diagnostic += "（预检输出已截断）"
+				}
+				return "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(diagnostic))
+			}
+			return "", fmt.Errorf("SmartDNS 配置预检进程意外退出")
+		}
 	case <-ctx.Done():
 		_ = cmd.Process.Kill()
 		<-output
