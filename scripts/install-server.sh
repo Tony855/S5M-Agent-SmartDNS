@@ -170,6 +170,8 @@ fi
 # 确保主控 Mihomo 存在；已存在的正常版本直接复用
 MIHOMO_DIR="/opt/mihomo"
 MIHOMO_BIN="$MIHOMO_DIR/mihomo"
+MIHOMO_EXISTED_BEFORE_INSTALL=0
+[[ -e "$MIHOMO_BIN" ]] && MIHOMO_EXISTED_BEFORE_INSTALL=1
 ensure_mihomo() {
   if [[ -e "$MIHOMO_BIN" ]]; then
     if [[ -x "$MIHOMO_BIN" ]] && "$MIHOMO_BIN" -v >/tmp/s5m-mihomo-version.txt 2>&1; then
@@ -285,7 +287,13 @@ chmod -R go-rwx "$DB_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="/var/backups/s5m-server-install-$STAMP"
 install -d -m 0700 "$BACKUP"
-[[ -f "$DB_DIR/s5m.db" ]] && sqlite3 "$DB_DIR/s5m.db" ".backup '$BACKUP/s5m.db'"
+if [[ -f "$DB_DIR/s5m.db" ]]; then
+  sqlite3 "$DB_DIR/s5m.db" ".backup '$BACKUP/s5m.db'"
+  [[ -s "$BACKUP/s5m.db" ]] || { echo "❌ 数据库备份未生成，停止安装。" >&2; exit 1; }
+  sqlite3 "$BACKUP/s5m.db" "PRAGMA quick_check;" | grep -qx "ok" || { echo "❌ 数据库备份完整性检查失败，停止安装。" >&2; exit 1; }
+else
+  : > "$BACKUP/database-absent"
+fi
 # 标记文件区分“原本不存在”和“存在但为空”
 if [[ -e "$ENV_FILE" ]]; then cp -a "$ENV_FILE" "$BACKUP/s5m-server.env"; else : > "$BACKUP/env-file-absent"; fi
 if [[ -e "$OLD_ENV_FILE" ]]; then cp -a "$OLD_ENV_FILE" "$BACKUP/legacy-server.env"; else : > "$BACKUP/legacy-env-absent"; fi
@@ -296,10 +304,21 @@ if [[ -f /etc/systemd/system/s5m-server.service ]]; then
 else
   : > "$BACKUP/server-service-absent"
 fi
-if [[ -f /etc/systemd/system/mihomo.service ]]; then  cp -a /etc/systemd/system/mihomo.service "$BACKUP/mihomo.service"
+if [[ -f /etc/systemd/system/mihomo.service ]]; then cp -a /etc/systemd/system/mihomo.service "$BACKUP/mihomo.service"
 else
   : > "$BACKUP/mihomo-service-absent"
 fi
+if [[ "$MIHOMO_EXISTED_BEFORE_INSTALL" -eq 1 ]]; then
+  cp -a "$MIHOMO_BIN" "$BACKUP/mihomo.bin"
+else
+  : > "$BACKUP/mihomo-bin-absent"
+fi
+MIHOMO_HASH_FILE="/opt/S5M-Server/.mihomo-config.md5"
+if [[ -f "$MIHOMO_HASH_FILE" ]]; then cp -a "$MIHOMO_HASH_FILE" "$BACKUP/mihomo-config.md5"; else : > "$BACKUP/mihomo-hash-absent"; fi
+if systemctl is-enabled --quiet mihomo 2>/dev/null; then : > "$BACKUP/mihomo-enabled"; else : > "$BACKUP/mihomo-disabled"; fi
+if systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then : > "$BACKUP/server-enabled"; else : > "$BACKUP/server-disabled"; fi
+if systemctl is-active --quiet mihomo 2>/dev/null; then : > "$BACKUP/mihomo-active"; else : > "$BACKUP/mihomo-inactive"; fi
+if systemctl is-active --quiet "$UNIT" 2>/dev/null; then : > "$BACKUP/server-active"; else : > "$BACKUP/server-inactive"; fi
 
 # 首次配置 HTTPS 前也备份 nginx 站点文件
 if [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 ]]; then
@@ -316,7 +335,12 @@ if [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 ]]; then
 fi
 
 # 回滚函数：快照存在后任何失败都调用它
+ROLLBACK_READY=0
+ROLLBACK_DONE=0
 rollback_install() {
+  [[ "$ROLLBACK_DONE" -eq 1 ]] && return 0
+  ROLLBACK_DONE=1
+  trap - ERR
   local reason="${1:-unknown failure}"
   echo "❌ 安装失败：${reason}，正在恢复安装前的文件和服务配置..." >&2
   systemctl stop "$UNIT" 2>/dev/null || true
@@ -335,6 +359,19 @@ rollback_install() {
     cp -a "$BACKUP/mihomo.service" /etc/systemd/system/mihomo.service
   elif [[ -f "$BACKUP/mihomo-service-absent" ]]; then
     rm -f /etc/systemd/system/mihomo.service
+  fi
+  if [[ -f "$BACKUP/mihomo.bin" ]]; then
+    install -o root -g root -m 0755 "$BACKUP/mihomo.bin" "$MIHOMO_BIN"
+  elif [[ -f "$BACKUP/mihomo-bin-absent" ]]; then
+    rm -f "$MIHOMO_BIN"
+    rmdir "$MIHOMO_DIR" 2>/dev/null || true
+  fi
+  if [[ -f "$BACKUP/mihomo-config.md5" ]]; then cp -a "$BACKUP/mihomo-config.md5" "$MIHOMO_HASH_FILE"; elif [[ -f "$BACKUP/mihomo-hash-absent" ]]; then rm -f "$MIHOMO_HASH_FILE"; fi
+  if [[ -f "$BACKUP/s5m.db" ]]; then
+    install -o s5m-server -g s5m-server -m 0600 "$BACKUP/s5m.db" "$DB_DIR/s5m.db"
+    rm -f "$DB_DIR/s5m.db-wal" "$DB_DIR/s5m.db-shm"
+  elif [[ -f "$BACKUP/database-absent" ]]; then
+    rm -f "$DB_DIR/s5m.db" "$DB_DIR/s5m.db-wal" "$DB_DIR/s5m.db-shm"
   fi
   if [[ -f "$BACKUP/s5m-server.env" ]]; then cp -a "$BACKUP/s5m-server.env" "$ENV_FILE"; elif [[ -f "$BACKUP/env-file-absent" ]]; then rm -f "$ENV_FILE"; fi
   if [[ -f "$BACKUP/legacy-server.env" ]]; then install -d -m 0750 "$(dirname "$OLD_ENV_FILE")"; cp -a "$BACKUP/legacy-server.env" "$OLD_ENV_FILE"; elif [[ -f "$BACKUP/legacy-env-absent" ]]; then rm -f "$OLD_ENV_FILE"; fi
@@ -357,12 +394,14 @@ rollback_install() {
     fi
   fi
   systemctl daemon-reload
-  if [[ -f "$BACKUP/mihomo.service" ]]; then
+  if [[ -f "$BACKUP/mihomo-enabled" ]]; then systemctl enable mihomo 2>/dev/null || true; else systemctl disable mihomo 2>/dev/null || true; fi
+  if [[ -f "$BACKUP/server-enabled" ]]; then systemctl enable "$UNIT" 2>/dev/null || true; else systemctl disable "$UNIT" 2>/dev/null || true; fi
+  if [[ -f "$BACKUP/mihomo-active" && -f "$BACKUP/mihomo.service" ]]; then
     systemctl restart mihomo || echo "❌ Mihomo 回滚启动失败，请检查 journalctl -u mihomo" >&2
   else
     systemctl stop mihomo 2>/dev/null || true
   fi
-  if [[ -f "$BACKUP/S5M-Server.bin" ]]; then
+  if [[ -f "$BACKUP/server-active" && -f "$BACKUP/S5M-Server.bin" && -f "$BACKUP/s5m-server.service" ]]; then
     systemctl start "$UNIT" || echo "❌ 旧版 S5M-Server 启动失败，请检查 journalctl -u $UNIT" >&2
   else
     systemctl stop "$UNIT" 2>/dev/null || true
@@ -370,6 +409,19 @@ rollback_install() {
   # 提示数据库备份位置，供人工恢复
   echo "ℹ️ 安装前数据库备份保留在：$BACKUP/s5m.db（若存在），供人工恢复使用。" >&2
 }
+
+on_install_error() {
+  local status=$?
+  local line="${BASH_LINENO[0]:-unknown}"
+  if [[ "$ROLLBACK_READY" -eq 1 && "$ROLLBACK_DONE" -eq 0 ]]; then
+    trap - ERR
+    rollback_install "未处理的安装命令失败（退出码 $status，脚本行 $line）"
+  fi
+  exit "$status"
+}
+
+ROLLBACK_READY=1
+trap on_install_error ERR
 
 # 迁移旧路径 env 文件
 if [[ -f "$OLD_ENV_FILE" && ! -f "$ENV_FILE" ]]; then mv "$OLD_ENV_FILE" "$ENV_FILE"
@@ -519,18 +571,21 @@ cp -a "$SRC/." "$BUILD_DIR/"
 # 拉依赖、完整测试并编译；任何一步失败都不触碰现有主控二进制。
 cd "$BUILD_DIR"
 if ! go mod download; then
-  echo "❌ go mod download 失败（旧版本未受影响），备份在 $BACKUP" >&2
+  rollback_install "Go 依赖下载失败"
+  echo "❌ go mod download 失败，已尝试恢复安装前状态；备份在 $BACKUP" >&2
   exit 1
 fi
 if [[ "${SKIP_TEST:-0}" != "1" ]]; then
   if ! go test ./...; then
-    echo "❌ go test 失败（旧二进制未替换，服务仍在运行），备份在 $BACKUP" >&2
+    rollback_install "Go 单元测试失败"
+    echo "❌ go test 失败，已尝试恢复安装前状态；备份在 $BACKUP" >&2
     echo "   如需跳过测试重新安装，可使用：SKIP_TEST=1 sudo -E bash scripts/install.sh" >&2
     exit 1
   fi
 fi
 if ! go build -trimpath -ldflags='-s -w' -o "$BUILD_DIR/S5M-Server.new" .; then
-  echo "❌ go build 失败（旧版本未受影响，服务仍在运行），备份在 $BACKUP" >&2
+  rollback_install "S5M-Server 编译失败"
+  echo "❌ go build 失败，已尝试恢复安装前状态；备份在 $BACKUP" >&2
   exit 1
 fi
 install -o root -g root -m 0755 "$BUILD_DIR/S5M-Server.new" "$BIN"
@@ -666,11 +721,16 @@ NGINXEOF
 elif [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 1 ]]; then
   # 已有 HTTPS：只做健康检查，不改配置
   if ! curl -fsS --max-time 10 "https://$S5M_DOMAIN/api/v1/health" >/tmp/s5m-server-https-health.json; then
-    echo "❌ 检测到现有 HTTPS 配置，但 HTTPS 健康检查失败；为避免覆盖现有配置，安装器停止。请检查 Nginx/证书/服务状态。" >&2
+    echo "❌ 检测到现有 HTTPS 配置，但 HTTPS 健康检查失败；正在回滚本次主控升级。请检查 Nginx/证书/服务状态。" >&2
+    rollback_install "现有 HTTPS 端点健康检查失败"
     exit 1
   fi
   echo "✅ 复用现有 HTTPS 配置，不重新签发证书： https://$S5M_DOMAIN"
 fi
+
+# 安装全部验证成功后，关闭自动回滚，保留当前新版本。
+ROLLBACK_READY=0
+trap - ERR
 
 # 成功输出
 echo "✅ S5M-Server 安装成功"

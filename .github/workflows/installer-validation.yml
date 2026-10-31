@@ -61,7 +61,30 @@ jobs:
           assert "docker run" not in installer.lower()
           assert "docker compose" not in installer.lower()
           assert "docker-compose" not in installer.lower()
-          print("Native S5M-Server installer contract verified.")
+
+          # Upgrade rollback must include every mutable runtime dependency.
+          assert 'MIHOMO_EXISTED_BEFORE_INSTALL=0' in installer
+          assert '"$BACKUP/mihomo.bin"' in installer
+          assert '"$BACKUP/mihomo-bin-absent"' in installer
+          assert 'PRAGMA quick_check;' in installer
+          assert '"$BACKUP/s5m.db"' in installer
+          assert 'rm -f "$DB_DIR/s5m.db-wal" "$DB_DIR/s5m.db-shm"' in installer
+          assert '"$BACKUP/mihomo-config.md5"' in installer
+          assert 'rollback_install "Go 依赖下载失败"' in installer
+          assert 'rollback_install "Go 单元测试失败"' in installer
+          assert 'rollback_install "S5M-Server 编译失败"' in installer
+          assert 'rollback_install "现有 HTTPS 端点健康检查失败"' in installer
+          assert 'systemctl enable mihomo' in installer
+          assert 'systemctl enable "$UNIT"' in installer
+          assert '"$BACKUP/mihomo-active"' in installer
+          assert '"$BACKUP/server-active"' in installer
+          assert 'systemctl restart mihomo || echo' in installer
+          assert 'systemctl start "$UNIT" || echo' in installer
+          assert 'trap on_install_error ERR' in installer
+          assert 'ROLLBACK_READY=1' in installer
+          assert 'ROLLBACK_READY=0' in installer
+          assert 'trap - ERR' in installer
+          print("Native S5M-Server installer and rollback contract verified.")
           PY
 
       - name: Install ShellCheck
