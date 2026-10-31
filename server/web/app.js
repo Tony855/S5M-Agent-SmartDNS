@@ -52,6 +52,11 @@ createApp({
     const configDnsNameservers = ref('');
     const selectedConfigNode = ref('');
     const savingConfig = ref(false);
+    const smartdnsYaml = ref('');
+    const loadingSmartDNS = ref(false);
+    const applyingSmartDNS = ref(false);
+    const smartdnsResult = ref('');
+    const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
     let nodeConfigLoadGeneration = 0;
     const templateYaml = ref('');
     const templateNote = ref('');
@@ -1325,6 +1330,50 @@ createApp({
       } finally { savingConfig.value = false; }
     };
 
+    const loadSmartDNSConfig = async () => {
+      const code = String(selectedConfigNode.value || '').trim();
+      if (!code || loadingSmartDNS.value) return;
+      loadingSmartDNS.value = true;
+      try {
+        const agents = await sendBrowserWSControl({ type: 'agents.list.get' });
+        const item = (agents.data || {})[code] || {};
+        const status = item.status || {};
+        smartdnsStatus.value = {
+          available: status.smartdns_available === true,
+          running: status.smartdns_running === true,
+          dnsHealthy: status.smartdns_dns_healthy === true,
+          version: String(status.smartdns_version || ''),
+          configHash: String(status.smartdns_config_sha256 || ''),
+          lastError: String(status.smartdns_last_error || '')
+        };
+        const saved = await sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code });
+        smartdnsYaml.value = String((saved.data || {}).config || '');
+        smartdnsResult.value = smartdnsYaml.value ? '已加载主控保存的节点配置' : '主控尚无该节点配置副本；请粘贴配置后提交';
+      } catch (e) {
+        smartdnsResult.value = '读取失败：' + (e.message || String(e));
+        showMsg(smartdnsResult.value, 'error');
+      } finally { loadingSmartDNS.value = false; }
+    };
+
+    const applySmartDNSConfig = async () => {
+      const code = String(selectedConfigNode.value || '').trim();
+      const config = String(smartdnsYaml.value || '');
+      if (!code) return showMsg('请先选择 Agent 节点', 'warning');
+      if (!config.trim()) return showMsg('SmartDNS 配置不能为空', 'warning');
+      if (applyingSmartDNS.value) return;
+      if (!confirm('确认将 SmartDNS 配置发送到节点 ' + code + ' 并应用？此操作只影响 SmartDNS。')) return;
+      applyingSmartDNS.value = true;
+      try {
+        const result = await sendBrowserWSControl({ type: 'smartdns.config.apply', machine_code: code, config });
+        if (result.ok === false) throw new Error(result.error || '主控拒绝 SmartDNS 配置命令');
+        smartdnsResult.value = result.message || '已排队，等待 Agent 应用回执';
+        showMsg(smartdnsResult.value, 'success');
+      } catch (e) {
+        smartdnsResult.value = '提交失败：' + (e.message || String(e));
+        showMsg(smartdnsResult.value, 'error');
+      } finally { applyingSmartDNS.value = false; }
+    };
+
     const safeCopy = async (text) => {
       try {
         if (navigator.clipboard && window.isSecureContext) {
@@ -1404,6 +1453,7 @@ createApp({
       retryingNodeConfigSync, retryNodeConfigSync,
       configYaml, configTunEnabled, configDnsEnabled, configDnsNameservers, syncConfigQuickSettingsFromYaml, applyConfigQuickSettings,
       selectedConfigNode, savingConfig, publishing, updatingKernel,
+      smartdnsYaml, loadingSmartDNS, applyingSmartDNS, smartdnsResult, smartdnsStatus, loadSmartDNSConfig, applySmartDNSConfig,
       templateYaml, templateNote, templateVersions, templateCurrentVersion, templateNodes,
       selectedTemplateNode, selectedTemplateVersion, savingTemplate, validatingTemplate, publishingTemplate, applyingTemplate, deletingTemplateVersion,
       loadMihomoTemplate, loadTemplateNodeStatus, saveMihomoTemplate, validateMihomoTemplateRuntime, publishMihomoTemplate, deleteMihomoTemplateVersion, applyMihomoTemplate, rollbackMihomoTemplate,
