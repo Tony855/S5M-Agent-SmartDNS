@@ -52,7 +52,7 @@ func TestAgentCommandAckConcurrentHTTPAndWebSocketAreIdempotent(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		wsErr = app.ackAgentWSCommand(code, "cmd-race", "success", "websocket")
+		wsErr = app.ackAgentWSCommand(code, "cmd-race", "success", "websocket", "")
 	}()
 	wg.Wait()
 
