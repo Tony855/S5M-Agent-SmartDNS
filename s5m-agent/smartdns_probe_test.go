@@ -14,6 +14,38 @@ import (
 	"time"
 )
 
+func TestBoundedDiagnosticBufferCapsOutput(t *testing.T) {
+	var output boundedDiagnosticBuffer
+	large := bytes.Repeat([]byte("x"), smartDNSPreflightOutputLimit+1024)
+	written, err := output.Write(large)
+	if err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if written != len(large) {
+		t.Fatalf("Write consumed %d bytes, want %d", written, len(large))
+	}
+	if got := len(output.String()); got != smartDNSPreflightOutputLimit {
+		t.Fatalf("buffer length = %d, want %d", got, smartDNSPreflightOutputLimit)
+	}
+	if !output.Truncated() {
+		t.Fatal("buffer did not report truncated output")
+	}
+}
+
+func TestBoundedDiagnosticBufferAcceptsExactLimit(t *testing.T) {
+	var output boundedDiagnosticBuffer
+	data := bytes.Repeat([]byte("a"), smartDNSPreflightOutputLimit)
+	if _, err := output.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if output.Truncated() {
+		t.Fatal("exact-limit output must not be marked truncated")
+	}
+	if output.String() != string(data) {
+		t.Fatal("buffer content differs from input")
+	}
+}
+
 func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 	tests := []struct {
 		name        string
