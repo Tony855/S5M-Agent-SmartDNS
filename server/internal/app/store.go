@@ -195,6 +195,23 @@ func (s *Store) CreateSettingIfAbsent(key, value string) (bool, error) {
 	return n == 1, nil
 }
 
+// QueueAgentSmartDNSCommand commits the controller copy and pending command
+// in one transaction so neither can be left half-updated.
+func (s *Store) QueueAgentSmartDNSCommand(machineCode, commandJSON, config string) error {
+	tx, err := s.db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_config_"+machineCode, config); err != nil {
+		return fmt.Errorf("save SmartDNS config copy: %w", err)
+	}
+	result, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, "agent_command_"+machineCode, commandJSON)
+	if err != nil { return err }
+	created, err := result.RowsAffected()
+	if err != nil { return err }
+	if created != 1 { return fmt.Errorf("pending command already exists") }
+	return tx.Commit()
+}
+
 func (s *Store) UpdateSettings(updates map[string]string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
