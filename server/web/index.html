@@ -385,76 +385,24 @@
           <p style="color:var(--sub);font-size:12px;margin-top:10px;">每个机器码独立保存。保存后只有对应节点会获取这份 YAML；未保存配置的节点不会回退到全局 YAML。</p>
         </div>
         <div class="card-panel">
-          <div class="card-title">Mihomo 独立配置模板与版本</div>
-          <p class="import-note">保存草稿不会发布；发布新版本不会自动覆盖任何节点。只有明确选择节点、模板版本并确认后，才会备份并应用到所选节点。</p>
+          <div class="card-title">Agent SmartDNS 配置与运行状态</div>
+          <p class="import-note">SmartDNS 配置通过主控 WebSocket 下发到所选 Agent。选择节点后加载主控保存的节点配置；提交后排队执行，最终结果以 Agent 命令回执及状态上报为准。</p>
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-            <el-tag type="info">当前发布版本：v{{ templateCurrentVersion || 0 }}</el-tag>
-            <el-button @click="loadMihomoTemplate">刷新模板</el-button>
-            <el-button @click="loadTemplateNodeStatus">刷新节点版本状态</el-button>
+            <el-tag :type="smartdnsStatus.available ? 'success' : 'info'">程序：{{ smartdnsStatus.version || (smartdnsStatus.available ? '已安装' : '未知/未上报') }}</el-tag>
+            <el-tag :type="smartdnsStatus.running ? 'success' : 'info'">服务：{{ smartdnsStatus.running ? '运行中' : '未知/未运行' }}</el-tag>
+            <el-tag :type="smartdnsStatus.dnsHealthy ? 'success' : 'warning'">DNS：{{ smartdnsStatus.dnsHealthy ? '健康' : '未知/未通过' }}</el-tag>
           </div>
-          <el-input v-model="templateYaml" type="textarea" :rows="12" placeholder="在这里编辑 Mihomo 模板 YAML；校验通过后保存草稿并发布版本。"></el-input>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+            <el-select v-model="selectedConfigNode" filterable placeholder="选择 Agent 节点" style="flex:1;min-width:190px;">
+              <el-option v-for="node in agentEntries" :key="node.code" :label="machineCodeOptionLabel(node.code)" :value="node.code"></el-option>
+            </el-select>
+            <el-button @click="loadSmartDNSConfig" :disabled="!selectedConfigNode" :loading="loadingSmartDNS">刷新 SmartDNS 状态/配置</el-button>
+          </div>
+          <el-input v-model="smartdnsYaml" type="textarea" :rows="14" placeholder="选择节点后加载 SmartDNS 配置；仅允许受控的 SmartDNS 配置命令。"></el-input>
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
-            <el-input v-model="templateNote" placeholder="版本说明（例如：调整 DNS 与 TUN）" style="flex:1;min-width:220px;"></el-input>
-            <el-button :loading="validatingTemplate" @click="validateMihomoTemplateRuntime">真实 Mihomo 内核校验</el-button>
-            <el-button :loading="savingTemplate" @click="saveMihomoTemplate">校验并保存草稿</el-button>
-            <el-button type="primary" :loading="publishingTemplate" @click="publishMihomoTemplate">发布新版本</el-button>
+            <el-button type="primary" :loading="applyingSmartDNS" :disabled="!selectedConfigNode || !smartdnsYaml.trim()" @click="applySmartDNSConfig">校验并保存/应用配置</el-button>
           </div>
-          <div style="margin-top:16px;font-weight:600;">模板历史版本</div>
-          <div class="template-table-wrap" style="width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:8px;">
-          <el-table :data="templateVersions" size="small" style="width:100%;min-width:760px;">
-            <el-table-column prop="version" label="版本" width="82">
-              <template #default="scope">v{{ scope.row.version }}</template>
-            </el-table-column>
-            <el-table-column prop="note" label="版本说明" min-width="130"></el-table-column>
-            <el-table-column prop="created_at" label="发布时间" min-width="160"></el-table-column>
-            <el-table-column prop="sha256" label="SHA-256" min-width="180"></el-table-column>
-            <el-table-column label="操作" width="100" fixed="right">
-              <template #default="scope">
-                <el-button
-                  size="small"
-                  type="danger"
-                  plain
-                  :loading="deletingTemplateVersion === scope.row.version"
-                  :disabled="scope.row.version === templateCurrentVersion || deletingTemplateVersion !== 0"
-                  @click="deleteMihomoTemplateVersion(scope.row.version)"
-                >删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          </div>
-          <div style="margin-top:18px;font-weight:600;">节点模板版本状态</div>
-          <div class="template-table-wrap" style="width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:8px;">
-          <el-table :data="templateNodes" size="small" style="width:100%;min-width:620px;">
-            <el-table-column prop="machine_code" label="机器码" min-width="150"></el-table-column>
-            <el-table-column label="绑定版本" width="100">
-              <template #default="scope">{{ scope.row.source === 'independent' ? '独立配置' : (scope.row.template_version ? 'v' + scope.row.template_version : '未追踪') }}</template>
-            </el-table-column>
-            <el-table-column label="最新版本" width="100">
-              <template #default="scope">v{{ scope.row.latest_version || 0 }}</template>
-            </el-table-column>
-            <el-table-column label="状态" width="120">
-              <template #default="scope">
-                <el-tag v-if="scope.row.status === 'current'" type="success">已同步</el-tag>
-                <el-tag v-else-if="scope.row.status === 'outdated'" type="warning">待升级</el-tag>
-                <el-tag v-else-if="scope.row.status === 'drifted'" type="danger">配置有差异</el-tag>
-                <el-tag v-else-if="scope.row.status === 'independent'">独立配置</el-tag>
-                <el-tag v-else type="info">未追踪</el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-          </div>
-          <div style="margin-top:18px;font-weight:600;">显式应用模板到节点</div>
-          <p class="import-note">应用会替换所选节点的完整 YAML，并先保存原配置快照。请确认节点和版本后再执行。</p>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
-            <el-select v-model="selectedTemplateNode" filterable placeholder="选择目标节点" style="flex:1;min-width:180px;">
-              <el-option v-for="node in templateNodes" :key="node.machine_code" :label="node.machine_code + '（' + (node.status === 'untracked' ? '未追踪' : node.status) + '）'" :value="node.machine_code"></el-option>
-            </el-select>
-            <el-select v-model="selectedTemplateVersion" placeholder="选择模板版本" style="width:160px;">
-              <el-option v-for="version in templateVersions" :key="version.version" :label="'模板 v' + version.version" :value="version.version"></el-option>
-            </el-select>
-            <el-button type="danger" :loading="applyingTemplate" :disabled="!selectedTemplateNode || !selectedTemplateVersion" @click="applyMihomoTemplate">确认应用到所选节点</el-button>
-            <el-button type="warning" :loading="applyingTemplate" :disabled="!selectedTemplateNode" @click="rollbackMihomoTemplate">恢复最近备份</el-button>
-          </div>
+          <p class="import-note" style="margin-top:10px;">每个机器码独立保存。应用只调用 Agent SmartDNS 配置命令，不会重启 Mihomo。配置哈希：{{ smartdnsStatus.configHash || '未知' }}；最近错误：{{ smartdnsStatus.lastError || '无' }}；操作结果：{{ smartdnsResult || '尚未提交' }}</p>
         </div>
         <div class="card-panel">
           <div class="card-title">客户端订阅链接</div>
