@@ -133,6 +133,80 @@ if ! apt-get install -y -qq "${apt_packages[@]}" > /dev/null; then
   exit 1
 fi
 
+# ===== 同步并安装独立 SmartDNS Agent 源码 =====
+# 目标目录固定为 /root/S5M-SmartDNS；只允许从官方仓库 main 分支更新。
+SMARTDNS_REPO="https://github.com/Tony855/S5M-Agent-SmartDNS.git"
+SMARTDNS_BRANCH="main"
+SMARTDNS_DIR="/root/S5M-SmartDNS"
+SMARTDNS_PARENT="/root"
+SMARTDNS_TMP=""
+
+cleanup_smartdns_tmp() {
+  if [[ -n "${SMARTDNS_TMP:-}" && -d "$SMARTDNS_TMP" ]]; then
+    rm -rf -- "$SMARTDNS_TMP"
+  fi
+}
+trap cleanup_smartdns_tmp EXIT
+
+ensure_smartdns_source() {
+  echo "ℹ️ 正在同步 SmartDNS Agent 最新源码..."
+  if [[ ! -e "$SMARTDNS_DIR" ]]; then
+    SMARTDNS_TMP="$(mktemp -d "$SMARTDNS_PARENT/.S5M-SmartDNS.XXXXXX")"
+    rmdir "$SMARTDNS_TMP"
+    if ! git clone --depth 1 --branch "$SMARTDNS_BRANCH" "$SMARTDNS_REPO" "$SMARTDNS_TMP"; then
+      echo "❌ SmartDNS Agent 仓库克隆失败，目标目录未创建。" >&2
+      return 1
+    fi
+    mv "$SMARTDNS_TMP" "$SMARTDNS_DIR"
+    SMARTDNS_TMP=""
+  else
+    if [[ ! -d "$SMARTDNS_DIR/.git" ]] || ! git -C "$SMARTDNS_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "❌ $SMARTDNS_DIR 已存在但不是 Git 工作目录；为避免覆盖现有文件，停止同步。" >&2
+      return 1
+    fi
+
+    local current_remote current_branch
+    current_remote="$(git -C "$SMARTDNS_DIR" remote get-url origin 2>/dev/null || true)"
+    current_remote="${current_remote%.git}"
+    if [[ "$current_remote" != "https://github.com/Tony855/S5M-Agent-SmartDNS" && "$current_remote" != "git@github.com:Tony855/S5M-Agent-SmartDNS" ]]; then
+      echo "❌ $SMARTDNS_DIR 的 origin 不是预期仓库：${current_remote:-未配置}" >&2
+      echo "   为避免更新错误项目，停止同步。" >&2
+      return 1
+    fi
+
+    current_branch="$(git -C "$SMARTDNS_DIR" branch --show-current)"
+    if [[ "$current_branch" != "$SMARTDNS_BRANCH" ]]; then
+      echo "❌ $SMARTDNS_DIR 当前分支为 ${current_branch:-detached}，预期为 $SMARTDNS_BRANCH；未执行覆盖更新。" >&2
+      return 1
+    fi
+    if [[ -n "$(git -C "$SMARTDNS_DIR" status --porcelain)" ]]; then
+      echo "❌ $SMARTDNS_DIR 存在未提交的本地修改；为避免丢失，停止更新。" >&2
+      echo "   请先提交/备份本地修改，再重新运行安装脚本。" >&2
+      return 1
+    fi
+
+    if ! git -C "$SMARTDNS_DIR" fetch --prune origin "$SMARTDNS_BRANCH"; then
+      echo "❌ 获取 SmartDNS Agent 远程最新代码失败。" >&2
+      return 1
+    fi
+    if ! git -C "$SMARTDNS_DIR" merge-base --is-ancestor HEAD FETCH_HEAD; then
+      echo "❌ 本地 $SMARTDNS_DIR 与远程 main 已分叉；拒绝自动重置，以免丢失本地提交。" >&2
+      return 1
+    fi
+    if ! git -C "$SMARTDNS_DIR" merge --ff-only FETCH_HEAD; then
+      echo "❌ SmartDNS Agent 快进更新失败。" >&2
+      return 1
+    fi
+  fi
+
+  chown -R root:root "$SMARTDNS_DIR"
+  echo "✅ SmartDNS Agent 源码已同步：$SMARTDNS_DIR"
+  echo "   分支：$(git -C "$SMARTDNS_DIR" branch --show-current)"
+  echo "   提交：$(git -C "$SMARTDNS_DIR" rev-parse --short HEAD)"
+}
+
+ensure_smartdns_source
+
 # 判断 S5M 后端监听端口
 PORT_TO_USE=""
 if [[ -n "$S5M_DOMAIN" ]]; then
