@@ -1,6 +1,6 @@
 # S5M 主控与 Agent 安装、配置和编译部署指南
 
-本文对应仓库 `Tony855/S5M-Master` 的 `main` 分支。主控服务在 Debian/Ubuntu 上原生安装；Agent 可作为 Docker 容器部署。请先固定使用同一发布版本/提交，避免主控与 Agent API 不匹配。
+本文对应仓库 `Tony855/S5M-Agent-SmartDNS` 的 `main` 分支。主控服务在 Debian/Ubuntu 上原生安装；Agent 可作为 Docker 容器部署。请先固定使用同一发布版本/提交，避免主控与 Agent API 不匹配。
 
 ## 1. 架构与端口
 
@@ -23,8 +23,8 @@
 ```bash
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl git
-git clone https://github.com/Tony855/S5M-Master.git
-cd S5M-Master
+git clone https://github.com/Tony855/S5M-Agent-SmartDNS.git
+cd S5M-Agent-SmartDNS
 sudo bash scripts/install.sh
 ```
 
@@ -33,7 +33,7 @@ sudo bash scripts/install.sh
 如果主控需要通过公网供 Agent 绑定，建议使用域名并在安装时自动申请 Let's Encrypt 证书。先将域名的 A/AAAA 记录指向主控服务器，并确保公网 TCP 80、443 未被安全组/防火墙拦截：
 
 ```bash
-cd S5M-Master
+cd S5M-Agent-SmartDNS
 sudo env S5M_DOMAIN=panel.example.com S5M_EMAIL=admin@example.com bash scripts/install.sh
 ```
 
@@ -108,7 +108,7 @@ sudo systemctl is-enabled s5m-server mihomo
 安装 Go 后，从仓库根目录运行：
 
 ```bash
-cd S5M-Master/s5m-agent
+cd S5M-Agent-SmartDNS/s5m-agent
 go mod download
 gofmt -w .
 go test -race -count=1 ./...
@@ -124,7 +124,7 @@ go build -trimpath -o ./s5m-agent .
 在仓库根目录执行：
 
 ```bash
-cd S5M-Master/s5m-agent
+cd S5M-Agent-SmartDNS/s5m-agent
 go mod download
 go test ./...
 go vet ./...
@@ -175,7 +175,7 @@ docker run --rm --platform linux/arm64 --entrypoint /bin/sh s5m-agent:local-arm6
 
 `S5M CI` 工作流负责脚本语法、Go 格式、依赖、测试、静态检查和 amd64/arm64 交叉编译。
 
-`S5M Agent multi-arch images` 工作流负责构建完整 Alpine 镜像、验证 Agent/Mihomo/tini/健康检查脚本，并导出两个架构的镜像 tar 归档和 SHA256 文件。**当前工作流把归档作为 GitHub Actions Artifacts 上传，不再推送 GHCR。** 在 GitHub 仓库的 [Actions 页面](https://github.com/Tony855/S5M-Master/actions/workflows/agent-images.yml)选择对应运行记录，确认两个架构 job 成功后再下载 Artifacts。详细操作见 [部署教程](DEPLOYMENT_GUIDE_CN.md)。
+`S5M Agent multi-arch images` 工作流负责构建完整 Alpine 镜像、验证 Agent/Mihomo/tini/健康检查脚本，并导出两个架构的镜像 tar 归档和 SHA256 文件。**当前工作流把归档作为 GitHub Actions Artifacts 上传，不再推送 GHCR。** 在 GitHub 仓库的 [Actions 页面](https://github.com/Tony855/S5M-Agent-SmartDNS/actions/workflows/agent-images.yml)选择对应运行记录，确认两个架构 job 成功后再下载 Artifacts。详细操作见 [部署教程](DEPLOYMENT_GUIDE_CN.md)。
 
 稳定发布通过 `s5m-agent-vX.Y.Z` 标签或 Actions 手动触发并填写语义化版本号（`X.Y.Z`）进行。只有确认 CI、两个架构镜像构建和 smoke test 全部通过后，才应将发布包用于生产环境。
 
