@@ -276,6 +276,11 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/usr/sbin/smartdns", "-f", "-x", "-p", "-", "-c", tmpPath)
+	// Capture both streams so configuration parser errors are actionable rather
+	// than being reduced to the generic "exit status 1" from cmd.Wait().
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	output := make(chan error, 1)
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("SmartDNS 配置预检启动失败: %w", err)
@@ -284,7 +289,7 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	select {
 	case err := <-output:
 		if err != nil {
-			return "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(err.Error()))
+			diagnostic := strings.TrimSpace(stdout.String() + "\\n" + stderr.String() + "\\n" + err.Error())\n\t\t\treturn "", fmt.Errorf("SmartDNS 配置预检失败: %s", safeSmartDNSDiagnostic(diagnostic))
 		}
 		return "", fmt.Errorf("SmartDNS 配置预检进程意外退出")
 	case <-time.After(350 * time.Millisecond):
