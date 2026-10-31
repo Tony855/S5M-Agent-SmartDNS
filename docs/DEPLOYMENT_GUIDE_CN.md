@@ -32,8 +32,8 @@
 ```bash
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl git
-git clone https://github.com/Tony855/S5M-Master.git
-cd S5M-Master
+git clone https://github.com/Tony855/S5M-Agent-SmartDNS.git
+cd S5M-Agent-SmartDNS
 sudo bash scripts/install.sh
 ```
 
@@ -60,7 +60,7 @@ sudo journalctl -u mihomo -n 100 --no-pager
 
 ## 4. 从 GitHub Actions 下载完整镜像包
 
-1. 打开仓库的 [Actions 工作流](https://github.com/Tony855/S5M-Master/actions/workflows/agent-images.yml)。
+1. 打开仓库的 [Actions 工作流](https://github.com/Tony855/S5M-Agent-SmartDNS/actions/workflows/agent-images.yml)。
 2. 选择最近一次对应当前代码提交的 **S5M Agent multi-arch images** 工作流运行记录。
 3. 确认 `Build and publish multi-arch image`（amd64）和 `Build ARM64 RouterOS archive` 两个 job 都成功；各自的 smoke test 必须成功。
 4. 在该运行记录的 **Artifacts** 区域分别下载：
