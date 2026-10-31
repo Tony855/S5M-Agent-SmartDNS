@@ -313,6 +313,13 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
 	}
 	if alreadyApplied {
+		// A matching file is not sufficient evidence of a successful replay:
+		// the daemon may have crashed after the first apply but before its ACK
+		// was persisted. Only acknowledge the duplicate when UDP and TCP DNS
+		// are both answering successfully.
+		if !probeSmartDNSDNS() {
+			return "", fmt.Errorf("SmartDNS 配置文件已是目标版本，但 UDP/TCP DNS 健康检查失败")
+		}
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		return hex.EncodeToString(sum[:]), nil
 	}
