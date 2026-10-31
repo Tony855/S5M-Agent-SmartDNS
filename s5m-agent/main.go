@@ -1336,10 +1336,15 @@ func processAgentCommandWebSocket(cfg Config) error {
 	}
 	cmd := *envelope.Command
 	var runErr error
+	var data []byte
 	message := ""
 	switch cmd.Type {
 	case "update_mihomo":
 		message, runErr = updateMihomoKernel(cmd)
+	case "read_smartdns_config":
+		var data []byte
+		data, runErr = readSmartDNSConfig()
+		if runErr == nil { message = "已读取 Agent 当前 SmartDNS 配置" }
 	case "configure_smartdns":
 		var configHash string
 		configHash, runErr = writeSmartDNSConfig([]byte(cmd.Config))
@@ -1360,7 +1365,7 @@ func processAgentCommandWebSocket(cfg Config) error {
 	// The command may take longer than the initial connection deadlines (for
 	// example, downloading and restarting Mihomo). Refresh the deadline for the
 	// ACK write instead of reusing the deadline set before command execution.
-	if err := writeAgentWSJSON(conn, map[string]string{"type": "command.ack", "id": cmd.ID, "command_status": status, "message": message}); err != nil {
+	if err := writeAgentWSJSON(conn, map[string]any{"type": "command.ack", "id": cmd.ID, "command_status": status, "message": message, "config": string(data)}); err != nil {
 		return fmt.Errorf("命令已执行但 WebSocket ACK 发送失败，主控端可能重新投递: %w", err)
 	}
 	var ack struct {
