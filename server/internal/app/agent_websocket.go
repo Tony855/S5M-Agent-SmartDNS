@@ -2,11 +2,12 @@ package app
 
 import (
 	"context"
-	"errors"
-	"database/sql"
+	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -562,6 +563,14 @@ func validateAgentWSStatus(status map[string]any) error {
 	return nil
 }
 
+func newAgentCommandID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("生成 Agent 命令 ID 失败: %w", err)
+	}
+	return hex.EncodeToString(id[:]), nil
+}
+
 func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) error {
 	machineCode = strings.TrimSpace(machineCode)
 	version = strings.TrimSpace(version)
@@ -571,7 +580,11 @@ func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) err
 		!regexp.MustCompile("^[a-f0-9]{64}$").MatchString(sha256sum) {
 		return fmt.Errorf("机器码、版本号或 SHA-256 格式无效")
 	}
-	command := map[string]string{"id": fmt.Sprintf("%d", time.Now().UnixNano()), "type": "update_mihomo", "version": version, "sha256": sha256sum}
+	commandID, err := newAgentCommandID()
+	if err != nil {
+		return err
+	}
+	command := map[string]string{"id": commandID, "type": "update_mihomo", "version": version, "sha256": sha256sum}
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return fmt.Errorf("生成内核更新命令失败")
@@ -589,10 +602,14 @@ func (a *App) queueAgentMihomoUpdate(machineCode, version, sha256sum string) err
 func (a *App) queueAgentSmartDNSRead(machineCode string) error {
 	machineCode = strings.TrimSpace(machineCode)
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) { return fmt.Errorf("机器码格式无效") }
-	command, marshalErr := json.Marshal(map[string]string{"id":fmt.Sprintf("%d",time.Now().UnixNano()),"type":"read_smartdns_config"})
+	commandID, err := newAgentCommandID()
+	if err != nil {
+		return err
+	}
+	command, marshalErr := json.Marshal(map[string]string{"id": commandID, "type": "read_smartdns_config"})
 	if marshalErr != nil { return fmt.Errorf("生成 SmartDNS 读取命令失败: %w", marshalErr) }
 	if err := a.store.QueueAgentSmartDNSReadCommand(machineCode, string(command)); err != nil {
-		if strings.Contains(err.Error(), "pending") { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
+		if errors.Is(err, ErrAgentCommandPending) { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
 		return fmt.Errorf("Agent 授权已失效或读取命令排队失败: %w", err)
 	}
 	a.publishBrowserEvent(map[string]any{"type":"agent.command.queued","machine_code":machineCode,"command_type":"read_smartdns_config","at":time.Now().Unix()})
@@ -607,15 +624,11 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
 		return fmt.Errorf("SmartDNS 配置不能为空且不能超过 8 KiB（Agent 安全限制）")
 	}
-	settings, err := a.store.GetSettings()
+	commandID, err := newAgentCommandID()
 	if err != nil {
-		return fmt.Errorf("读取 Agent 授权失败")
+		return err
 	}
-	token := settings["agent_machine_"+machineCode]
-	if token == "" || token == settings["agent_token"] {
-		return fmt.Errorf("目标 Agent 未授权")
-	}
-	command := map[string]string{"id": fmt.Sprintf("%d", time.Now().UnixNano()), "type": "configure_smartdns", "config": config}
+	command := map[string]string{"id": commandID, "type": "configure_smartdns", "config": config}
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return fmt.Errorf("生成 SmartDNS 配置命令失败")
