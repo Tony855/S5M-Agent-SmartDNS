@@ -195,18 +195,36 @@ func (s *Store) CreateSettingIfAbsent(key, value string) (bool, error) {
 	return n == 1, nil
 }
 
-// QueueAgentSmartDNSCommand stores only the pending command. The controller's
-// last-known-good config is updated after the Agent confirms successful apply.
-func (s *Store) QueueAgentSmartDNSCommand(machineCode, commandJSON string) error {
+// queueAuthorizedAgentCommand serializes authorization checks and command insertion
+// with binding revocation, so a command cannot be queued for a just-revoked Agent.
+func (s *Store) queueAuthorizedAgentCommand(machineCode, commandJSON string) error {
 	tx, err := s.db.Begin()
 	if err != nil { return err }
 	defer tx.Rollback()
+	var token, globalToken string
+	if err := tx.QueryRow(`SELECT value FROM settings WHERE key=?`, "agent_machine_"+machineCode).Scan(&token); err != nil {
+		return fmt.Errorf("Agent binding is no longer authorized")
+	}
+	err = tx.QueryRow(`SELECT value FROM settings WHERE key='agent_token'`).Scan(&globalToken)
+	if err != nil && err != sql.ErrNoRows { return err }
+	if token == "" || token == globalToken { return fmt.Errorf("Agent binding is no longer authorized") }
 	result, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, "agent_command_"+machineCode, commandJSON)
 	if err != nil { return err }
 	created, err := result.RowsAffected()
 	if err != nil { return err }
 	if created != 1 { return fmt.Errorf("pending command already exists") }
 	return tx.Commit()
+}
+
+// QueueAgentSmartDNSCommand queues a config candidate without changing the
+// last-known-good controller copy; ACK success performs that update.
+func (s *Store) QueueAgentSmartDNSCommand(machineCode, commandJSON string) error {
+	return s.queueAuthorizedAgentCommand(machineCode, commandJSON)
+}
+
+// QueueAgentSmartDNSReadCommand atomically verifies the binding and queues a read.
+func (s *Store) QueueAgentSmartDNSReadCommand(machineCode, commandJSON string) error {
+	return s.queueAuthorizedAgentCommand(machineCode, commandJSON)
 }
 
 func (s *Store) UpdateSettings(updates map[string]string) error {
