@@ -120,14 +120,15 @@ func collectSmartDNSStatus(status map[string]any) {
 	status["smartdns_version"] = ""
 	status["smartdns_config_sha256"] = ""
 	status["smartdns_last_error"] = ""
-	if !smartDNSBinaryAvailable() {
+	if !status["smartdns_available"].(bool) {
+		appendSmartDNSStatusError(status, "SmartDNS 二进制不存在、不可执行或文件类型无效")
 		return
 	}
 	if data, err := os.ReadFile(smartDNSConfigPath); err == nil {
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
 	} else {
-		status["smartdns_last_error"] = "读取 SmartDNS 配置失败"
+		appendSmartDNSStatusError(status, "读取 SmartDNS 配置失败: "+safeSmartDNSDiagnostic(err.Error()))
 	}
 	if output, err := exec.Command("/usr/sbin/smartdns", "-v").CombinedOutput(); err == nil {
 		version := strings.TrimSpace(string(output))
