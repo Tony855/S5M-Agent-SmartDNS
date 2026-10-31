@@ -422,6 +422,7 @@ INSTALL_ROLLBACK_ACTIVE=0
 rollback_install() {
   local reason="${1:-unknown failure}"
   INSTALL_ROLLBACK_ACTIVE=0
+  set +e
   log_error "安装失败：${reason}，正在恢复安装前的文件和服务配置..."
   systemctl stop "$UNIT" 2>/dev/null || true
   if [[ -f "$BACKUP/S5M-Server.bin" ]]; then
@@ -628,7 +629,8 @@ log_step "在临时目录编译 S5M-Server"
 BUILD_DIR="$(mktemp -d /tmp/s5m-server-build.XXXXXX)"
 BUILD_BIN="$BUILD_DIR/S5M-Server"
 cleanup_build() {
-  [[ -n "${BUILD_DIR:-}" && -d "$BUILD_DIR" ]] && rm -rf "$BUILD_DIR"
+  [[ -n "${BUILD_DIR:-}" && -d "$BUILD_DIR" ]] && rm -rf "$BUILD_DIR" || true
+  return 0
 }
 trap 'rc=$?; cleanup_build; if [[ "$rc" -ne 0 && "$INSTALL_ROLLBACK_ACTIVE" -eq 1 ]]; then rollback_install "安装过程异常退出（退出码 $rc）"; fi' EXIT
 
@@ -662,8 +664,13 @@ fi
 # 先写入同目录临时文件，再原子替换，避免升级中断留下半成品。
 STAGED_BIN="${BIN}.new.$"
 install -o root -g root -m 0755 "$BUILD_BIN" "$STAGED_BIN"
-if ! setcap cap_net_bind_service=+ep "$STAGED_BIN"; then
-  log_warn "无法设置低端口绑定 capability；请确认服务端口是否需要小于 1024"
+if [[ "$PORT_TO_USE" =~ ^[0-9]+$ ]] && (( PORT_TO_USE < 1024 )); then
+  if ! setcap cap_net_bind_service=+ep "$STAGED_BIN"; then
+    rm -f "$STAGED_BIN"
+    die "服务将监听特权端口 $PORT_TO_USE，但无法设置 cap_net_bind_service"
+  fi
+else
+  setcap cap_net_bind_service=+ep "$STAGED_BIN" 2>/dev/null || log_warn "无法设置低端口绑定 capability（当前端口无需该权限）"
 fi
 mv -f "$STAGED_BIN" "$BIN"
 log_success "主控二进制已原子替换：$BIN"
