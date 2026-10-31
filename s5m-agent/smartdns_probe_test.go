@@ -417,23 +417,40 @@ func TestAppendSmartDNSStatusErrorPreservesFirstDiagnostic(t *testing.T) {
 	}
 }
 
-func TestSmartDNSBinaryAvailabilityRejectsNonExecutableAndDirectory(t *testing.T) {
-	for _, mode := range []os.FileMode{0600, 0700} {
-		path := filepath.Join(t.TempDir(), "smartdns")
-		if mode.IsDir() {
-			if err := os.Mkdir(path, mode); err != nil {
+func TestSmartDNSBinaryInfoAvailability(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "smartdns-executable")
+	if err := os.WriteFile(executable, []byte("binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	nonExecutable := filepath.Join(dir, "smartdns-non-executable")
+	if err := os.WriteFile(nonExecutable, []byte("binary"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(dir, "smartdns-directory")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "executable", path: executable, want: true},
+		{name: "non executable", path: nonExecutable, want: false},
+		{name: "directory", path: directory, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := os.Stat(tt.path)
+			if err != nil {
 				t.Fatal(err)
 			}
-		} else if err := os.WriteFile(path, []byte("not executable"), mode); err != nil {
-			t.Fatal(err)
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		available := info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0
-		if available {
-			t.Fatalf("mode %o should not be considered an executable SmartDNS binary", mode)
-		}
+			if got := smartDNSBinaryInfoAvailable(info); got != tt.want {
+				t.Fatalf("smartDNSBinaryInfoAvailable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if smartDNSBinaryInfoAvailable(nil) {
+		t.Fatal("nil file info must not be considered an available binary")
 	}
 }
