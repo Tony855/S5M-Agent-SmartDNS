@@ -133,6 +133,73 @@ if ! apt-get install -y -qq "${apt_packages[@]}" > /dev/null; then
   exit 1
 fi
 
+# 同步 SmartDNS 仓库最新代码到固定目录。
+# 已存在目录只允许在来源正确、工作区干净且可快进时更新，绝不覆盖用户本地修改。
+SMARTDNS_REPO="https://github.com/Tony855/S5M-Agent-SmartDNS.git"
+SMARTDNS_BRANCH="main"
+SMARTDNS_DIR="/root/S5M-SmartDNS"
+
+sync_smartdns_repository() {
+  echo "⬇️ 正在同步 S5M-Agent-SmartDNS 最新代码到 $SMARTDNS_DIR ..."
+
+  if [[ ! -e "$SMARTDNS_DIR" ]]; then
+    if ! git clone --branch "$SMARTDNS_BRANCH" --single-branch "$SMARTDNS_REPO" "$SMARTDNS_DIR"; then
+      echo "❌ 克隆 S5M-Agent-SmartDNS 失败。" >&2
+      return 1
+    fi
+  else
+    if [[ ! -d "$SMARTDNS_DIR/.git" ]]; then
+      echo "❌ $SMARTDNS_DIR 已存在但不是 Git 仓库；为避免覆盖现有文件，停止同步。" >&2
+      return 1
+    fi
+
+    local origin_url
+    origin_url="$(git -C "$SMARTDNS_DIR" remote get-url origin 2>/dev/null || true)"
+    case "$origin_url" in
+      "https://github.com/Tony855/S5M-Agent-SmartDNS.git"|"https://github.com/Tony855/S5M-Agent-SmartDNS")
+        ;;
+      *)
+        echo "❌ $SMARTDNS_DIR 的 origin 不匹配：${origin_url:-未配置}；拒绝切换仓库。" >&2
+        return 1
+        ;;
+    esac
+
+    if [[ -n "$(git -C "$SMARTDNS_DIR" status --porcelain)" ]]; then
+      echo "❌ $SMARTDNS_DIR 存在未提交的本地修改；为避免丢失数据，停止更新。" >&2
+      return 1
+    fi
+
+    if ! git -C "$SMARTDNS_DIR" fetch --prune origin "$SMARTDNS_BRANCH"; then
+      echo "❌ 获取 S5M-Agent-SmartDNS 远程更新失败。" >&2
+      return 1
+    fi
+
+    local current_branch
+    current_branch="$(git -C "$SMARTDNS_DIR" branch --show-current)"
+    if [[ "$current_branch" != "$SMARTDNS_BRANCH" ]]; then
+      echo "❌ $SMARTDNS_DIR 当前分支为 ${current_branch:-detached}，预期 $SMARTDNS_BRANCH；拒绝自动切换。" >&2
+      return 1
+    fi
+
+    if ! git -C "$SMARTDNS_DIR" merge-base --is-ancestor HEAD "origin/$SMARTDNS_BRANCH"; then
+      echo "❌ 本地分支与 origin/$SMARTDNS_BRANCH 已分叉或领先；拒绝强制覆盖。" >&2
+      return 1
+    fi
+
+    if ! git -C "$SMARTDNS_DIR" merge --ff-only "origin/$SMARTDNS_BRANCH"; then
+      echo "❌ 快进更新失败，保留现有目录不变。" >&2
+      return 1
+    fi
+  fi
+
+  local synced_commit
+  synced_commit="$(git -C "$SMARTDNS_DIR" rev-parse --short HEAD)"
+  echo "✅ S5M-Agent-SmartDNS 已同步：$SMARTDNS_DIR（$SMARTDNS_BRANCH @ $synced_commit）"
+}
+
+if ! sync_smartdns_repository; then
+  exit 1
+fi
 
 # 判断 S5M 后端监听端口
 PORT_TO_USE=""
