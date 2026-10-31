@@ -224,6 +224,13 @@ func (s *Store) queueAuthorizedAgentCommand(machineCode, commandJSON string) err
 	return tx.Commit()
 }
 
+// QueueAuthorizedAgentCommand atomically verifies the Agent binding and inserts
+// any supported Agent command. It shares the same revocation-safe transaction as
+// SmartDNS commands so all command types enforce the same authorization boundary.
+func (s *Store) QueueAuthorizedAgentCommand(machineCode, commandJSON string) error {
+	return s.queueAuthorizedAgentCommand(machineCode, commandJSON)
+}
+
 // QueueAgentSmartDNSCommand queues a config candidate without changing the
 // last-known-good controller copy; ACK success performs that update.
 func (s *Store) QueueAgentSmartDNSCommand(machineCode, commandJSON string) error {
