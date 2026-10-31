@@ -630,7 +630,7 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if err != nil {
 		return fmt.Errorf("生成 SmartDNS 配置命令失败")
 	}
-	if err := a.store.QueueAgentSmartDNSCommand(machineCode, string(payload), config); err != nil {
+	if err := a.store.QueueAgentSmartDNSCommand(machineCode, string(payload)); err != nil {
 		if strings.Contains(err.Error(), "pending") {
 			return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试")
 		}
