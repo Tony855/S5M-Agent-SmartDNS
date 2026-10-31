@@ -13,13 +13,6 @@ import (
 	"testing"
 	"time"
 )
-	"io"
-	"net"
-	"os"
-	"path/filepath"
-	"testing"
-	"time"
-)
 
 func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 	tests := []struct {
