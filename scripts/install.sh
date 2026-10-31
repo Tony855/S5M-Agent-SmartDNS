@@ -413,9 +413,11 @@ if [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 0 ]]; then
 fi
 
 # 回滚函数：快照存在后任何失败都调用它
+INSTALL_ROLLBACK_ACTIVE=0
 rollback_install() {
   local reason="${1:-unknown failure}"
-  echo "❌ 安装失败：${reason}，正在恢复安装前的文件和服务配置..." >&2
+  INSTALL_ROLLBACK_ACTIVE=0
+  log_error "安装失败：${reason}，正在恢复安装前的文件和服务配置..."
   systemctl stop "$UNIT" 2>/dev/null || true
   if [[ -f "$BACKUP/S5M-Server.bin" ]]; then
     install -o root -g root -m 0755 "$BACKUP/S5M-Server.bin" "$BIN"
@@ -469,6 +471,10 @@ rollback_install() {
 }
 
 log_step "生成并迁移服务配置"
+
+# 从此处开始修改现有安装状态；任何非零退出都会自动进入统一回滚。
+INSTALL_ROLLBACK_ACTIVE=1
+trap 'rc=$?; if [[ "$rc" -ne 0 && "$INSTALL_ROLLBACK_ACTIVE" -eq 1 ]]; then rollback_install "安装过程异常退出（退出码 $rc）"; fi' EXIT
 
 # 迁移旧路径 env 文件
 if [[ -f "$OLD_ENV_FILE" && ! -f "$ENV_FILE" ]]; then mv "$OLD_ENV_FILE" "$ENV_FILE"
@@ -611,35 +617,51 @@ RestrictSUIDSGID=true
 WantedBy=multi-user.target
 MIHOMO_SERVICE_EOF
 
-log_step "编译 S5M-Server"
+log_step "在临时目录编译 S5M-Server"
 
-# 拷贝源码到安装目录
-rm -rf /opt/S5M-Server/source
-install -d -m 0755 /opt/S5M-Server/source
-cp -a "$SRC/." /opt/S5M-Server/source/
+# 源码仅用于构建：不复制到 /opt/S5M-Server，安装目录只保留运行所需二进制及状态文件。
+BUILD_DIR="$(mktemp -d /tmp/s5m-server-build.XXXXXX)"
+BUILD_BIN="$BUILD_DIR/S5M-Server"
+cleanup_build() {
+  [[ -n "${BUILD_DIR:-}" && -d "$BUILD_DIR" ]] && rm -rf "$BUILD_DIR"
+}
+trap cleanup_build EXIT
 
-# 拉依赖 + 编译
-cd /opt/S5M-Server/source
+cp -a "$SRC/." "$BUILD_DIR/"
+cd "$BUILD_DIR"
+
 if ! go mod download; then
-  echo "❌ go mod download 失败（旧版本未受影响），备份在 $BACKUP" >&2
-  exit 1
+  die "go mod download 失败；旧版服务二进制尚未替换。备份位置：$BACKUP"
 fi
-# [修复 P0-3] 真正支持 SKIP_TEST=1 跳过测试
+
 if [[ "${SKIP_TEST:-0}" != "1" ]]; then
+  log_info "执行 Go 测试（设置 SKIP_TEST=1 可跳过）"
   if ! go test ./...; then
-    echo "❌ go test 失败（旧二进制未替换，服务仍在运行），备份在 $BACKUP" >&2
-    echo "   如需跳过测试重新安装，可使用：SKIP_TEST=1 sudo -E bash scripts/install.sh" >&2
-    exit 1
+    die "go test 失败；旧版服务二进制尚未替换。备份位置：$BACKUP"
   fi
+else
+  log_warn "已按 SKIP_TEST=1 跳过 Go 测试"
 fi
-# [修复 P1-5] 编译失败给出明确提示
-if ! go build -trimpath -ldflags='-s -w' -o /opt/S5M-Server/S5M-Server.new .; then
-  echo "❌ go build 失败（旧版本未受影响，服务仍在运行），备份在 $BACKUP" >&2
-  exit 1
+
+if ! go build -trimpath -ldflags='-s -w' -o "$BUILD_BIN" .; then
+  die "go build 失败；旧版服务二进制尚未替换。备份位置：$BACKUP"
 fi
-install -o root -g root -m 0755 /opt/S5M-Server/S5M-Server.new "$BIN"
-rm -f /opt/S5M-Server/S5M-Server.new
-setcap cap_net_bind_service=+ep "$BIN" || true
+if [[ ! -s "$BUILD_BIN" ]] || ! file "$BUILD_BIN" | grep -q 'ELF'; then
+  die "构建产物不存在或不是有效 ELF 可执行文件，拒绝安装"
+fi
+chmod 0755 "$BUILD_BIN"
+if ! "$BUILD_BIN" --help >/dev/null 2>&1; then
+  log_warn "新二进制的 --help 检查未返回成功；继续执行版本无关的文件校验"
+fi
+
+# 先写入同目录临时文件，再原子替换，避免升级中断留下半成品。
+STAGED_BIN="${BIN}.new.$"
+install -o root -g root -m 0755 "$BUILD_BIN" "$STAGED_BIN"
+if ! setcap cap_net_bind_service=+ep "$STAGED_BIN"; then
+  log_warn "无法设置低端口绑定 capability；请确认服务端口是否需要小于 1024"
+fi
+mv -f "$STAGED_BIN" "$BIN"
+log_success "主控二进制已原子替换：$BIN"
 
 # 写入 s5m-server.service
 cat > /etc/systemd/system/s5m-server.service <<SERVICEEOF
@@ -781,8 +803,9 @@ elif [[ -n "$S5M_DOMAIN" && "$HTTPS_ALREADY_CONFIGURED" -eq 1 ]]; then
   echo "✅ 复用现有 HTTPS 配置，不重新签发证书： https://$S5M_DOMAIN"
 fi
 
-# 成功输出
-echo "✅ S5M-Server 安装成功"
-echo "   服务: $UNIT（端口 $PORT）"
-echo "   健康: $(cat /tmp/s5m-server-health.json)"
-if [[ -n "$S5M_DOMAIN" ]]; then echo "   HTTPS: https://$S5M_DOMAIN"; else echo "   HTTPS: 未配置（设置 S5M_DOMAIN 与 S5M_EMAIL 可启用 Let's Encrypt）"; fi
+# 安装验收完成，关闭失败回滚保护。
+INSTALL_ROLLBACK_ACTIVE=0
+log_success "S5M-Server 安装成功"
+log_info "服务：$UNIT（端口 $PORT）"
+log_info "健康检查：$(cat /tmp/s5m-server-health.json)"
+if [[ -n "$S5M_DOMAIN" ]]; then log_success "HTTPS：https://$S5M_DOMAIN"; else log_info "HTTPS：未配置（设置 S5M_DOMAIN 与 S5M_EMAIL 可启用 Let's Encrypt）"; fi
