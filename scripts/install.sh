@@ -625,7 +625,7 @@ BUILD_BIN="$BUILD_DIR/S5M-Server"
 cleanup_build() {
   [[ -n "${BUILD_DIR:-}" && -d "$BUILD_DIR" ]] && rm -rf "$BUILD_DIR"
 }
-trap cleanup_build EXIT
+trap 'rc=$?; cleanup_build; if [[ "$rc" -ne 0 && "$INSTALL_ROLLBACK_ACTIVE" -eq 1 ]]; then rollback_install "安装过程异常退出（退出码 $rc）"; fi' EXIT
 
 cp -a "$SRC/." "$BUILD_DIR/"
 cd "$BUILD_DIR"
@@ -646,7 +646,7 @@ fi
 if ! go build -trimpath -ldflags='-s -w' -o "$BUILD_BIN" .; then
   die "go build 失败；旧版服务二进制尚未替换。备份位置：$BACKUP"
 fi
-if [[ ! -s "$BUILD_BIN" ]] || ! file "$BUILD_BIN" | grep -q 'ELF'; then
+if [[ ! -s "$BUILD_BIN" ]] || [[ "$(od -An -tx1 -N4 "$BUILD_BIN" 2>/dev/null | tr -d ' \n')" != "7f454c46" ]]; then
   die "构建产物不存在或不是有效 ELF 可执行文件，拒绝安装"
 fi
 chmod 0755 "$BUILD_BIN"
