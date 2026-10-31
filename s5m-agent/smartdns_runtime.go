@@ -91,9 +91,13 @@ func validateSmartDNSConfig(data []byte) error {
 	return nil
 }
 
+func smartDNSBinaryInfoAvailable(info os.FileInfo) bool {
+	return info != nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0
+}
+
 func smartDNSBinaryAvailable() bool {
 	info, err := os.Stat("/usr/sbin/smartdns")
-	return err == nil && !info.IsDir() && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0
+	return err == nil && smartDNSBinaryInfoAvailable(info)
 }
 
 // appendSmartDNSStatusError preserves the first actionable diagnostic while
