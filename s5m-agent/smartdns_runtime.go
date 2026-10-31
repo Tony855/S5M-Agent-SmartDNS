@@ -113,24 +113,57 @@ func appendSmartDNSStatusError(status map[string]any, message string) {
 	}
 }
 
+type smartDNSStatusDependencies struct {
+	binaryInfo func() (os.FileInfo, error)
+	readConfig func(string) ([]byte, error)
+	version    func() ([]byte, error)
+	process    func() ([]byte, error)
+	probe      func() bool
+}
+
+func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
+	return smartDNSStatusDependencies{
+		binaryInfo: func() (os.FileInfo, error) { return os.Stat("/usr/sbin/smartdns") },
+		readConfig: os.ReadFile,
+		version: func() ([]byte, error) {
+			return exec.Command("/usr/sbin/smartdns", "-v").CombinedOutput()
+		},
+		process: func() ([]byte, error) {
+			return exec.Command("pidof", "smartdns").CombinedOutput()
+		},
+		probe: probeSmartDNSDNS,
+	}
+}
+
 func collectSmartDNSStatus(status map[string]any) {
-	status["smartdns_available"] = smartDNSBinaryAvailable()
+	collectSmartDNSStatusWithDependencies(status, defaultSmartDNSStatusDependencies())
+}
+
+// collectSmartDNSStatusWithDependencies keeps host interactions injectable so
+// every status and failure path can be tested without a live SmartDNS daemon.
+func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSStatusDependencies) {
+	status["smartdns_available"] = false
 	status["smartdns_running"] = false
 	status["smartdns_dns_healthy"] = false
 	status["smartdns_version"] = ""
 	status["smartdns_config_sha256"] = ""
 	status["smartdns_last_error"] = ""
-	if !status["smartdns_available"].(bool) {
+
+	info, statErr := deps.binaryInfo()
+	if statErr != nil || !smartDNSBinaryInfoAvailable(info) {
 		appendSmartDNSStatusError(status, "SmartDNS 二进制不存在、不可执行或文件类型无效")
 		return
 	}
-	if data, err := os.ReadFile(smartDNSConfigPath); err == nil {
+	status["smartdns_available"] = true
+
+	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
 	} else {
 		appendSmartDNSStatusError(status, "读取 SmartDNS 配置失败: "+safeSmartDNSDiagnostic(err.Error()))
 	}
-	if output, err := exec.Command("/usr/sbin/smartdns", "-v").CombinedOutput(); err == nil {
+
+	if output, err := deps.version(); err == nil {
 		version := strings.TrimSpace(string(output))
 		if version == "" {
 			appendSmartDNSStatusError(status, "SmartDNS 版本命令返回空结果")
@@ -143,16 +176,17 @@ func collectSmartDNSStatus(status map[string]any) {
 	} else {
 		appendSmartDNSStatusError(status, "读取 SmartDNS 版本失败: "+safeSmartDNSDiagnostic(strings.TrimSpace(string(output)+" "+err.Error())))
 	}
-	if output, err := exec.Command("pidof", "smartdns").CombinedOutput(); err == nil && len(bytes.TrimSpace(output)) > 0 {
+
+	if output, err := deps.process(); err == nil && len(bytes.TrimSpace(output)) > 0 {
 		status["smartdns_running"] = true
 	} else {
 		appendSmartDNSStatusError(status, "SmartDNS 进程未运行或进程检测失败")
 	}
 	if status["smartdns_running"] == true {
-		if probeSmartDNSDNS() {
+		if deps.probe() {
 			status["smartdns_dns_healthy"] = true
-		} else if status["smartdns_last_error"] == "" {
-			status["smartdns_last_error"] = "SmartDNS UDP/TCP DNS 查询探测失败"
+		} else {
+			appendSmartDNSStatusError(status, "SmartDNS UDP/TCP DNS 查询探测失败")
 		}
 	}
 }
