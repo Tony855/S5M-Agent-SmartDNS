@@ -978,7 +978,7 @@ func TestBuildConfigForHistoricalProxyAliasesKeepsTheirTrafficPolicy(t *testing.
 		want []string
 		avoid []string
 	}{
-		{name: "proxy alias", mode: "proxy", want: []string{"GEOIP,CN,legacy-proxy", "MATCH,DIRECT"}, avoid: []string{"MATCH,REJECT"}},
+		{name: "proxy alias returns mainland traffic direct", mode: "proxy", want: []string{"GEOIP,CN,DIRECT", "MATCH,legacy-proxy"}, avoid: []string{"GEOIP,CN,legacy-proxy", "MATCH,DIRECT", "MATCH,REJECT"}},
 		{name: "china alias", mode: "china", want: []string{"MATCH,legacy-proxy"}, avoid: []string{"GEOIP,CN,", "MATCH,REJECT"}},
 	}
 	for _, tc := range cases {
