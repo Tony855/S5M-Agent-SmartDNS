@@ -1326,8 +1326,11 @@ func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
 	generated := "dns:\n  enable: true\n  nameserver:\n    - 127.0.0.1:6053\n  default-nameserver:\n    - 223.5.5.5\n"
 	safeFallback, err := applyAgentRuntimeDNS(generated, false)
 	if err != nil { t.Fatalf("fallback generated SmartDNS DNS: %v", err) }
-	if !strings.Contains(safeFallback, "223.5.5.5") || strings.Contains(safeFallback, "127.0.0.1:6053") {
-		t.Fatalf("unhealthy generated SmartDNS must fall back to independent resolvers:\n%s", safeFallback)
+	if !strings.Contains(safeFallback, "https://dns.cloudflare.com/dns-query") ||
+		!strings.Contains(safeFallback, "https://dns.google/dns-query") ||
+		strings.Contains(safeFallback, "127.0.0.1:6053") ||
+		strings.Contains(safeFallback, "223.5.5.5") || strings.Contains(safeFallback, "119.29.29.29") {
+		t.Fatalf("unhealthy generated SmartDNS must fall back to encrypted DoH, not plaintext DNS:\n%s", safeFallback)
 	}
 }
 
