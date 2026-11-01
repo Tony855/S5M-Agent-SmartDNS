@@ -28,7 +28,10 @@ on:
       - "server/internal/app/router.go"
       - "server/internal/app/configgen.go"
       - "server/internal/app/configgen_test.go"
+      - "server/internal/app/handlers.go"
+      - "server/internal/app/handlers_test.go"
       - "server/internal/app/store.go"
+      - "scripts/tests/proxy-import-parser.test.js"
       - "server/web/index.html"
       - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
@@ -50,6 +53,17 @@ on:
       - "s5m-agent/healthcheck.sh"
       - "s5m-agent/cont-init.d/**"
       - "s5m-agent/services/**"
+      - "server/internal/app/agent_websocket.go"
+      - "server/internal/app/agent_telemetry_test.go"
+      - "server/internal/app/router.go"
+      - "server/internal/app/configgen.go"
+      - "server/internal/app/configgen_test.go"
+      - "server/internal/app/handlers.go"
+      - "server/internal/app/handlers_test.go"
+      - "server/internal/app/store.go"
+      - "scripts/tests/proxy-import-parser.test.js"
+      - "server/web/index.html"
+      - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
       - ".github/workflows/release.yml"
 
@@ -110,7 +124,7 @@ jobs:
           grep -q 'routingMode != "return"' server/internal/app/configgen.go
           grep -q 'routingMode != "global" && routingMode != "return"' server/internal/app/configgen.go
           grep -q "tun_enable', 'false'" server/internal/app/store.go
-          grep -A1 '^tun:
+          grep -A1 '^tun:' server/internal/app/configgen.go | grep -q 'enable: false'
           ! grep -q '回国模式（大陆直连' server/web/index.html
 
       - name: Validate default and opt-in TUN deployment permissions
