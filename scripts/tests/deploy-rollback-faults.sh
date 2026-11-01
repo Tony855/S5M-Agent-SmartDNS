@@ -11,6 +11,8 @@ trap 'rm -f "$tmp"' EXIT
 sed -n '/^log()/,/^http_get()/ { /^http_get()/q; p; }' "$DEPLOY_SCRIPT" > "$tmp"
 # shellcheck disable=SC1090
 source "$tmp"
+# The deploy script installs an EXIT trap; the test invokes rollback explicitly per case.
+trap - EXIT
 
 assert_eq() {
   [[ "$1" == "$2" ]] || { echo "expected '$2', got '$1': $3" >&2; exit 1; }
