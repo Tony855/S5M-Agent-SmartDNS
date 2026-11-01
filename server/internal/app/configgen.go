@@ -710,6 +710,11 @@ func normalizeProxyRoutingMode(raw string) string {
 }
 
 func routingModeForMachine(proxies []Proxy, machineCode string) string {
+	// A Mihomo config has one routing mode for the whole machine, not one mode
+	// per proxy. ListProxies is persisted in stable ID order, so the first
+	// enabled proxy assigned to this machine remains the compatibility anchor.
+	// Additional proxies contribute outbound nodes but cannot silently change
+	// an existing machine's traffic policy.
 	for _, p := range proxies {
 		if !p.Enabled || p.Mode == "direct" || p.Mode == "reject" {
 			continue
@@ -722,8 +727,8 @@ func routingModeForMachine(proxies []Proxy, machineCode string) string {
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(p.Mode)) {
-		case "global", "split", "rule", "return", "game":
-			return strings.ToLower(strings.TrimSpace(p.Mode))
+		case "global", "split", "rule", "return", "game", "legacy":
+			return normalizeProxyRoutingMode(p.Mode)
 		case "proxy":
 			return "return"
 		case "china":
@@ -1082,13 +1087,15 @@ func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
 	}
 	merged := make([]any, 0, len(generated)+len(custom))
 	var terminal any
+	terminalCount := 0
 	for _, raw := range generated {
 		rule, valid := raw.(string)
 		if !valid || strings.TrimSpace(rule) == "" {
 			return nil, fmt.Errorf("生成的规则必须是非空字符串")
 		}
 		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rule)), "MATCH,") {
-			terminal = rule
+			terminal = strings.TrimSpace(rule)
+			terminalCount++
 			continue
 		}
 		merged = append(merged, rule)
@@ -1109,9 +1116,10 @@ func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
 		merged = append(merged, rule)
 		seen[rule] = true
 	}
-	if terminal != nil {
-		merged = append(merged, terminal)
+	if terminalCount != 1 {
+		return nil, fmt.Errorf("生成的 rules 必须且只能包含一条最终 MATCH 规则，实际为 %d 条", terminalCount)
 	}
+	merged = append(merged, terminal)
 	return merged, nil
 }
 
