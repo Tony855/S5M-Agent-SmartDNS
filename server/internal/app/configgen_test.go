@@ -1048,7 +1048,7 @@ tun:
 	if got := dns["nameserver"].([]any); len(got) != 2 || got[0] != "1.1.1.1" || got[1] != "8.8.8.8" { t.Fatalf("restored nameserver = %#v", got) }
 	if got := dns["default-nameserver"].([]any); len(got) != 1 || got[0] != "223.5.5.5" { t.Fatalf("default-nameserver was overwritten: %#v", got) }
 	if got := dns["proxy-server-nameserver"].([]any); len(got) != 1 || got[0] != "119.29.29.29" { t.Fatalf("proxy-server-nameserver was overwritten: %#v", got) }
-	if !strings.Contains(got, "tun:\n  enable: true") { t.Fatalf("unrelated TUN setting was not retained:\n%s", got) }
+	if tun, ok := doc["tun"].(map[string]any); !ok || tun["enable"] != true { t.Fatalf("unrelated TUN setting was not retained: %#v", doc["tun"]) }
 }
 func TestRestoreAgentDNSNameserverSkipsNonLegacyAndRejectsMissingFallback(t *testing.T) {
 	ordinary := "dns:\n  nameserver:\n    - 8.8.8.8\n"
