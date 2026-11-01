@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"net/http"
+	"net/http/httptest"
+
+	"github.com/gorilla/websocket"
 	"time"
 )
 
