@@ -359,6 +359,11 @@ createApp({
             const code = String(message.machine_code);
             const status = message.status && typeof message.status === 'object' ? message.status : {};
             const receivedAt = Number(message.received_at_ms) || Date.now();
+            traffic.value = {
+              up: Math.max(0, Number(status.upload_speed) || 0),
+              down: Math.max(0, Number(status.download_speed) || 0),
+              conns: Math.max(0, Number(status.connections) || 0)
+            };
             const index = agentEntries.value.findIndex(item => item.code === code);
             if (index >= 0) {
               const previous = agentEntries.value[index];
@@ -370,7 +375,8 @@ createApp({
                 uploadTotal: Math.max(0, Number(status.upload_total) || 0),
                 downloadTotal: Math.max(0, Number(status.download_total) || 0),
                 telemetryError: [status.traffic_error, status.connections_error].filter(Boolean).join('；'),
-                telemetryUpdatedAt: receivedAt
+                telemetryUpdatedAt: receivedAt,
+                updated_at: new Date(receivedAt).toLocaleString()
               });
             } else {
               loadAgentsData();
