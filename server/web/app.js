@@ -796,6 +796,32 @@ createApp({
         for (const child of Object.values(value)) if (child && typeof child === 'object') walk(child);
       };
       walk(root);
+      // Older v2rayN exports use a root-level servers[] array with address/id
+      // and omit both protocol and outbounds. Normalize that schema to the
+      // same outbound converter so uploads and server-side imports agree.
+      if (!candidates.length && root && !Array.isArray(root) && Array.isArray(root.servers)) {
+        for (const server of root.servers) {
+          if (!server || typeof server !== 'object') continue;
+          const id = String(server.id || server.uuid || '').trim();
+          const address = String(server.address || server.server || '').trim();
+          const port = Number(server.port || server.server_port || 0);
+          if (!id || !address || !Number.isInteger(port) || port < 1 || port > 65535) continue;
+          const network = String(server.network || server.net || 'tcp').toLowerCase();
+          const user = { id, alterId: server.alterId ?? server.aid ?? 0, security: server.security || server.cipher || 'auto' };
+          const streamSettings = { network };
+          if (network === 'ws') {
+            streamSettings.wsSettings = { path: String(server.path || ''), headers: server.host ? { Host: String(server.host) } : {} };
+          } else if (network === 'grpc') {
+            streamSettings.grpcSettings = { serviceName: String(server.serviceName || server.path || '') };
+          }
+          candidates.push({
+            tag: String(server.remarks || server.remark || server.name || ''),
+            protocol: 'vmess',
+            settings: { vnext: [{ address, port, users: [user] }] },
+            streamSettings
+          });
+        }
+      }
       const links = [];
       for (const [index, outbound] of candidates.entries()) {
         const protocol = String(outbound.protocol || outbound.type || '').toLowerCase();
