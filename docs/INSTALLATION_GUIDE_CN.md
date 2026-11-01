@@ -78,7 +78,7 @@ sudo systemctl is-enabled s5m-server mihomo
 
 ### 防火墙建议
 
-只开放业务确实需要的端口。至少不要把主控 Mihomo API（默认 loopback 地址）或 Agent Mihomo API 8088 暴露到公网。若 Agent 绑定页面只供管理员使用，应限制 81/tcp 的来源地址；代理端口 7890 是否开放应按实际业务决定。
+只开放业务确实需要的端口。不要把主控 Mihomo API（默认 loopback 地址）或 Agent Mihomo API 8088 暴露到公网。Agent 不提供 7890 HTTP/SOCKS 显式代理入口；若 Agent 绑定页面只供管理员使用，应限制 81/tcp 的来源地址。Linux 节点需要透明接管客户端流量时，启用 TUN 并配置宿主机/路由器策略路由；Docker bridge 的 TUN 不会自动接管外部 LAN 转发流量。
 
 ## 3. Agent 节点部署
 
