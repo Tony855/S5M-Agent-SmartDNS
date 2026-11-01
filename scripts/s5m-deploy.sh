@@ -9,10 +9,43 @@ CONTAINER="s5m-agent"
 DATA_DIR="/opt/s5m-agent/data"
 PORT_WEB=80
 ENABLE_TUN="${ENABLE_TUN:-0}"
+BACKUP_NAME="${CONTAINER}.rollback.$"
+HAD_OLD=0
+NEW_STARTED=0
+DEPLOY_OK=0
 
 log()  { echo -e "\033[32m[+]\033[0m $*"; }
 warn() { echo -e "\033[33m[!]\033[0m $*"; }
 die()  { echo -e "\033[31m[x]\033[0m $*"; exit 1; }
+
+restore_previous() {
+  if (( NEW_STARTED )); then
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  fi
+  if (( HAD_OLD )); then
+    if docker container inspect "$BACKUP_NAME" >/dev/null 2>&1; then
+      docker rename "$BACKUP_NAME" "$CONTAINER" >/dev/null 2>&1 || {
+        warn "无法恢复旧容器名称；备份仍保留：$BACKUP_NAME"
+        return 1
+      }
+    fi
+    docker start "$CONTAINER" >/dev/null 2>&1 || {
+      warn "旧 Agent 容器恢复名称成功，但启动失败：$CONTAINER"
+      return 1
+    }
+    log "已恢复旧 Agent 容器：$CONTAINER"
+  fi
+}
+rollback_on_exit() {
+  local status=$?
+  if (( DEPLOY_OK == 0 )); then
+    warn "部署未完成，开始回滚..."
+    restore_previous || true
+  fi
+  return "$status"
+}
+trap rollback_on_exit EXIT
+
 
 http_get() {
   local url="$1"
@@ -121,13 +154,17 @@ fi
 
 # 只替换目标 Agent 容器；不触碰其他容器、镜像、卷或网络。
 if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
-  log "停止并移除旧 Agent 容器（仅目标容器）..."
-  docker rm -f "$CONTAINER" || die "移除旧 Agent 容器失败"
+  docker container inspect "$BACKUP_NAME" >/dev/null 2>&1 && die "回滚容器名称已存在：$BACKUP_NAME"
+  HAD_OLD=1
+  log "暂存旧 Agent 容器：$CONTAINER"
+  docker stop "$CONTAINER" >/dev/null || die "停止旧 Agent 容器失败"
+  docker rename "$CONTAINER" "$BACKUP_NAME" || die "暂存旧 Agent 容器失败"
 fi
 
 log "启动容器 $CONTAINER ..."
 # Keep Mihomo TUN routes inside the Agent container's network namespace.
 # Do not use --network host: changing the host namespace's routes can lock out SSH.
+NEW_STARTED=1
 docker run -d \
   --name "$CONTAINER" \
   --restart unless-stopped \
@@ -139,14 +176,33 @@ docker run -d \
 
 # Runtime guard: fail closed if Docker did not keep the Agent in bridge mode.
 network_mode="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$CONTAINER")" || die "无法核实 Agent 容器网络模式"
-if [ "$network_mode" != "bridge" ]; then
-  warn "Agent 网络模式异常：$network_mode；仅停止并移除本次目标容器以避免影响宿主机网络"
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-  die "拒绝保留非 bridge 网络模式的 Agent 容器；宿主机 SSH 安全检查未通过"
-fi
-log "网络隔离检查通过：Agent 使用 bridge 网络；容器 TUN 路由不应修改宿主机路由。"
+[ "$network_mode" = "bridge" ] || die "拒绝保留非 bridge 网络模式的 Agent 容器；宿主机 SSH 安全检查未通过"
 
-sleep 3
+log "等待 Agent 容器启动检查（最多 120 秒）..."
+ready=0
+for _ in $(seq 1 60); do
+  state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || true)"
+  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER" 2>/dev/null || true)"
+  if [ "$state" = "running" ] && { [ "$health" = "healthy" ] || [ "$health" = "none" ]; }; then
+    ready=1
+    break
+  fi
+  if [ "$state" = "exited" ] || [ "$state" = "dead" ] || [ "$health" = "unhealthy" ]; then
+    docker logs --tail 100 "$CONTAINER" 2>&1 || true
+    die "Agent 容器启动或健康检查失败"
+  fi
+  sleep 2
+done
+[ "$ready" -eq 1 ] || die "等待 Agent 容器启动超时"
+
+DEPLOY_OK=1
+if (( HAD_OLD )); then
+  if docker rm "$BACKUP_NAME" >/dev/null; then
+    HAD_OLD=0
+  else
+    warn "新容器已运行，但旧容器备份暂未删除：$BACKUP_NAME"
+  fi
+fi
 echo
 log "===== 部署结果 ====="
 docker ps --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
