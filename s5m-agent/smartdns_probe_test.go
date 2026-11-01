@@ -867,3 +867,42 @@ func TestSmartDNSReplayRequiresHealthyUDPAndTCPProbe(t *testing.T) {
 		t.Fatalf("different config replay = %v, err=%v, probe called=%v", ok, err, called)
 	}
 }
+
+
+func TestSmartDNSRestartGateEnforcesCooldownAndAllowsRetry(t *testing.T) {
+	gate := &smartDNSRestartGate{}
+	start := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if ok, remaining := gate.TryAcquire(start, 30*time.Second); !ok || remaining != 0 {
+		t.Fatalf("first restart acquire = %v, remaining=%v; want true, 0", ok, remaining)
+	}
+	if ok, remaining := gate.TryAcquire(start.Add(10*time.Second), 30*time.Second); ok || remaining != 20*time.Second {
+		t.Fatalf("cooldown acquire = %v, remaining=%v; want false, 20s", ok, remaining)
+	}
+	if ok, remaining := gate.TryAcquire(start.Add(30*time.Second), 30*time.Second); !ok || remaining != 0 {
+		t.Fatalf("retry after cooldown = %v, remaining=%v; want true, 0", ok, remaining)
+	}
+}
+
+func TestSmartDNSRestartGateSerializesConcurrentAttempts(t *testing.T) {
+	gate := &smartDNSRestartGate{}
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	const callers = 32
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	acquired := 0
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			if ok, _ := gate.TryAcquire(now, smartDNSRestartCooldown); ok {
+				mu.Lock()
+				acquired++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if acquired != 1 {
+		t.Fatalf("concurrent restart acquisitions = %d, want exactly 1", acquired)
+	}
+}
