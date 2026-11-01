@@ -1439,6 +1439,7 @@ createApp({
       systemLogs, loadingSystemLogs, restoringBackup, loadSystemLogs, downloadBackup, restoreBackup,
       mainMihomoStatus, loadMainMihomoStatus,
       proxyDialog, proxyForm, savingProxy,
+      machineProxyModes, savingMachineProxyMode, saveMachineProxyMode,
       showImport, importTab, importText, importing, importMachineCode,
       switchPage, doLogin, logout, loadOverview,
       updateKernel, recoverMihomoUpdateTask, loadProxies, openCreateProxy, openEditProxy, saveProxy, deleteProxy, importProxies, handleFileUpload,
