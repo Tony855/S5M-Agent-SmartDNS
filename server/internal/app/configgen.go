@@ -777,7 +777,7 @@ func marshalProxiesWithSharedAnchor(proxies []proxyOut) ([]byte, error) {
 }
 
 func buildConfigFromProxies(proxies []Proxy, machineCode, secret string) (string, error) {
-	return buildConfigFromProxiesWithMode(proxies, machineCode, secret, "legacy", "")
+	return buildConfigFromProxiesWithMode(proxies, machineCode, secret, "rule", "")
 }
 
 func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routingMode, controllerHost string) (string, error) {
