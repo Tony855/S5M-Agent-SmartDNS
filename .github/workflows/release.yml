@@ -62,6 +62,17 @@ jobs:
             }
             tag="$INPUT_VERSION"
             prerelease="$INPUT_PRERELEASE"
+            if [[ "$tag" =~ -(alpha|beta|rc)\.[0-9]+$ ]]; then
+              [[ "$prerelease" == "true" ]] || {
+                echo "Prerelease versions (alpha/beta/rc) must set prerelease=true." >&2
+                exit 1
+              }
+            else
+              [[ "$prerelease" != "true" ]] || {
+                echo "prerelease=true requires an alpha, beta, or rc version suffix." >&2
+                exit 1
+              }
+            fi
           else
             [[ "$REF_TYPE" == "tag" ]] || {
               echo "Release workflow only accepts version tags." >&2
