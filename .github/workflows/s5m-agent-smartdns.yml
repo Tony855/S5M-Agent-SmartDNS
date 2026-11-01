@@ -172,7 +172,15 @@ jobs:
           for config in s5m-agent/default-config.yaml s5m-agent/smartdns/default-config-smartdns.yaml; do
             grep -q 'tls://223.5.5.5' "$config"
             grep -q 'tls://223.6.6.6' "$config"
-            ! grep -Eq '^[[:space:]]+- (223\.5\.5\.5|119\.29\.29\.29)
+            ! grep -Fqx '    - 223.5.5.5' "$config"
+            ! grep -Fqx '    - 119.29.29.29' "$config"
+          done
+          # SmartDNS must keep loopback-only listeners and authenticated DoT hostnames.
+          grep -q '^bind 127.0.0.1:6053$' s5m-agent/smartdns/smartdns.conf
+          grep -q '^bind-tcp 127.0.0.1:6053$' s5m-agent/smartdns/smartdns.conf
+          grep -q '^server-tls 1.1.1.1:853 -host-name cloudflare-dns.com$' s5m-agent/smartdns/smartdns.conf
+          grep -q '^server-tls 8.8.8.8:853 -host-name dns.google$' s5m-agent/smartdns/smartdns.conf
+          ! grep -Eq '^[[:space:]]*server(-tcp)?[[:space:]]' s5m-agent/smartdns/smartdns.conf
           grep -q 'enable: true' s5m-agent/default-config.yaml
           grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
