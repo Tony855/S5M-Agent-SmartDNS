@@ -2,7 +2,7 @@ name: Installer Validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
     paths:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
