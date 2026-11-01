@@ -22,6 +22,7 @@ chmod 0755 /usr/local/sbin/s5m-agent-deploy
 | `BIND_IP` | `0.0.0.0` | 宿主机端口监听地址 |
 | `WEB_PORT` | `80` | 映射容器 Web 端口；设为 `0` 禁用 |
 | `PROXY_PORT` | `0` | 映射容器代理端口 7890；设为 `0` 禁用 |
+| `PROXY_BIND_IP` | `127.0.0.1`（新配置） | 代理端口独立绑定地址；旧配置缺少此项时沿用 `BIND_IP`，保持升级兼容 |
 | `DNS_PORT` | `0` | 将同一宿主机端口映射到容器 6053 TCP/UDP；设为 `0` 禁用 |
 | `DATA_DIR` | `/opt/s5m-agent/data` | 持久化数据目录 |
 | `RESTART_POLICY` | `unless-stopped` | Docker 重启策略 |
@@ -48,7 +49,8 @@ EXTRA_ENV_FILE="/etc/s5m-agent-smartdns.env"
 
 ## 安全注意事项
 
-- 代理端口默认不发布（`PROXY_PORT=0`）。只有确认已配置代理认证或来源 IP 白名单后，才建议将其改为 `7890` 并开放防火墙。
+- 代理端口默认不发布（`PROXY_PORT=0`）。新配置即使启用 `PROXY_PORT`，也默认只绑定 `127.0.0.1`；需要 LAN 客户端访问时，显式设置 `PROXY_BIND_IP` 为指定 LAN 地址，并配置防火墙来源 IP 白名单或 Mihomo 代理认证。不要绑定 `0.0.0.0` 后直接暴露公网。
+- 为兼容旧部署，已有配置文件若没有 `PROXY_BIND_IP`，升级脚本继续沿用原来的 `BIND_IP`，不会擅自把既有 7890 映射改成回环地址。
 - Web 端口默认绑定所有网卡的 80 端口。公网管理页面应配置 HTTPS 和访问控制；如仅本机访问，可将 `BIND_IP` 改为 `127.0.0.1`。
 - Agent 内部 API 端口 8088 不会映射到宿主机。
 - SmartDNS 默认不对宿主机发布；需要提供 DNS 服务时再配置 `DNS_PORT`，并限制来源网络。
