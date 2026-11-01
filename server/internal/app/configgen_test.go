@@ -808,6 +808,19 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}
 }
 
+func TestLegacyRoutingModeKeepsHistoricalDirectFallback(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-legacy", "test-secret", "legacy", "")
+	if err != nil {
+		t.Fatalf("build legacy config: %v", err)
+	}
+	if !strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("legacy mode must preserve its historical MATCH,DIRECT fallback:\\n%s", got)
+	}
+	if strings.Contains(got, "MATCH,REJECT") {
+		t.Fatalf("legacy mode must not be silently upgraded to strict rule mode:\\n%s", got)
+	}
+}
+
 func TestStrictRuleModeIsDefault(t *testing.T) {
 	if got := normalizeProxyRoutingMode(""); got != "rule" {
 		t.Fatalf("empty routing mode = %q, want rule", got)
