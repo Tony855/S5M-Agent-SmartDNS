@@ -968,8 +968,9 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		}
 	}
 	// SmartDNS uses literal-IP DoT upstreams, so it does not need DNS bootstrap
-	// through Mihomo. Route its encrypted upstream sockets through the selected
-	// proxy explicitly; this rule must precede source-CIDR and terminal MATCH rules.
+	// through Mihomo. For non-return modes, pin its encrypted upstream sockets
+	// to the selected proxy; return mode instead applies the same CN/overseas
+	// destination policy to DNS upstreams as it does to ordinary traffic.
 	if len(outs) > 0 && routingMode != "return" {
 		// Return mode routes DNS egress by destination geography too:
 		// mainland DNS upstreams use the mainland proxy, overseas upstreams go direct.
