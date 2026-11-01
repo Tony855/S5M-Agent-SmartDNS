@@ -710,6 +710,25 @@ func TestStrictRuleModeIsDefault(t *testing.T) {
 	}
 }
 
+func TestStoreCreateProxyDefaultsToStrictRuleMode(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-default-mode.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	proxy := &Proxy{
+		Name: "default-mode-proxy", Type: "socks5",
+		Server: "192.0.2.20", Port: 1080, Enabled: true,
+	}
+	if err := store.CreateProxy(proxy); err != nil {
+		t.Fatalf("CreateProxy: %v", err)
+	}
+	if proxy.Mode != "rule" {
+		t.Fatalf("stored proxy mode = %q, want rule", proxy.Mode)
+	}
+}
+
 func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 	proxies := []Proxy{
 		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
