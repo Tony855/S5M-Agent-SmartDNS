@@ -95,6 +95,8 @@ jobs:
           ! grep -q 'label="代理模式"' server/web/index.html
           grep -q 'machineProxyModes\[item.code\]' server/web/index.html
           grep -q 'handleSetMachineProxyMode' server/internal/app/router.go
+          grep -q 'handleListMachineProxyModes' server/internal/app/router.go
+          grep -q 'ListMachineProxyModes' server/internal/app/store.go
           grep -q 'GetMachineProxyMode(machineCode)' server/internal/app/configgen.go
           grep -q 'CREATE TABLE IF NOT EXISTS machine_proxy_settings' server/internal/app/store.go
           grep -q 'DOMAIN-SUFFIX,v2net.cc,DIRECT' server/internal/app/configgen.go
