@@ -890,6 +890,53 @@ func TestRoutingModeForMachineMixedProxyModesKeepStableFirstMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeProxyRoutingModePreservesHistoricalAliases(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{input: "proxy", want: "return"},
+		{input: "china", want: "split"},
+		{input: "split", want: "split"},
+		{input: "rule", want: "rule"},
+		{input: "unknown", want: "rule"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			if got := normalizeProxyRoutingMode(tc.input); got != tc.want {
+				t.Fatalf("normalizeProxyRoutingMode(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRoutingModeForMachineUsesPersistedProxyIDOrder(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "routing-mode-order.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	for _, proxy := range []*Proxy{
+		{Name: "legacy-split-first", Mode: "split", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: "node-a", Enabled: true},
+		{Name: "new-rule-second", Mode: "rule", Type: "socks5", Server: "192.0.2.11", Port: 1081, MachineCode: "node-a", Enabled: true},
+	} {
+		if err := store.CreateProxy(proxy); err != nil {
+			t.Fatalf("CreateProxy(%s): %v", proxy.Name, err)
+		}
+	}
+	persisted, err := store.ListProxies()
+	if err != nil {
+		t.Fatalf("ListProxies: %v", err)
+	}
+	if len(persisted) != 2 || persisted[0].Name != "legacy-split-first" || persisted[1].Name != "new-rule-second" {
+		t.Fatalf("ListProxies order = %#v, want stable insertion/ID order", persisted)
+	}
+	if got := routingModeForMachine(persisted, "node-a"); got != "split" {
+		t.Fatalf("routing mode = %q, want legacy split anchor", got)
+	}
+}
+
 func TestBuildConfigRoutesConfiguredDoHThroughProxy(t *testing.T) {
 	proxies := []Proxy{{
 		Name: "proxy-a", Mode: "proxy", Type: "socks5",
