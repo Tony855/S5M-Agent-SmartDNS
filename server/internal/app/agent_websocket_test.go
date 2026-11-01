@@ -1585,8 +1585,8 @@ func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDN
 	var fallback map[string]any
 	if err := conn.ReadJSON(&fallback); err != nil { t.Fatalf("read fallback config: %v", err) }
 	fallbackYAML, _ := fallback["yaml"].(string)
-	if fallback["type"] != "config.sync" || fallbackYAML != persisted || strings.Contains(fallbackYAML, "127.0.0.1:6053") {
-		t.Fatalf("SmartDNS health loss did not trigger upstream fallback sync: %#v", fallback)
+	if fallback["type"] != "config.sync" || !strings.Contains(fallbackYAML, "223.5.5.5") || !strings.Contains(fallbackYAML, "119.29.29.29") || strings.Contains(fallbackYAML, "127.0.0.1:6053") {
+		t.Fatalf("SmartDNS health loss did not trigger independent upstream fallback: %#v", fallback)
 	}
 	if fallback["sha256"] == healthyHash { t.Fatal("SmartDNS health transition did not change config hash") }
 	stored, err = app.store.GetNodeConfig(code)
