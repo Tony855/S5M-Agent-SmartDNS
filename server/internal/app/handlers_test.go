@@ -1323,8 +1323,8 @@ func TestSaveNodeConfigRemovesUnpublishedProxyPort(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("normalized node config was not persisted")
 	}
-	if strings.Contains(cfg.YAML, "mixed-port:") || strings.Contains(cfg.YAML, "port: 7899") {
-		t.Fatalf("explicit proxy listener was not removed before persistence: %s", cfg.YAML)
+	if !strings.Contains(cfg.YAML, "mixed-port: 7890") || strings.Contains(cfg.YAML, "port: 7899") {
+		t.Fatalf("Agent mixed listener was not normalized to 7890 before persistence: %s", cfg.YAML)
 	}
 	if !strings.Contains(cfg.YAML, "secret: node-secret") {
 		t.Fatalf("unrelated node settings were not preserved: %s", cfg.YAML)
