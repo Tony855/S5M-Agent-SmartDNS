@@ -280,6 +280,30 @@ func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
 	}
 }
 
+func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
+	config, err := os.ReadFile(filepath.Join("smartdns", "smartdns.conf"))
+	if err != nil {
+		t.Fatalf("read bundled SmartDNS config: %v", err)
+	}
+	if err := validateSmartDNSConfig(config); err != nil {
+		t.Fatalf("bundled SmartDNS config violates policy: %v", err)
+	}
+	text := string(config)
+	for _, want := range []string{
+		"bind 127.0.0.1:6053",
+		"bind-tcp 127.0.0.1:6053",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"server-tls 8.8.8.8:853 -host-name dns.google",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("bundled SmartDNS config missing %q", want)
+		}
+	}
+	if strings.Contains(text, "server 223.5.5.5") || strings.Contains(text, "server 119.29.29.29") {
+		t.Fatal("bundled SmartDNS config must not contain plaintext DNS upstreams")
+	}
+}
+
 func TestBackupSmartDNSConfigPreservesLiveFileOnBackupFailure(t *testing.T) {
 	t.Run("existing live config remains unchanged", func(t *testing.T) {
 		root := t.TempDir()
