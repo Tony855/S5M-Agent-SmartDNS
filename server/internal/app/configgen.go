@@ -73,9 +73,25 @@ type proxyOut struct {
 	Extra  map[string]any `yaml:",inline"`
 }
 
-// normalizeAgentProxyConfig removes explicit proxy listeners from Agent configs.
-// Agent nodes use Mihomo TUN for transparent proxying, not a public HTTP/SOCKS port.
+// normalizeAgentProxyConfig applies the Agent policy until the serialized YAML reaches a stable fixed point.
+// This keeps persisted configuration and its SHA-256 stable across repeated WebSocket requests.
 func normalizeAgentProxyConfig(yml string) (string, error) {
+	current := yml
+	for attempt := 0; attempt < 8; attempt++ {
+		next, err := normalizeAgentProxyConfigOnce(current)
+		if err != nil {
+			return "", err
+		}
+		if next == current {
+			return next, nil
+		}
+		current = next
+	}
+	return "", fmt.Errorf("Agent Mihomo 配置归一化未能在 8 次内收敛")
+}
+
+// normalizeAgentProxyConfigOnce performs one policy-normalization pass.
+func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
 		return "", fmt.Errorf("解析 Agent Mihomo 配置失败: %w", err)
