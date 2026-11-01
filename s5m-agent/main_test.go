@@ -504,6 +504,62 @@ func TestCompareMihomoRuntimeRulesAcceptsMihomoAPITypeNames(t *testing.T) {
 	}
 }
 
+func TestCompareMihomoRuntimeRulesAcceptsGeoIPCountryCodeCaseDifferences(t *testing.T) {
+	expected := []mihomoRuntimeRule{
+		{Type: "GEOIP", Payload: "CN", Proxy: "DIRECT"},
+		{Type: "GEOIP", Payload: "US", Proxy: "Proxy"},
+	}
+	actual := []mihomoRuntimeRule{
+		{Type: "GeoIP", Payload: "cn", Proxy: "DIRECT"},
+		{Type: "geoip", Payload: "us", Proxy: "Proxy"},
+	}
+	if err := compareMihomoRuntimeRules(expected, actual); err != nil {
+		t.Fatalf("case-equivalent GEOIP country codes rejected: %v", err)
+	}
+}
+
+func TestCompareMihomoRuntimeRulesKeepsOtherPayloadsCaseSensitive(t *testing.T) {
+	expected := []mihomoRuntimeRule{
+		{Type: "DOMAIN", Payload: "Example.COM", Proxy: "DIRECT"},
+	}
+	actual := []mihomoRuntimeRule{
+		{Type: "Domain", Payload: "example.com", Proxy: "DIRECT"},
+	}
+	if err := compareMihomoRuntimeRules(expected, actual); err == nil {
+		t.Fatal("non-GEOIP payload case differences must remain detectable")
+	}
+}
+
+func TestCompareMihomoRuntimeRulesRejectsDifferentGeoIPCountryCodes(t *testing.T) {
+	expected := []mihomoRuntimeRule{{Type: "GEOIP", Payload: "CN", Proxy: "DIRECT"}}
+	actual := []mihomoRuntimeRule{{Type: "GeoIP", Payload: "US", Proxy: "DIRECT"}}
+	if err := compareMihomoRuntimeRules(expected, actual); err == nil {
+		t.Fatal("different GEOIP country codes must not be treated as equivalent")
+	}
+}
+
+func TestCompareMihomoRuntimeRulesKeepsProxyNamesCaseSensitive(t *testing.T) {
+	expected := []mihomoRuntimeRule{{Type: "GEOIP", Payload: "CN", Proxy: "Proxy"}}
+	actual := []mihomoRuntimeRule{{Type: "GeoIP", Payload: "cn", Proxy: "proxy"}}
+	if err := compareMihomoRuntimeRules(expected, actual); err == nil {
+		t.Fatal("proxy policy names must remain case-sensitive")
+	}
+}
+
+func TestCompareMihomoRuntimeRulesStillRequiresSameOrderAndCount(t *testing.T) {
+	expected := []mihomoRuntimeRule{
+		{Type: "GEOIP", Payload: "CN", Proxy: "DIRECT"},
+		{Type: "GEOIP", Payload: "US", Proxy: "DIRECT"},
+	}
+	reversed := []mihomoRuntimeRule{expected[1], expected[0]}
+	if err := compareMihomoRuntimeRules(expected, reversed); err == nil {
+		t.Fatal("rule order differences must remain detectable")
+	}
+	if err := compareMihomoRuntimeRules(expected, expected[:1]); err == nil {
+		t.Fatal("rule count differences must remain detectable")
+	}
+}
+
 func TestRollbackAndVerifyConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("secret: new\n"), 0600); err != nil {
