@@ -1,7 +1,6 @@
 # S5M Agent default config with local SmartDNS as the primary DNS resolver.
 # Existing /data/config.yaml is intentionally preserved by the init script.
-mixed-port: 7890
-allow-lan: true
+allow-lan: false
 mode: rule
 log-level: info
 ipv6: false

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"gopkg.in/yaml.v3"
 )
 
 func TestDecodeErrorStatus(t *testing.T) {
@@ -1157,7 +1158,7 @@ func TestParseProxyLinePreservesProtocolOptions(t *testing.T) {
 	}
 }
 
-func TestGetNodeConfigRepairsStaleAgentPort(t *testing.T) {
+func TestGetNodeConfigRemovesExplicitProxyListeners(t *testing.T) {
 	app, code, _ := websocketTestApp(t)
 	staleYAML := "mixed-port: 8080\nsecret: keep-this-secret\ntun:\n  enable: false\ndns:\n  enable: true\n"
 	if err := app.store.SaveNodeConfig(code, staleYAML); err != nil {
@@ -1178,8 +1179,17 @@ func TestGetNodeConfigRepairsStaleAgentPort(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode node config response: %v", err)
 	}
-	if err := validateAgentPublishedProxyPort(response.YAML); err != nil {
-		t.Fatalf("response contains unpublished proxy port: %v; YAML=%s", err, response.YAML)
+	var normalized map[string]any
+	if err := yaml.Unmarshal([]byte(response.YAML), &normalized); err != nil {
+		t.Fatalf("decode normalized response YAML: %v", err)
+	}
+	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
+		if _, exists := normalized[key]; exists {
+			t.Errorf("Agent config must not expose %q: %s", key, response.YAML)
+		}
+	}
+	if normalized["allow-lan"] != false || normalized["external-controller"] != "127.0.0.1:8088" {
+		t.Fatalf("Agent listener security normalization failed: %s", response.YAML)
 	}
 	if !strings.Contains(response.YAML, "secret: keep-this-secret") ||
 		!strings.Contains(response.YAML, "enable: false") ||
@@ -1248,7 +1258,7 @@ func TestSaveNodeConfigDistinguishesEmptyYAMLDocument(t *testing.T) {
 	}
 }
 
-func TestSaveNodeConfigRejectsUnpublishedProxyPort(t *testing.T) {
+func TestSaveNodeConfigRemovesUnpublishedProxyPort(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "node-config-port.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -1269,14 +1279,20 @@ func TestSaveNodeConfigRejectsUnpublishedProxyPort(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	app.handleSaveNodeConfig(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	cfg, err := store.GetNodeConfig(code)
 	if err != nil {
 		t.Fatalf("GetNodeConfig: %v", err)
 	}
-	if cfg != nil {
-		t.Fatalf("invalid proxy port config was persisted: %#v", cfg)
+	if cfg == nil {
+		t.Fatal("normalized node config was not persisted")
+	}
+	if strings.Contains(cfg.YAML, "mixed-port:") || strings.Contains(cfg.YAML, "port: 7899") {
+		t.Fatalf("explicit proxy listener was not removed before persistence: %s", cfg.YAML)
+	}
+	if !strings.Contains(cfg.YAML, "secret: node-secret") {
+		t.Fatalf("unrelated node settings were not preserved: %s", cfg.YAML)
 	}
 }

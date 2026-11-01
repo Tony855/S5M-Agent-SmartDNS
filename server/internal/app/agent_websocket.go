@@ -767,7 +767,11 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if msg.Type != "heartbeat" {
-			fmt.Printf("agent_ws: request received machine_code=%q type=%q id=%q\n", machineCode, msg.Type, msg.ID)
+			if msg.Type == "config.request" {
+				fmt.Printf("agent_ws: config request machine_code=%q id=%q client_sha256=%q\n", machineCode, msg.ID, msg.ConfigHash)
+			} else {
+				fmt.Printf("agent_ws: request received machine_code=%q type=%q id=%q\n", machineCode, msg.Type, msg.ID)
+			}
 		}
 		if msg.Type == "config.request" || msg.Type == "command.request" || msg.Type == "command.ack" {
 			// Serialize sensitive WebSocket operations with connection replacement and
@@ -913,8 +917,8 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		}
 	}
 	// Repair stale persisted node configs before hashing/sending; otherwise the Agent
-	// would keep receiving controller port 8080 despite Docker publishing 7890.
-	normalized, normalizeErr := normalizeAgentMixedPort(yml)
+	// would keep receiving the controller's local listener configuration instead of the Agent's transparent-only configuration.
+	normalized, normalizeErr := normalizeAgentProxyConfig(yml)
 	if normalizeErr != nil {
 		return normalizeErr
 	}
@@ -934,8 +938,52 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 			if latest == nil || strings.TrimSpace(latest.YAML) == "" {
 				return fmt.Errorf("并发更新后节点配置不存在")
 			}
+			// A concurrent operator edit may itself reintroduce an unpublished
+			// proxy listener. Never send that snapshot without re-validating it.
+			latestNormalized, latestNormalizeErr := normalizeAgentProxyConfig(latest.YAML)
+			if latestNormalizeErr != nil {
+				return fmt.Errorf("并发更新后的节点配置规范化失败: %w", latestNormalizeErr)
+			}
+			if latestNormalized != latest.YAML {
+				return fmt.Errorf("节点配置在规范化期间发生并发更新；为避免下发未规范化配置，请重试同步")
+			}
 			yml = latest.YAML
 		}
+	}
+	// Migrate legacy persisted configs that were previously overwritten with the
+	// SmartDNS loopback resolver. Restore only nameserver from a fresh generated
+	// baseline, using CAS so a concurrent operator edit always wins.
+	if !a.agentHasHealthySmartDNS(machineCode) {
+		baseline, baselineErr := a.BuildConfigForMachine(machineCode)
+		if baselineErr != nil {
+			return fmt.Errorf("生成 DNS 回退基准配置失败，拒绝下发可能失效的 SmartDNS 地址: %w", baselineErr)
+		}
+		restored, changed, restoreErr := restoreAgentDNSNameserver(yml, baseline)
+		if restoreErr != nil { return restoreErr }
+		if changed {
+			updated, saveErr := a.store.SaveNodeConfigIfUnchanged(machineCode, yml, restored)
+			if saveErr != nil { return fmt.Errorf("保存旧版 SmartDNS DNS 回退迁移失败: %w", saveErr) }
+			if !updated {
+				latest, readErr := a.store.GetNodeConfig(machineCode)
+				if readErr != nil { return readErr }
+				if latest == nil || strings.TrimSpace(latest.YAML) == "" { return fmt.Errorf("DNS 回退迁移发生并发冲突，且最新节点配置不存在") }
+				yml = latest.YAML
+				// Never overwrite a newer concurrent edit. If it still contains the
+				// legacy endpoint, stop and let the next request retry against it.
+				if _, stillLegacy, checkErr := restoreAgentDNSNameserver(yml, baseline); checkErr != nil { return checkErr } else if stillLegacy {
+					return fmt.Errorf("DNS 回退迁移遇到并发配置更新，未覆盖新配置；请重试配置同步")
+				}
+			} else {
+				yml = restored
+			}
+		}
+	}
+	// SmartDNS is a runtime capability, not part of the saved node configuration.
+	// Apply it only to the outgoing payload so health loss immediately falls back
+	// to the original configured nameservers on the next config request.
+	yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode))
+	if err != nil {
+		return err
 	}
 	sum := sha256.Sum256([]byte(yml))
 	hash := hex.EncodeToString(sum[:])

@@ -10,10 +10,9 @@
 | --- | ---: | --- |
 | S5M 主控 Web/API | 80/TCP（默认） | 管理界面、节点注册、配置下发 |
 | Agent 绑定页面/API | 80/TCP | 初次绑定和 Agent 管理 |
-| Mihomo 代理 | 7890/TCP | 节点代理入口；按实际用途决定是否开放 |
 | Mihomo 控制 API | 8088/TCP | 仅供容器内部 Agent 使用，**不要映射到公网** |
 
-建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
+建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent 不提供 7890 HTTP/SOCKS 显式代理入口；Linux 节点通过 Mihomo TUN 实现透明代理，TUN 需在节点配置中启用。 在主控节点的 Mihomo 配置中设置 `tun.enable: true`；容器运行参数必须包含 `NET_ADMIN` 和 `/dev/net/tun`。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
 
 ## 2. 部署前准备
 
@@ -114,7 +113,8 @@ sudo docker run -d \
   --init \
   -e S5M_HOSTNAME="$(hostname)" \
   -p 80:80 \
-  -p 7890:7890 \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
   -v /opt/s5m-agent/data:/data \
   s5m-agent:local
 ```
@@ -132,8 +132,8 @@ docker compose up -d
 注意：
 
 - `/data` 是持久化目录，保存 `config.yaml`、绑定凭据等；不要在普通升级时删除。
-- 不要添加 `-p 8088:8088`。Mihomo 控制 API 不应暴露到宿主机公网。
-- 如果该节点不需要给其他设备提供代理服务，可删掉 `-p 7890:7890`。
+- 不要添加 `-p 8088:8088`。Mihomo 控制 API 只监听容器回环地址。
+- 不要映射 7890；Agent 不提供 HTTP/SOCKS 显式代理入口。Linux Docker 使用 TUN 时必须提供 `NET_ADMIN` 和 `/dev/net/tun`。
 - 若端口 80 已被占用，可改成 `-p 18080:80`，随后通过 `http://节点IP:18080/` 访问。
 - 若 Docker 守护进程以 root 运行，宿主机目录权限应允许容器运行用户写入。若日志报 `permission denied`，先检查目录权限和容器日志，不要直接将目录权限改为全局可写。
 
@@ -153,12 +153,10 @@ curl -fsS http://127.0.0.1:80/api/config
 
 ### 5.5 防火墙
 
-只向管理网或可信管理员 IP 开放 80/TCP；7890/TCP 是否开放取决于代理用途。示例（UFW，先确认 SSH 管理端口已放行，避免锁死远程连接）：
+只向管理网或可信管理员 IP 开放 80/TCP。不要开放 7890/TCP；透明代理流量由 TUN 路由处理。示例（UFW，先确认 SSH 管理端口已放行，避免锁死远程连接）：
 
 ```bash
 sudo ufw allow from ADMIN_PUBLIC_IP to any port 80 proto tcp
-# 只有确实需要对外提供代理时才开放：
-sudo ufw allow 7890/tcp
 sudo ufw status numbered
 ```
 
@@ -192,7 +190,7 @@ sudo ufw status numbered
 ### 6.3 端口与管理
 
 - 在 VETH/LAN 防火墙中仅允许管理网访问 Agent 的 80/TCP。
-- 7890/TCP 仅在需要向其他设备提供代理服务时开放。
+- 不映射 7890；Agent 不提供 HTTP/SOCKS 显式代理入口。透明代理由设备侧 TUN/策略路由实现。
 - 不要把 8088/TCP 转发到公网或不可信 LAN。
 - 从管理电脑访问 `http://ROUTEROS_AGENT_IP:80/`，确认页面可打开。
 - 检查 RouterOS 容器状态与日志；如果容器立即退出，优先检查镜像架构、容器支持状态、root directory 可写性、`/data` 挂载以及启动日志。
@@ -232,7 +230,8 @@ sudo docker run -d \
   --init \
   -e S5M_HOSTNAME="$(hostname)" \
   -p 80:80 \
-  -p 7890:7890 \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
   -v /opt/s5m-agent/data:/data \
   s5m-agent:local
 ```
@@ -260,5 +259,6 @@ sudo docker run -d \
 - [ ] Agent 容器运行稳定，Mihomo 版本可显示。
 - [ ] `/data` 使用持久化存储，重启容器后配置仍在。
 - [ ] Agent 绑定主控，持续心跳并显示在线。
-- [ ] 80/TCP 仅对管理网开放；8088/TCP 没有映射或公网暴露。
+- [ ] 80/TCP 仅对管理网开放；7890 未发布；8088/TCP 没有映射或公网暴露。
+- [ ] Linux 节点已验证 `/dev/net/tun`、`NET_ADMIN` 和 TUN 自动路由；RouterOS 设备未验证前不启用 TUN。
 - [ ] 已验证重启恢复、升级和回滚流程。

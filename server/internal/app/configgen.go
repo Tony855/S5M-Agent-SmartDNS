@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -19,7 +20,7 @@ import (
 
 const baseTemplate = `mode: rule
 mixed-port: 8080
-allow-lan: true
+allow-lan: false
 log-level: info
 ipv6: false
 external-controller: 127.0.0.1:8088
@@ -72,9 +73,25 @@ type proxyOut struct {
 	Extra  map[string]any `yaml:",inline"`
 }
 
-// normalizeAgentMixedPort enforces the Agent's published proxy port and TUN safety settings.
-// Controller/global configs intentionally retain their own 8080 listener.
-func normalizeAgentMixedPort(yml string) (string, error) {
+// normalizeAgentProxyConfig applies the Agent policy until the serialized YAML reaches a stable fixed point.
+// This keeps persisted configuration and its SHA-256 stable across repeated WebSocket requests.
+func normalizeAgentProxyConfig(yml string) (string, error) {
+	current := yml
+	for attempt := 0; attempt < 8; attempt++ {
+		next, err := normalizeAgentProxyConfigOnce(current)
+		if err != nil {
+			return "", err
+		}
+		if next == current {
+			return next, nil
+		}
+		current = next
+	}
+	return "", fmt.Errorf("Agent Mihomo 配置归一化未能在 8 次内收敛")
+}
+
+// normalizeAgentProxyConfigOnce performs one policy-normalization pass.
+func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
 		return "", fmt.Errorf("解析 Agent Mihomo 配置失败: %w", err)
@@ -106,7 +123,7 @@ func normalizeAgentMixedPort(yml string) (string, error) {
 		}
 		return nil
 	}
-	deleteKeys := map[string]bool{"port": true, "socks-port": true}
+	deleteKeys := map[string]bool{"mixed-port": true, "port": true, "socks-port": true, "redir-port": true, "tproxy-port": true, "listeners": true, "allow-lan": true, "external-controller": true}
 	filtered := make([]*yaml.Node, 0, len(root.Content))
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if !deleteKeys[root.Content[i].Value] {
@@ -114,7 +131,7 @@ func normalizeAgentMixedPort(yml string) (string, error) {
 		}
 	}
 	root.Content = filtered
-	setScalar(root, "mixed-port", "7890", "!!int")
+	setScalar(root, "allow-lan", "false", "!!bool")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 
 	// Keep the controller's own hostname out of fake-IP answers to avoid breaking
@@ -378,6 +395,126 @@ func indent(s, prefix string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// agentHasHealthySmartDNS reports whether the authenticated Agent heartbeat
+// confirms that the combined image has a working local SmartDNS resolver.
+func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
+	if strings.TrimSpace(machineCode) == "" {
+		return false
+	}
+	value, err := a.store.GetSetting("agent_status_" + machineCode)
+	if err != nil || strings.TrimSpace(value) == "" {
+		return false
+	}
+	var status map[string]any
+	if err := json.Unmarshal([]byte(value), &status); err != nil {
+		return false
+	}
+	return status["smartdns_available"] == true &&
+		status["smartdns_running"] == true &&
+		status["smartdns_dns_healthy"] == true
+}
+
+// applyAgentRuntimeDNS derives the outgoing Agent config without mutating its persisted source.
+func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
+	if !smartDNSHealthy {
+		return yml, nil
+	}
+	return routeAgentDNSViaSmartDNS(yml)
+}
+
+// restoreAgentDNSNameserver restores only dns.nameserver from a freshly generated baseline.
+// It is intentionally limited to the legacy SmartDNS-only value so operator DNS
+// settings are never overwritten during ordinary config delivery.
+func restoreAgentDNSNameserver(yml, fallbackYML string) (string, bool, error) {
+	var currentDoc, fallbackDoc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &currentDoc); err != nil {
+		return "", false, fmt.Errorf("解析现有 Agent DNS 配置失败: %w", err)
+	}
+	if err := yaml.Unmarshal([]byte(fallbackYML), &fallbackDoc); err != nil {
+		return "", false, fmt.Errorf("解析基准 Agent DNS 配置失败: %w", err)
+	}
+	findMappingValue := func(root *yaml.Node, key string) *yaml.Node {
+		if root == nil || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode { return nil }
+		mapping := root.Content[0]
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			if mapping.Content[i].Value == key { return mapping.Content[i+1] }
+		}
+		return nil
+	}
+	currentDNS := findMappingValue(&currentDoc, "dns")
+	fallbackDNS := findMappingValue(&fallbackDoc, "dns")
+	if currentDNS == nil || currentDNS.Kind != yaml.MappingNode { return yml, false, nil }
+	var currentNameserver *yaml.Node
+	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
+		if currentDNS.Content[i].Value == "nameserver" { currentNameserver = currentDNS.Content[i+1]; break }
+	}
+	if currentNameserver == nil || currentNameserver.Kind != yaml.SequenceNode || len(currentNameserver.Content) != 1 ||
+		currentNameserver.Content[0].Value != "127.0.0.1:6053" {
+		return yml, false, nil
+	}
+	if fallbackDNS == nil || fallbackDNS.Kind != yaml.MappingNode {
+		return "", false, fmt.Errorf("基准 Agent 配置缺少 dns 对象，拒绝保留失效的 SmartDNS 地址")
+	}
+	var fallbackNameserver *yaml.Node
+	for i := 0; i+1 < len(fallbackDNS.Content); i += 2 {
+		if fallbackDNS.Content[i].Value == "nameserver" { fallbackNameserver = fallbackDNS.Content[i+1]; break }
+	}
+	if fallbackNameserver == nil || fallbackNameserver.Kind != yaml.SequenceNode || len(fallbackNameserver.Content) == 0 {
+		return "", false, fmt.Errorf("基准 Agent 配置缺少有效 dns.nameserver，拒绝保留失效的 SmartDNS 地址")
+	}
+	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
+		if currentDNS.Content[i].Value == "nameserver" {
+			copyNode := *fallbackNameserver
+			copyNode.Content = append([]*yaml.Node(nil), fallbackNameserver.Content...)
+			currentDNS.Content[i+1] = &copyNode
+			out, err := yaml.Marshal(&currentDoc)
+			if err != nil { return "", false, fmt.Errorf("序列化恢复后的 Agent DNS 配置失败: %w", err) }
+			return string(out), true, nil
+		}
+	}
+	return yml, false, nil
+}
+
+// routeAgentDNSViaSmartDNS changes only the ordinary nameserver list. Bootstrap
+// and proxy-server DNS stay on literal IP resolvers to avoid resolver loops.
+func routeAgentDNSViaSmartDNS(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 Agent DNS 配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	var dns *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dns" {
+			dns = root.Content[i+1]
+			break
+		}
+	}
+	if dns == nil || dns.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 配置缺少 dns 对象")
+	}
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		if dns.Content[i].Value == "nameserver" {
+			dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+			}}
+			out, err := yaml.Marshal(&doc)
+			return string(out), err
+		}
+	}
+	dns.Content = append(dns.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"},
+		&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+		}},
+	)
+	out, err := yaml.Marshal(&doc)
+	return string(out), err
+}
+
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
@@ -401,13 +538,15 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Controller configs use 8080; Agent configs must always match Docker's 7890:7890 mapping.
+	// Controller configs keep their separate listener; Agent configs expose no explicit proxy listener.
 	if strings.TrimSpace(machineCode) != "" {
-		yml, err = normalizeAgentMixedPort(yml)
+		yml, err = normalizeAgentProxyConfig(yml)
 		if err != nil {
 			return "", err
 		}
 	}
+	// SmartDNS is applied only to the runtime WebSocket payload. Never persist
+	// the Agent-local 127.0.0.1:6053 resolver into the operator's source YAML.
 	// TUN is opt-in for generated configs. Existing saved per-node YAML remains authoritative.
 	if strings.EqualFold(strings.TrimSpace(settings["tun_enable"]), "true") {
 		yml = strings.Replace(yml, "tun:\n    enable: false", "tun:\n    enable: true", 1)
@@ -498,9 +637,9 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			}
 			generated = string(marshaled)
 		}
-		generated, err = normalizeAgentMixedPort(generated)
+		generated, err = normalizeAgentProxyConfig(generated)
 		if err != nil {
-			return fmt.Errorf("机器 %s 的代理端口校正失败: %w", machineCode, err)
+			return fmt.Errorf("机器 %s 的透明代理配置校正失败: %w", machineCode, err)
 		}
 		var doc map[string]any
 		if err := yaml.Unmarshal([]byte(generated), &doc); err != nil {

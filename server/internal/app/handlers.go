@@ -1772,10 +1772,10 @@ func (a *App) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Keep legacy config delivery aligned with the Agent container's 7890:7890 mapping.
-	normalized, normalizeErr := normalizeAgentMixedPort(yml)
+	// Normalize legacy node YAML before delivery so no explicit proxy listener is exposed.
+	normalized, normalizeErr := normalizeAgentProxyConfig(yml)
 	if normalizeErr != nil {
-		writeErr(w, http.StatusInternalServerError, "校正节点代理端口失败")
+		writeErr(w, http.StatusInternalServerError, "透明代理配置校正失败")
 		return
 	}
 	if normalized != yml {
@@ -2430,7 +2430,7 @@ func (a *App) handleGetNodeConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Repair stale persisted Agent YAML before returning it to the management UI.
 	// Keep the controller/global template untouched and update only this machine's config.
-	normalized, normalizeErr := normalizeAgentMixedPort(cfg.YAML)
+	normalized, normalizeErr := normalizeAgentProxyConfig(cfg.YAML)
 	if normalizeErr != nil {
 		writeErr(w, http.StatusInternalServerError, "节点配置端口校正失败: "+normalizeErr.Error())
 		return
@@ -2509,16 +2509,17 @@ func (a *App) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "完整配置缺少 dns 配置块")
 		return
 	}
-	if err := validateAgentPublishedProxyPort(in.YAML); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+	normalizedYAML, normalizeErr := normalizeAgentProxyConfig(in.YAML)
+	if normalizeErr != nil {
+		writeErr(w, http.StatusBadRequest, "透明代理配置校验失败: "+normalizeErr.Error())
 		return
 	}
-	if err := a.store.SaveNodeConfig(code, in.YAML); err != nil {
+	if err := a.store.SaveNodeConfig(code, normalizedYAML); err != nil {
 		writeErr(w, 500, "保存节点配置失败")
 		return
 	}
-	// 手工保存完整 YAML 后，标记为独立配置，避免错误显示为模板同步。
-	_, _ = a.store.db.Exec("INSERT INTO node_template_bindings(machine_code, template_version, config_sha256, source, updated_at) VALUES(?, 0, ?, 'independent', ?) ON CONFLICT(machine_code) DO UPDATE SET template_version=0, config_sha256=excluded.config_sha256, source='independent', updated_at=excluded.updated_at", code, hashConfig(in.YAML), time.Now().UTC().Format(time.RFC3339))
+	// Persist the exact normalized bytes that the Agent will receive and hash.
+	_, _ = a.store.db.Exec("INSERT INTO node_template_bindings(machine_code, template_version, config_sha256, source, updated_at) VALUES(?, 0, ?, 'independent', ?) ON CONFLICT(machine_code) DO UPDATE SET template_version=0, config_sha256=excluded.config_sha256, source='independent', updated_at=excluded.updated_at", code, hashConfig(normalizedYAML), time.Now().UTC().Format(time.RFC3339))
 	writeJSON(w, 200, map[string]string{"message": "完整节点配置已保存为独立配置；Agent 将在下一次拉取时应用"})
 }
 

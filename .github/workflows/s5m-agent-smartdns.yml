@@ -7,6 +7,7 @@ on:
       - "s5m-agent/Dockerfile.smartdns"
       - "s5m-agent/docker-compose.yml"
       - "s5m-agent/Dockerfile"
+      - "scripts/s5m-deploy.sh"
       - "s5m-agent/Dockerfile.routeros"
       - "s5m-agent/smartdns/**"
       - "s5m-agent/main.go"
@@ -87,11 +88,21 @@ jobs:
           set -eux
           grep -q "image: ghcr.io/tony855/s5m-agent-smartdns:dev" s5m-agent/docker-compose.yml
           ! grep -q "6053:6053" s5m-agent/docker-compose.yml
+          ! grep -q '7890:7890' s5m-agent/docker-compose.yml
+          ! grep -q 'EXPOSE.*7890' s5m-agent/Dockerfile
+          ! grep -q 'EXPOSE.*7890' s5m-agent/Dockerfile.smartdns
+          ! grep -q 'PORT_PROXY.*7890' scripts/s5m-deploy.sh
+          ! grep -q -- '-p .*7890' scripts/s5m-deploy.sh
+          ! grep -q '^mixed-port:' s5m-agent/default-config.yaml
+          ! grep -q '^mixed-port:' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '^allow-lan: false' s5m-agent/default-config.yaml
+          grep -q '^allow-lan: false' s5m-agent/smartdns/default-config-smartdns.yaml
           docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
             test -x /app/s5m-agent
             test -x /usr/local/bin/mihomo
             test -x /usr/sbin/smartdns
             test -x /init
+            test -x /command/s6-svc
             test -x /etc/s6-overlay/s6-rc.d/smartdns/run
             test -s /etc/s6-overlay/s6-rc.d/smartdns/type
             test -e /etc/s6-overlay/s6-rc.d/user/contents.d/smartdns
@@ -117,7 +128,6 @@ jobs:
 
           docker run -d --name "$container" --restart no \
             -p 127.0.0.1::80/tcp \
-            -p 127.0.0.1::7890/tcp \
             -v "$data_dir:/data" \
             s5m-agent-smartdns:test >/dev/null
 
@@ -148,11 +158,13 @@ jobs:
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
           agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
-          proxy_port="$(docker port "$container" 7890/tcp | awk -F: 'NR==1 {print $NF}')"
-          [[ -n "$agent_port" && -n "$proxy_port" ]]
+          [[ -n "$agent_port" ]]
+          if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
+            echo "Explicit proxy port 7890 must not be published" >&2
+            exit 1
+          fi
 
           curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
-          nc -z -w 2 127.0.0.1 "$proxy_port"
 
           # Test the loopback-only resolver from a helper sharing the Agent network namespace.
           docker run --rm --network "container:$container" alpine:3.24 sh -ec '
@@ -160,6 +172,40 @@ jobs:
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
           '
+
+          # Verify the exact s6 service path used by Agent self-recovery.
+          docker exec "$container" /command/s6-svc -r /run/service/smartdns
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" /healthcheck.sh; then break; fi
+            sleep 1
+          done
+          docker exec "$container" /healthcheck.sh
+
+          # Inject a live-but-unresponsive resolver failure. SIGSTOP keeps the
+          # process present (so pid checks alone would pass); s6 must replace it.
+          smartdns_pid="$(docker exec "$container" pidof smartdns | awk '{print $1}')"
+          [[ -n "$smartdns_pid" ]]
+          docker exec "$container" kill -STOP "$smartdns_pid"
+          if docker run --rm --network "container:$container" alpine:3.24 sh -ec '
+            apk add --no-cache bind-tools >/dev/null
+            ! dig +time=1 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          '; then
+            :
+          else
+            echo "DNS unexpectedly answered while SmartDNS was SIGSTOPed" >&2
+            exit 1
+          fi
+          # SIGSTOP cannot be interrupted by s6's normal TERM-based restart.
+          # Resume the process first, then exercise the same restart command
+          # used by Agent recovery (which can now terminate it cleanly).
+          docker exec "$container" kill -CONT "$smartdns_pid"
+          docker exec "$container" /command/s6-svc -r /run/service/smartdns
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" /healthcheck.sh; then break; fi
+            sleep 1
+          done
+          docker exec "$container" /healthcheck.sh
+          docker exec "$container" pidof smartdns >/dev/null
 
           # The private Mihomo controller API must remain unpublished.
           if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
@@ -205,7 +251,6 @@ jobs:
 
           docker run -d --name "$container" --restart no \
             -p 127.0.0.1::80/tcp \
-            -p 127.0.0.1::7890/tcp \
             -v "$data_dir:/data" \
             s5m-agent-smartdns:arm64-test >/dev/null
 
@@ -237,10 +282,12 @@ jobs:
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
           agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
-          proxy_port="$(docker port "$container" 7890/tcp | awk -F: 'NR==1 {print $NF}')"
-          [[ -n "$agent_port" && -n "$proxy_port" ]]
+          [[ -n "$agent_port" ]]
+          if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
+            echo "Explicit proxy port 7890 must not be published" >&2
+            exit 1
+          fi
           curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
-          nc -z -w 2 127.0.0.1 "$proxy_port"
 
           # Exercise real UDP and TCP DNS queries through SmartDNS in ARM64 too.
           docker run --rm --network "container:$container" alpine:3.24 sh -ec '

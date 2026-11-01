@@ -22,9 +22,8 @@ import (
 // defaultMihomoTemplate is shown when no draft has been saved yet. It is a
 // safe starter template based on the project's generated configuration shape.
 // Replace the example proxy endpoint and secret before applying it to a node.
-const defaultMihomoTemplate = `# 基础设置
-mixed-port: 7890
-allow-lan: true
+const defaultMihomoTemplate = `# 透明代理：不开放 HTTP/SOCKS 显式代理端口
+allow-lan: false
 mode: rule
 log-level: info
 ipv6: false
@@ -129,25 +128,6 @@ func validateMihomoTemplate(yml string) error {
 		if _, ok := dns.(map[string]any); !ok {
 			return fmt.Errorf("dns 必须是 YAML 配置块")
 		}
-	}
-	return nil
-}
-
-// validateAgentPublishedProxyPort enforces the fixed Docker host-port contract.
-// Agent deployment publishes host port 7890 to container port 7890; a different
-// mixed-port would leave the configured proxy unreachable through the published port.
-func validateAgentPublishedProxyPort(yml string) error {
-	var cfg map[string]any
-	if err := yaml.Unmarshal([]byte(yml), &cfg); err != nil {
-		return fmt.Errorf("YAML 语法错误: %w", err)
-	}
-	value, ok := cfg["mixed-port"]
-	if !ok {
-		return fmt.Errorf("Agent 配置必须设置 mixed-port: 7890，当前部署只发布代理端口 7890")
-	}
-	port, ok := value.(int)
-	if !ok || port != 7890 {
-		return fmt.Errorf("Agent 代理端口必须为 mixed-port: 7890，才能匹配 Docker 端口映射")
 	}
 	return nil
 }
@@ -476,7 +456,13 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	// Reuse the node config validator so invalid or incomplete configs cannot be applied.
+	// Normalize every applied node template to transparent-only listeners before saving.
+	normalizedTemplate, normalizeErr := normalizeAgentProxyConfig(template)
+	if normalizeErr != nil {
+		writeErr(w, 400, "模板不能应用: "+normalizeErr.Error())
+		return
+	}
+	template = normalizedTemplate
 	if err := validateMihomoTemplate(template); err != nil {
 		writeErr(w, 400, "模板不能应用: "+err.Error())
 		return
@@ -496,10 +482,6 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 	}
 	if _, ok := cfg["dns"]; !ok {
 		writeErr(w, 400, "应用到节点的完整配置必须包含 dns 配置块")
-		return
-	}
-	if err := validateAgentPublishedProxyPort(template); err != nil {
-		writeErr(w, http.StatusBadRequest, "模板不能应用: "+err.Error())
 		return
 	}
 	tx, err := a.store.db.Begin()

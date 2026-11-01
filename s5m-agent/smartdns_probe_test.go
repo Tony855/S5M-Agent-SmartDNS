@@ -641,6 +641,49 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
 	})
 
+	t.Run("restart recovers unhealthy resolver before fallback", func(t *testing.T) {
+		deps := good
+		probeCalls, restartCalls := 0, 0
+		deps.probe = func() bool { probeCalls++; return probeCalls > 1 }
+		deps.restart = func() error { restartCalls++; return nil }
+		deps.waitHealthy = func(timeout time.Duration) bool { return true }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_recovery", "restarted")
+		if restartCalls != 1 { t.Fatalf("restart calls = %d, want 1", restartCalls) }
+	})
+
+	t.Run("failed restart reports unhealthy for controller DNS fallback", func(t *testing.T) {
+		deps := good
+		deps.probe = func() bool { return false }
+		restartCalls := 0
+		deps.restart = func() error { restartCalls++; return os.ErrPermission }
+		deps.waitHealthy = func(time.Duration) bool { t.Fatal("must not wait after restart command failure"); return false }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if restartCalls != 1 { t.Fatalf("restart calls = %d, want 1", restartCalls) }
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "s6 重启失败") {
+			t.Fatalf("restart failure diagnostic missing: %q", got)
+		}
+	})
+
+	t.Run("restart command succeeds but DNS remains unhealthy", func(t *testing.T) {
+		deps := good
+		deps.probe = func() bool { return false }
+		deps.restart = func() error { return nil }
+		deps.waitHealthy = func(time.Duration) bool { return false }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "主控应切换备用 DNS") {
+			t.Fatalf("fallback diagnostic missing: %q", got)
+		}
+	})
+
 	t.Run("first failure diagnostic wins", func(t *testing.T) {
 		deps := good
 		deps.readConfig = func(string) ([]byte, error) { return nil, os.ErrPermission }
@@ -822,5 +865,79 @@ func TestSmartDNSReplayRequiresHealthyUDPAndTCPProbe(t *testing.T) {
 	})
 	if err != nil || ok || called {
 		t.Fatalf("different config replay = %v, err=%v, probe called=%v", ok, err, called)
+	}
+}
+
+
+func TestSmartDNSRestartGateEnforcesCooldownAndAllowsRetry(t *testing.T) {
+	gate := &smartDNSRestartGate{}
+	start := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if ok, remaining := gate.TryAcquire(start, 30*time.Second); !ok || remaining != 0 {
+		t.Fatalf("first restart acquire = %v, remaining=%v; want true, 0", ok, remaining)
+	}
+	if ok, remaining := gate.TryAcquire(start.Add(10*time.Second), 30*time.Second); ok || remaining != 20*time.Second {
+		t.Fatalf("cooldown acquire = %v, remaining=%v; want false, 20s", ok, remaining)
+	}
+	if ok, remaining := gate.TryAcquire(start.Add(30*time.Second), 30*time.Second); !ok || remaining != 0 {
+		t.Fatalf("retry after cooldown = %v, remaining=%v; want true, 0", ok, remaining)
+	}
+}
+
+func TestSmartDNSRestartGateSerializesConcurrentAttempts(t *testing.T) {
+	gate := &smartDNSRestartGate{}
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	const callers = 32
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	acquired := 0
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			if ok, _ := gate.TryAcquire(now, smartDNSRestartCooldown); ok {
+				mu.Lock()
+				acquired++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if acquired != 1 {
+		t.Fatalf("concurrent restart acquisitions = %d, want exactly 1", acquired)
+	}
+}
+
+
+func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "smartdns")
+	if err := os.WriteFile(binary, []byte("binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartCalls := 0
+	deps := smartDNSStatusDependencies{
+		binaryInfo: func() (os.FileInfo, error) { return info, nil },
+		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\\n"), nil },
+		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
+		process: func() ([]byte, error) { return []byte("1234"), nil },
+		probe: func() bool { return false },
+		restart: func() error { restartCalls++; return errSmartDNSRestartCooldown },
+		waitHealthy: func(time.Duration) bool { t.Fatal("must not wait when restart is rate-limited"); return false },
+	}
+	status := map[string]any{}
+	collectSmartDNSStatusWithDependencies(status, deps)
+	if status["smartdns_running"] != true || status["smartdns_dns_healthy"] != false {
+		t.Fatalf("cooldown must retain running-but-unhealthy state: %#v", status)
+	}
+	if restartCalls != 1 {
+		t.Fatalf("restart attempts = %d, want 1", restartCalls)
+	}
+	message, _ := status["smartdns_last_error"].(string)
+	if !strings.Contains(message, "备用 DNS") || !strings.Contains(message, "冷却期") {
+		t.Fatalf("fallback/cooldown diagnostic missing: %q", message)
 	}
 }
