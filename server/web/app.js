@@ -975,7 +975,9 @@ createApp({
         } else if (success === 0) {
           showMsg(data.message || '没有成功导入节点，请检查格式和服务端日志', 'warning');
         } else if (fail > 0) {
-          showMsg(`导入完成：成功 ${success} 条，失败 ${fail} 条。${data.message || ''}`, 'warning');
+          showMsg(`导入完成：成功 ${success} 条，跳过重复 ${Number(data.skipped) || 0} 条，失败 ${fail} 条。${data.message || ''}`, 'warning');
+        } else if (Number(data.skipped) > 0) {
+          showMsg(`导入完成：新增 ${success} 条，跳过已存在的相同节点 ${Number(data.skipped)} 条`, 'success');
         } else {
           showMsg(`导入成功 ${success} 条`, 'success');
         }
