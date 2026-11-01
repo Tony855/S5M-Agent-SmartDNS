@@ -970,11 +970,13 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	// SmartDNS uses literal-IP DoT upstreams, so it does not need DNS bootstrap
 	// through Mihomo. Route its encrypted upstream sockets through the selected
 	// proxy explicitly; this rule must precede source-CIDR and terminal MATCH rules.
-	if len(outs) > 0 {
+	if len(outs) > 0 && routingMode != "return" {
+		// Return mode routes DNS egress by destination geography too:
+		// mainland DNS upstreams use the mainland proxy, overseas upstreams go direct.
 		rules = append(rules, fmt.Sprintf("PROCESS-NAME,smartdns,%s", outs[0].Name))
 	}
 	// Mihomo's own DoH bootstrap stays independent from SmartDNS and uses literal-IP DNS.
-	if len(outs) > 0 && routingMode != "global" {
+	if len(outs) > 0 && routingMode != "global" && routingMode != "return" {
 		for _, domain := range []string{"dns.alidns.com", "doh.pub", "dns.cloudflare.com", "dns.google"} {
 			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, outs[0].Name))
 		}
