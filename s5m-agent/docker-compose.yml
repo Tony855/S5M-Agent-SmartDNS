@@ -10,8 +10,5 @@ services:
       - "80:80"
     volumes:
       - ./data:/data
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    # TUN is enabled by default. Host must provide /dev/net/tun.
+    # Default container has no NET_ADMIN capability or TUN device.
+    # Add docker-compose.tun.yml only when tun.enable is explicitly true.

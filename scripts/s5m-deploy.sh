@@ -8,7 +8,7 @@ IMAGE_LOCAL="s5m-agent:local"
 CONTAINER="s5m-agent"
 DATA_DIR="/opt/s5m-agent/data"
 PORT_WEB=80
-ENABLE_TUN="${ENABLE_TUN:-1}"
+ENABLE_TUN="${ENABLE_TUN:-0}"
 BACKUP_NAME="${CONTAINER}.rollback.${BASHPID}"
 HAD_OLD=0
 NEW_STARTED=0
@@ -143,11 +143,23 @@ docker tag "$IMAGE_SRC" "$IMAGE_LOCAL" 2>/dev/null || {
 log "保留持久化数据目录：$DATA_DIR"
 install -d -m 0700 "$DATA_DIR"
 
-# TUN 默认开启；仅在 ENABLE_TUN=0 时关闭 TUN 权限。
+config_uses_tun() {
+  awk '
+    /^tun:[[:space:]]*$/ { in_tun=1; next }
+    /^[^[:space:]#]/ { in_tun=0 }
+    in_tun && /^[[:space:]]+enable:[[:space:]]*true([[:space:]]*(#.*)?)?$/ { found=1 }
+    END { exit !found }
+  ' "$1"
+}
+if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "$DATA_DIR/config.yaml"; then
+  die "现有 config.yaml 中 tun.enable=true；为避免升级后 TUN 失效，请使用 ENABLE_TUN=1 或先明确关闭 TUN。"
+fi
+
+# TUN 默认关闭；只有 ENABLE_TUN=1 才授予 TUN 权限。
 TUN_ARGS=()
 if [ "$ENABLE_TUN" = "1" ]; then
   TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)
-  log "TUN 默认启用：授予 NET_ADMIN 并挂载 /dev/net/tun，继续使用 bridge 网络隔离。"
+  log "已显式启用容器内 TUN；继续使用 bridge 网络隔离。"
 else
   log "已显式关闭 TUN：未授予 NET_ADMIN，也未挂载 /dev/net/tun。"
 fi
@@ -170,6 +182,7 @@ docker run -d \
   --restart unless-stopped \
   --network bridge \
   "${TUN_ARGS[@]}" \
+  -e "S5M_HOSTNAME=$(hostname)" \
   -p "${PORT_WEB}:80" \
   -v "$DATA_DIR":/data \
   "$IMAGE_LOCAL" || die "容器启动失败"

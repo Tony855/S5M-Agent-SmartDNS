@@ -12,7 +12,7 @@
 | Agent 绑定页面/API | 80/TCP | 初次绑定和 Agent 管理 |
 | Mihomo 控制 API | 8088/TCP | 仅供容器内部 Agent 使用，**不要映射到公网** |
 
-建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent Mihomo 默认在容器内监听 mixed-port 7890，`allow-lan: true`，默认不启用代理用户名/密码认证；Docker Compose 不将 7890 发布到宿主机，只有容器网络或明确配置的 LAN 路由可访问。Mihomo 控制 API 仍使用独立随机 `secret` 且仅监听回环地址；Linux 节点通过 Mihomo TUN 实现透明代理；TUN 默认开启，Agent 容器默认获得最小必需的 `NET_ADMIN` capability 和 `/dev/net/tun` 设备映射；部署前必须确认宿主机存在字符设备 `/dev/net/tun`。如需关闭 TUN，可设置 `ENABLE_TUN=0` 并在配置中关闭 `tun.enable`。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
+建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent Mihomo 默认在容器内监听 mixed-port 7890，`allow-lan: true`，默认不启用代理用户名/密码认证；Docker Compose 不将 7890 发布到宿主机，只有容器网络或明确配置的 LAN 路由可访问。Mihomo 控制 API 仍使用独立随机 `secret` 且仅监听回环地址；Linux 节点可通过 Mihomo TUN 实现透明代理；TUN 默认关闭，只有显式启用时才为 Agent 容器授予 `NET_ADMIN` capability 和 `/dev/net/tun` 设备映射。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
 
 ## 2. 部署前准备
 
@@ -121,20 +121,27 @@ sudo docker run -d \
 ```bash
 export S5M_HOSTNAME="$(hostname)"
 cd s5m-agent
-# 默认无 TUN 权限；需要 TUN 时先配置 tun.enable: true，再显式叠加权限文件。
+# 默认 tun.enable=false；默认 Compose 不授予 NET_ADMIN。
 docker compose up -d
-docker compose -f docker-compose.yml up -d
-# 如需关闭 TUN，使用不带设备权限的自定义 Compose 覆盖配置，并同时设置 tun.enable: false。
+# 需要 TUN：先在 data/config.yaml 中明确设置 tun.enable: true，
+# 确认宿主机存在 /dev/net/tun，再显式叠加权限文件。
+docker compose -f docker-compose.yml -f docker-compose.tun.yml up -d
+# 关闭 TUN：先将 tun.enable 设为 false，再使用默认 Compose。
+docker compose up -d
 ```
 
 如果用 systemd、面板或其他自动化工具启动 Compose，请在其环境配置中显式设置 `S5M_HOSTNAME` 为宿主机的真实 hostname。
+
+迁移注意：已有节点的 `/data/config.yaml` 会保留，不会自动关闭 TUN。若其中 `tun.enable: true`，请在升级期间继续使用 `docker-compose.tun.yml`；两个部署脚本会在检测到旧配置仍启用 TUN、但未设置 `ENABLE_TUN=1` 时停止升级，避免容器重启后透明代理静默失效。
+
+迁移注意：已有节点的 `/data/config.yaml` 会保留，不会自动关闭 TUN。若其中 `tun.enable: true`，请在升级期间继续使用 `docker-compose.tun.yml`；`scripts/s5m-deploy.sh` 和一键部署脚本会在检测到旧配置仍启用 TUN、但未设置 `ENABLE_TUN=1` 时停止升级，避免容器重启后透明代理静默失效。
 
 注意：
 
 - `/data` 是持久化目录，保存 `config.yaml`、绑定凭据等；不要在普通升级时删除。
 - 不要添加 `-p 8088:8088`。Mihomo 控制 API 只监听容器回环地址。
 - Mihomo 在容器内监听 7890 mixed-port，默认 `allow-lan: true` 且不启用代理认证；Compose 不发布 7890 到宿主机。若要让 LAN 客户端访问，必须明确配置容器网络/VETH 与 LAN 路由，并仅允许可信来源；不要将 7890 暴露到公网。8088 控制 API 仍仅监听容器回环地址。
-- TUN 默认开启，Compose 默认授予最小必需的 `NET_ADMIN` 并映射 `/dev/net/tun`；部署前确认宿主机存在该字符设备。可通过 `ENABLE_TUN=0` 关闭部署权限，并同时将节点配置中的 `tun.enable` 设为 `false`；不要使用 host 网络模式。
+- TUN 默认关闭：新安装默认 `tun.enable: false`，默认 Compose 和 `scripts/s5m-deploy.sh` 不授予 `NET_ADMIN`、不挂载 `/dev/net/tun`。只有明确将 `tun.enable: true` 并叠加 `docker-compose.tun.yml`，或运行安装脚本时设置 `ENABLE_TUN=1`，才启用容器内 TUN。已有 `/data/config.yaml` 不会被覆盖；若现有配置仍为 `tun.enable: true`，升级时必须继续显式启用 TUN 权限，或先由管理员确认后关闭 TUN。不要使用 host 网络模式。
 - 若端口 80 已被占用，可改成 `-p 18080:80`，随后通过 `http://节点IP:18080/` 访问。
 - 若 Docker 守护进程以 root 运行，宿主机目录权限应允许容器运行用户写入。若日志报 `permission denied`，先检查目录权限和容器日志，不要直接将目录权限改为全局可写。
 

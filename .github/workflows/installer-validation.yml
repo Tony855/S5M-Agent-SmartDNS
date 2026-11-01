@@ -7,6 +7,7 @@ on:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
       - "scripts/deploy-agent.sh"
+      - "scripts/s5m-deploy.sh"
       - "server/**"
       - ".github/workflows/installer-validation.yml"
   pull_request:
@@ -34,6 +35,7 @@ jobs:
           bash -n scripts/install.sh
           bash -n scripts/install-server.sh
           bash -n scripts/deploy-agent.sh
+          bash -n scripts/s5m-deploy.sh
           bash -n scripts/tests/deploy-agent-rollback.sh
 
       - name: Verify self-contained server installer contract
@@ -118,7 +120,7 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck errors
-        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/tests/deploy-agent-rollback.sh
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh
 
       - name: Test Agent deployment rollback fault paths
         run: bash scripts/tests/deploy-agent-rollback.sh

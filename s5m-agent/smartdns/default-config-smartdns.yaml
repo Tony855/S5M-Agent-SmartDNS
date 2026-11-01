@@ -39,7 +39,7 @@ rules:
   - MATCH,DIRECT
 
 tun:
-  enable: true
+  enable: false
   stack: system
   auto-route: true
   auto-detect-interface: true
