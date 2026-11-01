@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -917,5 +918,60 @@ func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
 	}
 	if got != "false" {
 		t.Fatalf("tun_enable default = %q, want false", got)
+	}
+}
+
+func TestRouteAgentDNSViaSmartDNSChangesOnlyPrimaryNameserver(t *testing.T) {
+	input := `dns:
+  enable: true
+  default-nameserver:
+    - 223.5.5.5
+  proxy-server-nameserver:
+    - 119.29.29.29
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+tun:
+  enable: false
+`
+	got, err := routeAgentDNSViaSmartDNS(input)
+	if err != nil { t.Fatalf("routeAgentDNSViaSmartDNS: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode result: %v", err) }
+	dns := config["dns"].(map[string]any)
+	if got := dns["nameserver"].([]any); len(got) != 1 || got[0] != "127.0.0.1:6053" {
+		t.Fatalf("nameserver = %#v, want only local SmartDNS", got)
+	}
+	if got := dns["default-nameserver"].([]any); len(got) != 1 || got[0] != "223.5.5.5" {
+		t.Fatalf("default-nameserver unexpectedly changed: %#v", got)
+	}
+	if got := dns["proxy-server-nameserver"].([]any); len(got) != 1 || got[0] != "119.29.29.29" {
+		t.Fatalf("proxy-server-nameserver unexpectedly changed: %#v", got)
+	}
+}
+
+func TestAgentHasHealthySmartDNSRequiresProcessAndDNSProbe(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-capability.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	cases := []struct{name string; status map[string]any; want bool}{
+		{"missing", nil, false},
+		{"binary only", map[string]any{"smartdns_available": true}, false},
+		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true}, false},
+		{"healthy", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.status == nil {
+				_ = store.UpdateSettings(map[string]string{"agent_status_node-a": ""})
+			} else {
+				data, _ := json.Marshal(tc.status)
+				if err := store.UpdateSettings(map[string]string{"agent_status_node-a": string(data)}); err != nil { t.Fatal(err) }
+			}
+			if got := app.agentHasHealthySmartDNS("node-a"); got != tc.want {
+				t.Fatalf("agentHasHealthySmartDNS() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
