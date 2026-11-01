@@ -195,6 +195,10 @@ jobs:
             echo "DNS unexpectedly answered while SmartDNS was SIGSTOPed" >&2
             exit 1
           fi
+          # SIGSTOP cannot be interrupted by s6's normal TERM-based restart.
+          # Resume the process first, then exercise the same restart command
+          # used by Agent recovery (which can now terminate it cleanly).
+          docker exec "$container" kill -CONT "$smartdns_pid"
           docker exec "$container" /command/s6-svc -r /run/service/smartdns
           for attempt in $(seq 1 30); do
             if docker exec "$container" /healthcheck.sh; then break; fi
