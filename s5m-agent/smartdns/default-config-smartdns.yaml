@@ -1,6 +1,6 @@
 # S5M Agent default config with local SmartDNS as the primary DNS resolver.
 # Existing /data/config.yaml is intentionally preserved by the init script.
-allow-lan: false
+allow-lan: true
 mode: rule
 log-level: info
 find-process-mode: strict
@@ -8,6 +8,8 @@ ipv6: false
 
 external-controller: 127.0.0.1:8088
 secret: __S5M_GENERATED_SECRET__
+authentication:
+  - "s5m:__S5M_GENERATED_SECRET__"
 
 profile:
   store-selected: true
