@@ -113,6 +113,8 @@ sudo docker run -d \
   --init \
   -e S5M_HOSTNAME="$(hostname)" \
   -p 80:80 \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
   -v /opt/s5m-agent/data:/data \
   s5m-agent:local
 ```
@@ -228,6 +230,8 @@ sudo docker run -d \
   --init \
   -e S5M_HOSTNAME="$(hostname)" \
   -p 80:80 \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
   -v /opt/s5m-agent/data:/data \
   s5m-agent:local
 ```
