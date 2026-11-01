@@ -240,6 +240,9 @@ func TestParseProxyLineAcceptsValidPort(t *testing.T) {
 	if proxy.Port != 65535 {
 		t.Fatalf("port = %d, want 65535", proxy.Port)
 	}
+	if proxy.Mode != "rule" {
+		t.Fatalf("imported proxy mode = %q, want rule", proxy.Mode)
+	}
 	if msg := (&App{}).validateProxy(proxy); msg != "" {
 		t.Fatalf("validateProxy() = %q, want success", msg)
 	}
