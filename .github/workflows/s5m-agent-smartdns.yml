@@ -172,6 +172,14 @@ jobs:
             dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
           '
 
+          # Verify the exact s6 service path used by Agent self-recovery.
+          docker exec "$container" s6-svc -r /run/service/smartdns
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" /healthcheck.sh; then break; fi
+            sleep 1
+          done
+          docker exec "$container" /healthcheck.sh
+
           # The private Mihomo controller API must remain unpublished.
           if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
             echo "Mihomo controller API 8088 must not be published" >&2
