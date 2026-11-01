@@ -695,6 +695,18 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}
 }
 
+func TestStrictRuleModeIsDefault(t *testing.T) {
+	if got := normalizeProxyRoutingMode(""); got != "rule" {
+		t.Fatalf("empty routing mode = %q, want rule", got)
+	}
+	if got := normalizeProxyRoutingMode("unknown"); got != "rule" {
+		t.Fatalf("unknown routing mode = %q, want rule", got)
+	}
+	if got := routingModeForMachine(nil, "node-without-proxy"); got != "rule" {
+		t.Fatalf("routing mode without a matching proxy = %q, want rule", got)
+	}
+}
+
 func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 	proxies := []Proxy{
 		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
