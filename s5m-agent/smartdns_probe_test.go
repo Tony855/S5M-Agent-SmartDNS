@@ -906,3 +906,38 @@ func TestSmartDNSRestartGateSerializesConcurrentAttempts(t *testing.T) {
 		t.Fatalf("concurrent restart acquisitions = %d, want exactly 1", acquired)
 	}
 }
+
+
+func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "smartdns")
+	if err := os.WriteFile(binary, []byte("binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartCalls := 0
+	deps := smartDNSStatusDependencies{
+		binaryInfo: func() (os.FileInfo, error) { return info, nil },
+		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\\n"), nil },
+		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
+		process: func() ([]byte, error) { return []byte("1234"), nil },
+		probe: func() bool { return false },
+		restart: func() error { restartCalls++; return errSmartDNSRestartCooldown },
+		waitHealthy: func(time.Duration) bool { t.Fatal("must not wait when restart is rate-limited"); return false },
+	}
+	status := map[string]any{}
+	collectSmartDNSStatusWithDependencies(status, deps)
+	if status["smartdns_running"] != true || status["smartdns_dns_healthy"] != false {
+		t.Fatalf("cooldown must retain running-but-unhealthy state: %#v", status)
+	}
+	if restartCalls != 1 {
+		t.Fatalf("restart attempts = %d, want 1", restartCalls)
+	}
+	message, _ := status["smartdns_last_error"].(string)
+	if !strings.Contains(message, "备用 DNS") || !strings.Contains(message, "冷却期") {
+		t.Fatalf("fallback/cooldown diagnostic missing: %q", message)
+	}
+}
