@@ -1054,10 +1054,9 @@ func collectMihomoStatus() map[string]any {
 		status["last_error"] = "解析配置失败: " + err.Error()
 		return status
 	}
-	secret, _ := cfg["secret"].(string)
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		status["last_error"] = "Mihomo 配置缺少 API secret，拒绝发起未鉴权状态请求"
+	secret, err := mihomoAPISecretFromConfig(cfg)
+	if err != nil {
+		status["last_error"] = err.Error()
 		return status
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
