@@ -119,7 +119,6 @@ docker run -d \
   --cap-add=NET_ADMIN \
   --device=/dev/net/tun:/dev/net/tun \
   -p "${PORT_WEB}:80" \
-  -p "${PORT_PROXY}:7890" \
   -v "$DATA_DIR":/data \
   "$IMAGE_LOCAL" || die "容器启动失败"
 
