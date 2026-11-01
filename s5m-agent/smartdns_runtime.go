@@ -47,6 +47,14 @@ func (g *smartDNSRestartGate) TryAcquire(now time.Time, cooldown time.Duration) 
 
 var smartDNSRestartLimiter smartDNSRestartGate
 
+func restartSmartDNSService() error {
+	allowed, _ := smartDNSRestartLimiter.TryAcquire(time.Now(), smartDNSRestartCooldown)
+	if !allowed {
+		return errSmartDNSRestartCooldown
+	}
+	return exec.Command("s6-svc", "-r", "/run/service/smartdns").Run()
+}
+
 type boundedDiagnosticBuffer struct {
 	mu        sync.Mutex
 	buffer    bytes.Buffer
@@ -248,9 +256,7 @@ func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
 			return exec.Command("pidof", "smartdns").CombinedOutput()
 		},
 		probe: probeSmartDNSDNS,
-		restart: func() error {
-			return exec.Command("s6-svc", "-r", "/run/service/smartdns").Run()
-		},
+		restart: restartSmartDNSService,
 		waitHealthy: waitForSmartDNSHealthy,
 	}
 }
@@ -320,6 +326,10 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		return
 	}
 	if err := deps.restart(); err != nil {
+		if errors.Is(err, errSmartDNSRestartCooldown) {
+			appendSmartDNSStatusError(status, "SmartDNS 仍未通过 DNS 健康检查；重启处于 30 秒冷却期，主控应继续使用备用 DNS")
+			return
+		}
 		appendSmartDNSStatusError(status, "SmartDNS 异常，s6 重启失败: "+safeSmartDNSDiagnostic(err.Error()))
 		return
 	}
