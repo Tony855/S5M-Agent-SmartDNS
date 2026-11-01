@@ -91,6 +91,16 @@ func normalizeAgentProxyConfig(yml string) (string, error) {
 }
 
 // normalizeAgentProxyConfigOnce performs one policy-normalization pass.
+func removeMappingKey(root *yaml.Node, key string) {
+	if root == nil || root.Kind != yaml.MappingNode { return }
+	filtered := make([]*yaml.Node, 0, len(root.Content))
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key { continue }
+		filtered = append(filtered, root.Content[i], root.Content[i+1])
+	}
+	root.Content = filtered
+}
+
 func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
@@ -131,30 +141,11 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 		}
 	}
 	root.Content = filtered
-	// Expose the Agent mixed proxy listener to the LAN, but require credentials.
-	// Reuse the per-Agent Mihomo secret as the proxy password; keep the API
-	// controller loopback-only and strip every other listener form.
+	// Expose the mixed proxy listener to the LAN. Proxy authentication is
+	// intentionally opt-in; the Mihomo API secret remains independently enabled.
 	setScalar(root, "mixed-port", "7890", "!!int")
 	setScalar(root, "allow-lan", "true", "!!bool")
-	secret := mappingValue(root, "secret")
-	if secret == nil || secret.Kind != yaml.ScalarNode || strings.TrimSpace(secret.Value) == "" {
-		return "", fmt.Errorf("Agent Mihomo 配置缺少代理认证密钥，拒绝开启 LAN 监听")
-	}
-	auth := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "s5m:" + secret.Value},
-	}}
-	foundAuth := false
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "authentication" {
-			root.Content[i+1] = auth
-			foundAuth = true
-			break
-		}
-	}
-	if !foundAuth {
-		root.Content = append(root.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "authentication"}, auth)
-	}
+	removeMappingKey(root, "authentication")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
 	setScalar(root, "find-process-mode", "strict", "!!str")
