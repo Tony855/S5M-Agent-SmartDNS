@@ -579,7 +579,21 @@ func validateAgentWSTelemetry(status map[string]any) error {
 	}
 	for _, key := range []string{"traffic_error", "connections_error"} {
 		value, ok := status[key].(string)
-		if !ok || len(value) > 512 { return fmt.Errorf("telemetry %s 必须是长度不超过 512 字节的字符串", key) }
+		if !ok || len(value) > 512 {
+			return fmt.Errorf("telemetry %s 必须是长度不超过 512 字节的字符串", key)
+		}
+	}
+	if value, exists := status["telemetry_stale"]; exists {
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("telemetry telemetry_stale 必须是布尔值")
+		}
+	}
+	if value, exists := status["telemetry_sampled_at_ms"]; exists {
+		timestamp, ok := value.(float64)
+		if !ok || math.IsNaN(timestamp) || math.IsInf(timestamp, 0) ||
+			timestamp < 0 || timestamp > 9.0e15 || math.Trunc(timestamp) != timestamp {
+			return fmt.Errorf("telemetry telemetry_sampled_at_ms 必须是有限的非负整数")
+		}
 	}
 	return nil
 }
@@ -802,6 +816,12 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				"traffic_error": msg.Status["traffic_error"],
 				"connections_error": msg.Status["connections_error"],
 				"telemetry_received_at_ms": receivedAt.UnixMilli(),
+			}
+			if stale, ok := msg.Status["telemetry_stale"].(bool); ok {
+				telemetry["telemetry_stale"] = stale
+			}
+			if sampledAt, ok := msg.Status["telemetry_sampled_at_ms"]; ok {
+				telemetry["telemetry_sampled_at_ms"] = sampledAt
 			}
 			a.agentWSMu.Lock()
 			if a.agentWSGeneration[machineCode] != generation || a.agentWSConnections[machineCode] != session {
