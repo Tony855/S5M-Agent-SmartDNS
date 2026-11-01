@@ -177,7 +177,8 @@ jobs:
             test -e /etc/s6-overlay/s6-rc.d/mihomo/dependencies.d/smartdns
             test -s /usr/share/licenses/smartdns/LICENSE
             test -s /usr/share/licenses/smartdns/SOURCE_COMMIT
-            grep -q "127.0.0.1:6053" /app/default-config.yaml\n          grep -q "enable: true" /app/default-config.yaml
+            grep -q "127.0.0.1:6053" /app/default-config.yaml
+            grep -q "enable: true" /app/default-config.yaml
             /usr/local/bin/mihomo -v
             /usr/sbin/smartdns -h >/dev/null 2>&1 || true
           '
