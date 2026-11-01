@@ -2,10 +2,12 @@ package app
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -55,6 +57,9 @@ proxies:
 	if config["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("external-controller = %#v", config["external-controller"])
 	}
+	if config["find-process-mode"] != "strict" {
+		t.Fatalf("find-process-mode = %#v, want strict", config["find-process-mode"])
+	}
 	dns, ok := config["dns"].(map[string]any)
 	if !ok {
 		t.Fatalf("dns is not a mapping: %#v", config["dns"])
@@ -83,6 +88,9 @@ proxies:
 	foundDNSHijack := false
 	for _, item := range dnsHijack { if item == "any:53" { foundDNSHijack = true; break } }
 	if !foundDNSHijack { t.Errorf("tun dns-hijack missing any:53: %#v", dnsHijack) }
+	foundTCPDNSHijack := false
+	for _, item := range dnsHijack { if item == "tcp://any:53" { foundTCPDNSHijack = true; break } }
+	if !foundTCPDNSHijack { t.Errorf("tun dns-hijack missing tcp://any:53: %#v", dnsHijack) }
 	addresses, ok := tun["route-exclude-address"].([]any)
 	if !ok { t.Fatalf("route-exclude-address is not a sequence: %#v", tun["route-exclude-address"]) }
 	for _, want := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.10/32", "10.1.2.0/24"} {
@@ -92,6 +100,47 @@ proxies:
 	}
 	for _, item := range addresses {
 		if item == "198.18.0.0/16" { t.Fatalf("fake-IP range must remain routed through TUN: %#v", addresses) }
+	}
+}
+
+func TestNormalizeAgentProxyConfigKeepsBootstrapIndependentFromSmartDNSAndTUN(t *testing.T) {
+	input := `dns:
+  default-nameserver:
+    - 127.0.0.1:6053
+    - bootstrap.example.com
+    - 9.9.9.9
+  proxy-server-nameserver:
+    - 127.0.0.1:6053
+    - resolver.example.com
+    - 8.8.4.4
+tun:
+  enable: true
+`
+	got, err := normalizeAgentProxyConfig(input)
+	if err != nil { t.Fatalf("normalize config: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode config: %v", err) }
+	dns := config["dns"].(map[string]any)
+	for _, key := range []string{"default-nameserver", "proxy-server-nameserver"} {
+		servers, ok := dns[key].([]any)
+		if !ok { t.Fatalf("%s is not a sequence: %#v", key, dns[key]) }
+		seen := map[string]bool{}
+		for _, raw := range servers {
+			server, ok := raw.(string)
+			if !ok || net.ParseIP(server) == nil { t.Errorf("%s contains non-literal bootstrap %v", key, raw); continue }
+			if server == "127.0.0.1" || server == "127.0.0.1:6053" { t.Errorf("%s must not point to SmartDNS: %q", key, server) }
+			seen[server] = true
+		}
+		for _, required := range []string{"223.5.5.5", "119.29.29.29"} {
+			if !seen[required] { t.Errorf("%s missing independent bootstrap %s: %#v", key, required, servers) }
+		}
+	}
+	tun := config["tun"].(map[string]any)
+	excluded := tun["route-exclude-address"].([]any)
+	for _, required := range []string{"223.5.5.5/32", "119.29.29.29/32", "::1/128", "fc00::/7", "fe80::/10"} {
+		found := false
+		for _, raw := range excluded { if raw == required { found = true; break } }
+		if !found { t.Errorf("TUN route exclusions missing %s: %#v", required, excluded) }
 	}
 }
 
@@ -244,7 +293,8 @@ func TestSyncAuthorizedNodeConfigsPreservesNodeSettingsAndCanRetry(t *testing.T)
 	}); err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
-	customYAML := `mixed-port: 7899
+	customYAML := `mode: global
+mixed-port: 7899
 secret: keep-this-secret
 tun:
   enable: false
@@ -255,13 +305,14 @@ proxies:
   - name: stale-proxy
     type: socks5
 rules:
+  - DOMAIN-SUFFIX,custom-node.example,DIRECT
   - MATCH,DIRECT
 `
 	if err := store.SaveNodeConfig("node-a", customYAML); err != nil {
 		t.Fatalf("SaveNodeConfig: %v", err)
 	}
 	proxy := &Proxy{
-		Name: "managed-proxy", Mode: "proxy", Type: "socks5",
+		Name: "managed-proxy", Mode: "rule", Type: "socks5",
 		Server: "192.0.2.50", Port: 1080, MachineCode: "node-a",
 		SourceCIDR: "0.0.0.0/0", Enabled: true,
 	}
@@ -282,17 +333,20 @@ rules:
 			t.Fatalf("node config missing after attempt %d", attempt)
 		}
 		for _, want := range []string{
+			"mode: rule",
 			"allow-lan: false",
 			"secret: keep-this-secret",
 			"enable: false",
 			"listen: 127.0.0.1:5353",
 			"managed-proxy",
+			"DOMAIN-SUFFIX,custom-node.example,DIRECT",
+			"MATCH,REJECT",
 		} {
 			if !strings.Contains(got.YAML, want) {
 				t.Errorf("attempt %d: synced YAML lost or omitted %q:\n%s", attempt, want, got.YAML)
 			}
 		}
-		if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") {
+		if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") || strings.Contains(got.YAML, "MATCH,DIRECT") {
 			t.Errorf("attempt %d: managed proxy/rule sections were not refreshed:\n%s", attempt, got.YAML)
 		}
 	}
@@ -450,8 +504,11 @@ func TestBuildConfigMapsDisabledCIDRToEnabledEndpoint(t *testing.T) {
 	if strings.Contains(got, "NETWORK,UDP,DIRECT") {
 		t.Fatal("不应生成全局 UDP 直连规则")
 	}
-	if !strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatal("缺少默认 MATCH,DIRECT 规则")
+	if !strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("严格规则模式必须以 MATCH,REJECT 收尾")
+	}
+	if strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatal("严格规则模式不能将未命中流量回退为 DIRECT")
 	}
 	for _, unwanted := range []string{"221111cdn", "^abc.*2222com"} {
 		if strings.Contains(got, unwanted) {
@@ -533,6 +590,54 @@ func TestBuildConfigNormalizesPersistedProxyFields(t *testing.T) {
 	}
 }
 
+func TestMergeManagedRuleValuesRequiresOneTerminalMatchAndValidCustomRules(t *testing.T) {
+	generated := []any{
+		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
+		"DOMAIN,controller.example.com,DIRECT",
+		"MATCH,REJECT",
+	}
+	for _, tc := range []struct {
+		name string
+		custom any
+	}{
+		{name: "scalar rules", custom: "DOMAIN-SUFFIX,custom.example,DIRECT"},
+		{name: "object rule", custom: []any{map[string]any{"rule": "DOMAIN-SUFFIX,custom.example,DIRECT"}}},
+		{name: "empty rule", custom: []any{" "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := mergeManagedRuleValues(tc.custom, generated); err == nil {
+				t.Fatal("malformed custom rules must be rejected")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		generated []any
+	}{
+		{name: "missing terminal", generated: []any{"DOMAIN-SUFFIX,v2net.cc,DIRECT"}},
+		{name: "multiple terminals", generated: []any{"MATCH,DIRECT", "MATCH,REJECT"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := mergeManagedRuleValues([]any{"DOMAIN-SUFFIX,custom.example,DIRECT"}, tc.generated); err == nil {
+				t.Fatal("generated rules must contain exactly one terminal MATCH")
+			}
+		})
+	}
+
+	merged, err := mergeManagedRuleValues([]any{
+		"DOMAIN-SUFFIX,custom.example,DIRECT",
+		"MATCH,DIRECT",
+		"DOMAIN-SUFFIX,custom.example,DIRECT",
+	}, generated)
+	if err != nil {
+		t.Fatalf("merge valid custom rules: %v", err)
+	}
+	if len(merged) != 4 || merged[0] != generated[0] || merged[1] != generated[1] ||
+		merged[2] != "DOMAIN-SUFFIX,custom.example,DIRECT" || merged[3] != "MATCH,REJECT" {
+		t.Fatalf("unexpected merged rule order or terminal policy: %#v", merged)
+	}
+}
+
 func TestMergeManagedProxySectionsPreservesCustomSettings(t *testing.T) {
 	custom := `mode: global
 mixed-port: 7890
@@ -542,6 +647,7 @@ proxies:
   - name: stale-proxy
     type: socks5
 rules:
+  - DOMAIN-SUFFIX,custom.example,DIRECT
   - MATCH,DIRECT
 `
 	generated := `mode: rule
@@ -550,20 +656,26 @@ proxies:
   - name: managed-proxy
     type: http
 rules:
-  - MATCH,managed-proxy
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - DOMAIN,controller.example.com,DIRECT
+  - MATCH,REJECT
 `
 
 	got, err := mergeManagedProxySections(custom, generated)
 	if err != nil {
 		t.Fatalf("合并全局配置失败: %v", err)
 	}
-	for _, want := range []string{"mode: global", "mixed-port: 7890", "enable: true", "managed-proxy", "MATCH,managed-proxy"} {
+	for _, want := range []string{"mode: rule", "mixed-port: 7890", "enable: true", "managed-proxy", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "DOMAIN-SUFFIX,custom.example,DIRECT", "MATCH,REJECT"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("合并配置缺少 %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "stale-proxy") || strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatalf("代理数据库管理的 proxies/rules 应覆盖旧内容:\n%s", got)
+	if strings.Contains(got, "stale-proxy") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "GEOIP,CN,DIRECT") {
+		t.Fatalf("严格规则模式必须移除旧终结 MATCH/DIRECT 和大陆自动直连:\n%s", got)
+	}
+	if strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "DOMAIN-SUFFIX,custom.example,DIRECT") ||
+		strings.Index(got, "DOMAIN-SUFFIX,custom.example,DIRECT") > strings.Index(got, "MATCH,REJECT") {
+		t.Fatalf("系统直连规则、自定义规则、最终 MATCH 顺序错误:\n%s", got)
 	}
 }
 
@@ -658,6 +770,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}{
 		{mode: "global", want: []string{"MATCH,proxy-a", "DOMAIN,controller.example.com,DIRECT"}},
 		{mode: "split", want: []string{"MATCH,proxy-a"}},
+		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
 		{mode: "return", want: []string{"GEOIP,CN,proxy-a", "MATCH,DIRECT"}},
 		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,game-a", "MATCH,DIRECT"}},
 	}
@@ -675,6 +788,17 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 			if tt.mode == "split" && strings.Contains(got, "GEOIP,CN,DIRECT") {
 				t.Errorf("split mode must not force mainland destinations direct:\\n%s", got)
 			}
+			if tt.mode == "rule" {
+				if strings.Contains(got, "MATCH,proxy-a") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "GEOIP,CN,DIRECT") {
+					t.Errorf("rule mode must reject unmatched traffic and must not add implicit proxy/direct fallback:\\n%s", got)
+				}
+				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,REJECT") {
+					t.Errorf("controller bypass must appear before terminal reject rule:\\n%s", got)
+				}
+				if strings.Index(got, "PROCESS-NAME,smartdns,proxy-a") > strings.Index(got, "MATCH,REJECT") {
+					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal reject:\\n%s", got)
+				}
+			}
 		})
 	}
 	ipConfig, err := buildConfigFromProxiesWithMode(proxies, "", "test-secret", "global", "203.0.113.10")
@@ -686,20 +810,167 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}
 }
 
+func TestLegacySplitModeKeepsHistoricalFallback(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-legacy", "test-secret", "split", "")
+	if err != nil {
+		t.Fatalf("build legacy split config: %v", err)
+	}
+	if !strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("legacy split mode without a proxy must preserve its historical MATCH,DIRECT fallback:\\n%s", got)
+	}
+	if strings.Contains(got, "MATCH,REJECT") {
+		t.Fatalf("legacy split mode must not be silently upgraded to strict rule mode:\\n%s", got)
+	}
+}
+
+func TestStrictRuleModeIsDefault(t *testing.T) {
+	if got := normalizeProxyRoutingMode(""); got != "rule" {
+		t.Fatalf("empty routing mode = %q, want rule", got)
+	}
+	if got := normalizeProxyRoutingMode("unknown"); got != "rule" {
+		t.Fatalf("unknown routing mode = %q, want rule", got)
+	}
+	if got := routingModeForMachine(nil, "node-without-proxy"); got != "rule" {
+		t.Fatalf("routing mode without a matching proxy = %q, want rule", got)
+	}
+	generated, err := buildConfigFromProxies(nil, "node-without-proxy", "test-secret")
+	if err != nil {
+		t.Fatalf("build default config: %v", err)
+	}
+	if !strings.Contains(generated, "MATCH,REJECT") || strings.Contains(generated, "MATCH,DIRECT") {
+		t.Fatalf("default config must reject unmatched traffic:\\n%s", generated)
+	}
+}
+
+func TestStoreCreateProxyDefaultsToStrictRuleMode(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-default-mode.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	proxy := &Proxy{
+		Name: "default-mode-proxy", Type: "socks5",
+		Server: "192.0.2.20", Port: 1080, Enabled: true,
+	}
+	if err := store.CreateProxy(proxy); err != nil {
+		t.Fatalf("CreateProxy: %v", err)
+	}
+	if proxy.Mode != "rule" {
+		t.Fatalf("stored proxy mode = %q, want rule", proxy.Mode)
+	}
+}
+
 func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 	proxies := []Proxy{
 		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
-		{Name: "node-b-proxy", Mode: "split", MachineCode: "node-b", Enabled: true},
+		{Name: "node-b-proxy", Mode: "rule", MachineCode: "node-b", Enabled: true},
 		{Name: "global-proxy", Mode: "game", MachineCode: "__GLOBAL__", Enabled: true},
 	}
 	if got := routingModeForMachine(proxies, "node-a"); got != "return" {
 		t.Fatalf("node-a routing mode = %q, want return", got)
 	}
-	if got := routingModeForMachine(proxies, "node-b"); got != "split" {
-		t.Fatalf("node-b routing mode = %q, want split", got)
+	if got := routingModeForMachine(proxies, "node-b"); got != "rule" {
+		t.Fatalf("node-b routing mode = %q, want rule", got)
 	}
 	if got := routingModeForMachine(proxies, ""); got != "game" {
 		t.Fatalf("global routing mode = %q, want game", got)
+	}
+}
+
+func TestRoutingModeForMachineMixedProxyModesKeepStableFirstMode(t *testing.T) {
+	proxies := []Proxy{
+		{Name: "legacy-anchor", Mode: "split", MachineCode: "node-mixed", Enabled: true},
+		{Name: "additional-rule-proxy", Mode: "rule", MachineCode: "node-mixed", Enabled: true},
+	}
+	if got := routingModeForMachine(proxies, "node-mixed"); got != "split" {
+		t.Fatalf("mixed-mode node routing mode = %q, want stable first persisted mode split", got)
+	}
+	reordered := []Proxy{proxies[1], proxies[0]}
+	if got := routingModeForMachine(reordered, "node-mixed"); got != "rule" {
+		t.Fatalf("routing mode must follow persisted proxy order; got %q, want rule", got)
+	}
+}
+
+func TestNormalizeProxyRoutingModePreservesHistoricalAliases(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{input: "proxy", want: "return"},
+		{input: "china", want: "split"},
+		{input: "split", want: "split"},
+		{input: "rule", want: "rule"},
+		{input: "unknown", want: "rule"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			if got := normalizeProxyRoutingMode(tc.input); got != tc.want {
+				t.Fatalf("normalizeProxyRoutingMode(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildConfigForHistoricalProxyAliasesKeepsTheirTrafficPolicy(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+		want []string
+		avoid []string
+	}{
+		{name: "proxy alias", mode: "proxy", want: []string{"GEOIP,CN,legacy-proxy", "MATCH,DIRECT"}, avoid: []string{"MATCH,REJECT"}},
+		{name: "china alias", mode: "china", want: []string{"MATCH,legacy-proxy"}, avoid: []string{"GEOIP,CN,", "MATCH,REJECT"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proxies := []Proxy{{
+				Name: "legacy-proxy", Mode: tc.mode, Type: "socks5",
+				Server: "192.0.2.20", Port: 1080, MachineCode: "node-legacy", Enabled: true,
+			}}
+			mode := routingModeForMachine(proxies, "node-legacy")
+			got, err := buildConfigFromProxiesWithMode(proxies, "node-legacy", "test-secret", mode, "")
+			if err != nil {
+				t.Fatalf("build config: %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("historical mode %q lost expected rule %q:\\n%s", tc.mode, want, got)
+				}
+			}
+			for _, avoid := range tc.avoid {
+				if strings.Contains(got, avoid) {
+					t.Errorf("historical mode %q unexpectedly contains %q:\\n%s", tc.mode, avoid, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRoutingModeForMachineUsesPersistedProxyIDOrder(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "routing-mode-order.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	for _, proxy := range []*Proxy{
+		{Name: "legacy-split-first", Mode: "split", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: "node-a", Enabled: true},
+		{Name: "new-rule-second", Mode: "rule", Type: "socks5", Server: "192.0.2.11", Port: 1081, MachineCode: "node-a", Enabled: true},
+	} {
+		if err := store.CreateProxy(proxy); err != nil {
+			t.Fatalf("CreateProxy(%s): %v", proxy.Name, err)
+		}
+	}
+	persisted, err := store.ListProxies()
+	if err != nil {
+		t.Fatalf("ListProxies: %v", err)
+	}
+	if len(persisted) != 2 || persisted[0].Name != "legacy-split-first" || persisted[1].Name != "new-rule-second" {
+		t.Fatalf("ListProxies order = %#v, want stable insertion/ID order", persisted)
+	}
+	if got := routingModeForMachine(persisted, "node-a"); got != "split" {
+		t.Fatalf("routing mode = %q, want legacy split anchor", got)
 	}
 }
 
@@ -972,25 +1243,42 @@ tun:
 	}
 }
 
-func TestAgentHasHealthySmartDNSRequiresProcessAndDNSProbe(t *testing.T) {
+func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-capability.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 	app := &App{store: store}
+	now := time.Now().Unix()
+	healthy := map[string]any{
+		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_dns_healthy": true, "received_at": now,
+	}
+	stale := map[string]any{
+		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_dns_healthy": true, "received_at": now - int64(agentWSHeartbeatTTL.Seconds()) - 1,
+	}
+	future := map[string]any{
+		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_dns_healthy": true, "received_at": now + 120,
+	}
 	cases := []struct{name string; status map[string]any; want bool}{
 		{"missing", nil, false},
-		{"binary only", map[string]any{"smartdns_available": true}, false},
-		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true}, false},
-		{"healthy", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, true},
+		{"binary only", map[string]any{"smartdns_available": true, "received_at": now}, false},
+		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true, "received_at": now}, false},
+		{"healthy and fresh", healthy, true},
+		{"healthy but stale", stale, false},
+		{"future timestamp", future, false},
+		{"missing heartbeat timestamp", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.status == nil {
-				_ = store.UpdateSettings(map[string]string{"agent_status_node-a": ""})
-			} else {
-				data, _ := json.Marshal(tc.status)
-				if err := store.UpdateSettings(map[string]string{"agent_status_node-a": string(data)}); err != nil { t.Fatal(err) }
+			raw := ""
+			if tc.status != nil {
+				data, marshalErr := json.Marshal(tc.status)
+				if marshalErr != nil { t.Fatal(marshalErr) }
+				raw = string(data)
 			}
+			if err := store.UpdateSettings(map[string]string{"agent_status_node-a": raw}); err != nil { t.Fatal(err) }
 			if got := app.agentHasHealthySmartDNS("node-a"); got != tc.want {
 				t.Fatalf("agentHasHealthySmartDNS() = %v, want %v", got, tc.want)
 			}

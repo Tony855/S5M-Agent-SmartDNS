@@ -211,9 +211,9 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if mode, ok := in["proxy_routing_mode"]; ok {
 		switch strings.TrimSpace(mode) {
-		case "global", "split", "return", "game":
+		case "global", "split", "rule", "return", "game":
 		default:
-			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、split、return 或 game")
+			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、rule、return 或 game")
 			return
 		}
 	}
@@ -311,10 +311,10 @@ func (a *App) validateProxy(p *Proxy) string {
 	}
 	p.Mode = strings.TrimSpace(p.Mode)
 	if p.Mode == "" {
-		p.Mode = "proxy"
+		p.Mode = "rule"
 	}
 	switch p.Mode {
-	case "proxy", "china", "global", "split", "return", "game":
+	case "proxy", "china", "global", "split", "rule", "return", "game":
 		p.Type = strings.ToLower(strings.TrimSpace(p.Type))
 		p.Server = strings.TrimSpace(p.Server)
 		switch p.Type {
@@ -329,7 +329,7 @@ func (a *App) validateProxy(p *Proxy) string {
 			return "代理端口必须在 1-65535 之间"
 		}
 	default:
-		return "运行模式无效，必须是 proxy、china 或 game"
+		return "运行模式无效，必须是 global、rule、return 或 game"
 	}
 	p.SourceCIDR = strings.TrimSpace(p.SourceCIDR)
 	if p.SourceCIDR == "" {
@@ -1259,7 +1259,7 @@ func parseProxyLine(line string) (*Proxy, error) {
 	if line == "" {
 		return nil, fmt.Errorf("内容为空")
 	}
-	p := &Proxy{Mode: "proxy", SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
+	p := &Proxy{Mode: "rule", SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
 	if idx := strings.LastIndex(line, "#"); idx != -1 {
 		name, _ := url.QueryUnescape(line[idx+1:])
 		p.Name = strings.TrimSpace(name)
@@ -1515,7 +1515,7 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 		proxies := make([]*Proxy, 0, len(input.Servers))
 		var failures []string
 		for i, server := range input.Servers {
-			p := &Proxy{Mode: "proxy", Type: protocol, Server: strings.TrimSpace(server.Server), Port: server.Port, SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
+			p := &Proxy{Mode: "rule", Type: protocol, Server: strings.TrimSpace(server.Server), Port: server.Port, SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
 			p.Name = strings.TrimSpace(server.Name)
 			// Some provider JSON formats include a complete vmess:// URI per server.
 			// Parse that URI through the same tested path used by text imports so UUID,
@@ -1527,7 +1527,7 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 					continue
 				}
 				p = parsed
-				p.Mode = "proxy"
+				p.Mode = "rule"
 				p.SourceCIDR = "0.0.0.0/0"
 				p.Enabled = true
 				if name := strings.TrimSpace(server.Name); name != "" {

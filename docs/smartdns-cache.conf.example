@@ -9,13 +9,10 @@ cache-size 4096
 prefetch-domain yes
 serve-expired yes
 
-# Encrypted upstreams only. These queries are encrypted in transit, but by default
-# SmartDNS may connect DIRECTLY to these providers unless host routing/firewall policy
-# explicitly sends these connections through the intended proxy egress.
-server-https https://dns.alidns.com/dns-query
-server-https https://doh.pub/dns-query
-server-tls 1.1.1.1
-server-tls 8.8.8.8
+# Encrypted DNS-over-TLS only. Literal IP endpoints avoid bootstrap loops.
+# In S5M Agent, PROCESS-NAME,smartdns routes these sockets through the selected proxy.
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com
+server-tls 8.8.8.8:853 -host-name dns.google
 
 # Avoid enabling audit logging unless query logs are intentionally required.
 audit-enable no

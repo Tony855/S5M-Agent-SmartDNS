@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS instances(
 CREATE TABLE IF NOT EXISTS proxies(
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  name TEXT NOT NULL UNIQUE,
- mode TEXT NOT NULL DEFAULT 'proxy',
+ mode TEXT NOT NULL DEFAULT 'rule',
  type TEXT NOT NULL,
  server TEXT NOT NULL,
  port INTEGER NOT NULL,
@@ -439,6 +439,9 @@ func (s *Store) GetProxy(id int64) (*Proxy, error) {
 }
 
 func (s *Store) CreateProxy(p *Proxy) error {
+	if strings.TrimSpace(p.Mode) == "" {
+		p.Mode = "rule"
+	}
 	extra, _ := json.Marshal(p.Extra)
 	res, err := s.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,source_cidr,machine_code,config_json,enabled) VALUES(?,?,?,?,?,?,?,?,?)`, p.Name, p.Mode, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled))
 	if err != nil {

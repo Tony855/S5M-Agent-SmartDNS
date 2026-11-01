@@ -128,7 +128,11 @@ func TestValidateProxyRejectsUnknownModeAndInvalidPorts(t *testing.T) {
 			proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Server: "example.com", Port: 65535},
 		},
 		{
-			name:  "empty mode defaults to proxy",
+			name:  "strict rule mode is accepted",
+			proxy: Proxy{Name: "proxy-a", Mode: "rule", Type: "socks5", Server: "example.com", Port: 1080},
+		},
+		{
+			name:  "empty mode defaults to strict rule mode",
 			proxy: Proxy{Name: "proxy-a", Type: "socks5", Server: "example.com", Port: 1080},
 		},
 		{
@@ -216,6 +220,25 @@ func TestProxyHandlersRejectInvalidMachineAssociation(t *testing.T) {
 	}
 }
 
+func TestCreateProxyPersistsIndependentRuleMode(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-rule-mode.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	body := `{"name":"strict-rule-proxy","mode":"rule","type":"socks5","server":"192.0.2.55","port":1080,"machine_code":"node-rule","enabled":true,"source_cidr":"0.0.0.0/0"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/proxies", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	app.handleCreateProxy(rec, req)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("create rule proxy status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	proxies, err := store.ListProxies()
+	if err != nil { t.Fatalf("ListProxies: %v", err) }
+	if len(proxies) != 1 || proxies[0].Mode != "rule" {
+		t.Fatalf("backend did not persist independent rule mode: %#v", proxies)
+	}
+}
+
 func TestParseProxyLineRejectsInvalidPort(t *testing.T) {
 	for _, line := range []string{
 		"socks5://user:pass@example.com:not-a-port",
@@ -235,6 +258,9 @@ func TestParseProxyLineAcceptsValidPort(t *testing.T) {
 	}
 	if proxy.Port != 65535 {
 		t.Fatalf("port = %d, want 65535", proxy.Port)
+	}
+	if proxy.Mode != "rule" {
+		t.Fatalf("imported proxy mode = %q, want rule", proxy.Mode)
 	}
 	if msg := (&App{}).validateProxy(proxy); msg != "" {
 		t.Fatalf("validateProxy() = %q, want success", msg)
@@ -932,6 +958,11 @@ func TestImportProxiesPersistsAndFeedsGeneratedConfig(t *testing.T) {
 	if len(proxies) != 2 {
 		t.Fatalf("stored proxy count = %d, want 2", len(proxies))
 	}
+	for _, proxy := range proxies {
+		if proxy.Mode != "rule" {
+			t.Errorf("imported proxy %q mode = %q, want rule", proxy.Name, proxy.Mode)
+		}
+	}
 	for i := range proxies {
 		proxies[i].MachineCode = "__GLOBAL__"
 	}
@@ -945,7 +976,7 @@ func TestImportProxiesPersistsAndFeedsGeneratedConfig(t *testing.T) {
 		"server: 192.0.2.10",
 		"server: 192.0.2.11",
 		"DOMAIN-SUFFIX,dns.alidns.com,imported-proxy-a",
-		"MATCH,DIRECT",
+		"MATCH,REJECT",
 	} {
 		if !strings.Contains(generated, want) {
 			t.Errorf("generated config missing %q:\\n%s", want, generated)

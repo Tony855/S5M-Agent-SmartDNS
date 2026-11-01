@@ -265,10 +265,78 @@ func TestRestoreSmartDNSConfigVerifiedRejectsUnrestoredContent(t *testing.T) {
 	}
 }
 
-func TestValidateSmartDNSConfigAllowsSafeUpstreamHostname(t *testing.T) {
-	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver include.example\n")
+func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
+	secure := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	if err := validateSmartDNSConfig(secure); err != nil {
+		t.Fatalf("valid encrypted upstream rejected: %v", err)
+	}
+	plain := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 223.5.5.5\n")
+	if err := validateSmartDNSConfig(plain); err == nil {
+		t.Fatal("plaintext DNS upstream must be rejected")
+	}
+	missing := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n")
+	if err := validateSmartDNSConfig(missing); err == nil {
+		t.Fatal("config without encrypted upstream must be rejected")
+	}
+}
+
+func TestValidateSmartDNSConfigRejectsBootstrapDependentEncryptedUpstreams(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{"hostname endpoint", "server-tls dns.cloudflare.com:853 -host-name cloudflare-dns.com"},
+		{"missing TLS name", "server-tls 1.1.1.1:853"},
+		{"invalid endpoint", "server-tls 1.1.1.1 -host-name cloudflare-dns.com"},
+		{"hostname DoH URL", "server-https https://dns.google/dns-query -host-name dns.google"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + tc.line + "\n")
+			if err := validateSmartDNSConfig(config); err == nil {
+				t.Fatalf("bootstrap-dependent upstream must be rejected: %s", tc.line)
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSConfigAcceptsLiteralIPEncryptedUpstreams(t *testing.T) {
+	cases := []string{
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"server-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+	}
+	for _, upstream := range cases {
+		t.Run(upstream, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + upstream + "\n")
+			if err := validateSmartDNSConfig(config); err != nil {
+				t.Fatalf("literal-IP encrypted upstream rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
+	config, err := os.ReadFile(filepath.Join("smartdns", "smartdns.conf"))
+	if err != nil {
+		t.Fatalf("read bundled SmartDNS config: %v", err)
+	}
 	if err := validateSmartDNSConfig(config); err != nil {
-		t.Fatalf("valid upstream hostname rejected: %v", err)
+		t.Fatalf("bundled SmartDNS config violates policy: %v", err)
+	}
+	text := string(config)
+	for _, want := range []string{
+		"bind 127.0.0.1:6053",
+		"bind-tcp 127.0.0.1:6053",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"server-tls 8.8.8.8:853 -host-name dns.google",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("bundled SmartDNS config missing %q", want)
+		}
+	}
+	if strings.Contains(text, "server 223.5.5.5") || strings.Contains(text, "server 119.29.29.29") {
+		t.Fatal("bundled SmartDNS config must not contain plaintext DNS upstreams")
 	}
 }
 
@@ -548,7 +616,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := []byte("bind 127.0.0.1:6053\n")
+	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
 	configHash := sha256.Sum256(bytes.TrimSpace(config))
 	good := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
@@ -586,16 +654,34 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_last_error", "SmartDNS 二进制不存在、不可执行或文件类型无效")
 	})
 
-	t.Run("config read failure still collects runtime state", func(t *testing.T) {
+	t.Run("config read failure forces DNS fallback", func(t *testing.T) {
 		deps := good
 		deps.readConfig = func(string) ([]byte, error) { return nil, os.ErrPermission }
+		restartCalls := 0
+		deps.restart = func() error { restartCalls++; return nil }
 		status := map[string]any{}
 		collectSmartDNSStatusWithDependencies(status, deps)
 		assert(t, status, "smartdns_available", true)
 		assert(t, status, "smartdns_running", true)
-		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if restartCalls != 0 { t.Fatalf("invalid config must not be restarted, calls=%d", restartCalls) }
 		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "读取 SmartDNS 配置失败") {
 			t.Fatalf("config diagnostic missing: %q", got)
+		}
+	})
+
+	t.Run("plaintext upstream config forces DNS fallback", func(t *testing.T) {
+		deps := good
+		deps.readConfig = func(string) ([]byte, error) {
+			return []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver 223.5.5.5\\n"), nil
+		}
+		deps.restart = func() error { t.Fatal("policy-invalid config must not be restarted"); return nil }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "加密上游策略校验") {
+			t.Fatalf("policy diagnostic missing: %q", got)
 		}
 	})
 
@@ -639,6 +725,29 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_running", true)
 		assert(t, status, "smartdns_dns_healthy", false)
 		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
+	})
+
+	t.Run("stopped process is restarted by s6 before controller fallback", func(t *testing.T) {
+		deps := good
+		deps.process = func() ([]byte, error) { return nil, os.ErrNotExist }
+		deps.probe = func() bool { return false }
+		restartCalls, waitCalls := 0, 0
+		deps.restart = func() error { restartCalls++; return nil }
+		deps.waitHealthy = func(timeout time.Duration) bool {
+			waitCalls++
+			if timeout != 5*time.Second { t.Fatalf("health wait timeout = %v, want 5s", timeout) }
+			return true
+		}
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_available", true)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_recovery", "restarted")
+		assert(t, status, "smartdns_last_error", "")
+		if restartCalls != 1 || waitCalls != 1 {
+			t.Fatalf("restart calls=%d wait calls=%d; want one each", restartCalls, waitCalls)
+		}
 	})
 
 	t.Run("restart recovers unhealthy resolver before fallback", func(t *testing.T) {
@@ -738,7 +847,7 @@ func TestSafeSmartDNSDiagnosticTruncatesAtUTF8Boundary(t *testing.T) {
 
 func TestReadSmartDNSConfigAtRejectsSymlinksAndInvalidFiles(t *testing.T) {
 	dir := t.TempDir()
-	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1\n")
+	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
 	target := filepath.Join(dir, "target.conf")
 	if err := os.WriteFile(target, valid, 0600); err != nil {
 		t.Fatal(err)
@@ -921,7 +1030,7 @@ func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T)
 	restartCalls := 0
 	deps := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return info, nil },
-		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\\n"), nil },
+		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"), nil },
 		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
 		process: func() ([]byte, error) { return []byte("1234"), nil },
 		probe: func() bool { return false },

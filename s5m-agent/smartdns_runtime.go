@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -160,6 +161,40 @@ var smartDNSDirectiveAllowlist = map[string]bool{
 
 var smartDNSControlChars = regexp.MustCompile("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]")
 
+func validateSmartDNSUpstreamEndpoint(directive, endpoint string, options []string) error {
+	var host string
+	switch directive {
+	case "server-tls", "server-quic":
+		var err error
+		host, _, err = net.SplitHostPort(endpoint)
+		if err != nil {
+			return fmt.Errorf("加密上游必须使用 IP:端口格式")
+		}
+	case "server-https":
+		u, err := url.Parse(endpoint)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+			return fmt.Errorf("DoH 上游必须使用 https://IP/ 路径格式")
+		}
+		host = u.Hostname()
+	default:
+		return fmt.Errorf("不支持的加密上游类型")
+	}
+	if net.ParseIP(strings.Trim(host, "[]")) == nil {
+		return fmt.Errorf("加密上游地址必须是字面 IP，禁止依赖域名 Bootstrap 解析")
+	}
+	hasTLSName := false
+	for i := 0; i+1 < len(options); i++ {
+		if options[i] == "-host-name" && strings.TrimSpace(options[i+1]) != "" {
+			hasTLSName = true
+			break
+		}
+	}
+	if !hasTLSName {
+		return fmt.Errorf("加密上游必须显式配置 -host-name 以验证 TLS 证书")
+	}
+	return nil
+}
+
 // validateSmartDNSConfig accepts only resolver-related directives. It deliberately
 // rejects include/plugin/exec-style directives so a remote config cannot load
 // arbitrary files or start unrelated processes inside the Agent container.
@@ -173,6 +208,7 @@ func validateSmartDNSConfig(data []byte) error {
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	usable := 0
 	bindUDP, bindTCP := false, false
+	encryptedUpstream := false
 	for lineNo, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -199,6 +235,18 @@ func validateSmartDNSConfig(data []byte) error {
 				bindTCP = true
 			}
 		}
+		if directive == "server" || directive == "server-tcp" {
+			return fmt.Errorf("第 %d 行必须使用加密 DNS 上游（server-tls/server-https/server-quic），禁止明文 DNS", lineNo+1)
+		}
+		if directive == "server-tls" || directive == "server-https" || directive == "server-quic" {
+			if len(fields) < 3 {
+				return fmt.Errorf("第 %d 行加密上游缺少地址或 TLS 主机名", lineNo+1)
+			}
+			if endpointErr := validateSmartDNSUpstreamEndpoint(directive, fields[1], fields[2:]); endpointErr != nil {
+				return fmt.Errorf("第 %d 行加密上游无效: %w", lineNo+1, endpointErr)
+			}
+			encryptedUpstream = true
+		}
 		if strings.HasPrefix(directive, "server") && len(fields) < 2 {
 			return fmt.Errorf("第 %d 行上游 DNS 地址不能为空", lineNo+1)
 		}
@@ -209,6 +257,9 @@ func validateSmartDNSConfig(data []byte) error {
 	}
 	if !bindUDP || !bindTCP {
 		return fmt.Errorf("必须同时配置 bind 127.0.0.1:6053 和 bind-tcp 127.0.0.1:6053")
+	}
+	if !encryptedUpstream {
+		return fmt.Errorf("SmartDNS 至少需要一个加密上游（server-tls/server-https/server-quic）")
 	}
 	return nil
 }
@@ -282,9 +333,15 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	}
 	status["smartdns_available"] = true
 
+	configHealthy := false
 	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
+		if configErr := validateSmartDNSConfig(data); configErr != nil {
+			appendSmartDNSStatusError(status, "SmartDNS 配置未通过加密上游策略校验: "+safeSmartDNSDiagnostic(configErr.Error()))
+		} else {
+			configHealthy = true
+		}
 	} else {
 		appendSmartDNSStatusError(status, "读取 SmartDNS 配置失败: "+safeSmartDNSDiagnostic(err.Error()))
 	}
@@ -305,10 +362,15 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 
 	processOutput, processErr := deps.process()
 	processHealthy := processErr == nil && len(bytes.TrimSpace(processOutput)) > 0
-	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
 	if processHealthy {
 		status["smartdns_running"] = true
 	}
+	// A running process with an unreadable or policy-invalid configuration is
+	// not a usable resolver. Do not restart it into the same invalid config.
+	if !configHealthy {
+		return
+	}
+	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
 	if dnsHealthy {
 		status["smartdns_dns_healthy"] = true
 		return

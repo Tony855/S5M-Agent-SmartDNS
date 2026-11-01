@@ -22,6 +22,7 @@ const baseTemplate = `mode: rule
 mixed-port: 8080
 allow-lan: false
 log-level: info
+find-process-mode: strict
 ipv6: false
 external-controller: 127.0.0.1:8088
 secret: "__S5M_MIHOMO_SECRET__"
@@ -133,6 +134,8 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	root.Content = filtered
 	setScalar(root, "allow-lan", "false", "!!bool")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
+	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
+	setScalar(root, "find-process-mode", "strict", "!!str")
 
 	// Keep the controller's own hostname out of fake-IP answers to avoid breaking
 	// Agent registration/heartbeats when strict-route TUN is enabled.
@@ -188,17 +191,27 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "default-nameserver"}, defaultDNS)
 		}
 	}
+	// Bootstrap resolvers must be literal IP addresses, never hostnames or the
+	// SmartDNS loopback endpoint. This keeps proxy endpoint resolution independent
+	// from SmartDNS and from a proxy connection that has not been established yet.
+	filterLiteralBootstrap := func(sequence *yaml.Node) {
+		kept := make([]*yaml.Node, 0, len(sequence.Content))
+		for _, item := range sequence.Content {
+			if item.Kind != yaml.ScalarNode || net.ParseIP(strings.Trim(item.Value, "[]")) == nil ||
+				item.Value == "127.0.0.1" || item.Value == "127.0.0.1:6053" {
+				continue
+			}
+			kept = append(kept, item)
+		}
+		sequence.Content = kept
+	}
+	filterLiteralBootstrap(defaultDNS)
 	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
 		found := false
 		for _, item := range defaultDNS.Content {
-			if item.Value == server {
-				found = true
-				break
-			}
+			if item.Value == server { found = true; break }
 		}
-		if !found {
-			defaultDNS.Content = append(defaultDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server})
-		}
+		if !found { defaultDNS.Content = append(defaultDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server}) }
 	}
 
 	// Resolve proxy endpoint hostnames through explicit bootstrap DNS servers rather
@@ -219,17 +232,14 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "proxy-server-nameserver"}, proxyDNS)
 		}
 	}
+	// Proxy endpoint bootstrap follows the same literal-IP-only policy.
+	filterLiteralBootstrap(proxyDNS)
 	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
 		found := false
 		for _, item := range proxyDNS.Content {
-			if item.Value == server {
-				found = true
-				break
-			}
+			if item.Value == server { found = true; break }
 		}
-		if !found {
-			proxyDNS.Content = append(proxyDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server})
-		}
+		if !found { proxyDNS.Content = append(proxyDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server}) }
 	}
 
 	// Use independent international DoH resolvers as fallback. Preserve any
@@ -283,7 +293,10 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	// proxy endpoint IPs so TUN cannot recursively route its own upstream transport.
 	excluded := []string{
 		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
-		"192.168.0.0/16",
+		"192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+		// Keep bootstrap DNS outside the TUN so resolver bootstrap never
+		// loops back through the local DNS listener or SmartDNS.
+		"223.5.5.5/32", "119.29.29.29/32",
 	}
 	seen := make(map[string]bool, len(excluded))
 	for _, cidr := range excluded {
@@ -344,6 +357,18 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	}
 	if !foundDNSHijack {
 		dnsHijack.Content = append(dnsHijack.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "any:53"})
+	}
+	// TCP DNS must be intercepted as well as UDP; otherwise clients can bypass
+	// the local resolver by switching transports while TUN is enabled.
+	foundTCPDNSHijack := false
+	for _, item := range dnsHijack.Content {
+		if item.Value == "tcp://any:53" {
+			foundTCPDNSHijack = true
+			break
+		}
+	}
+	if !foundTCPDNSHijack {
+		dnsHijack.Content = append(dnsHijack.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tcp://any:53"})
 	}
 
 	routeExclude := mappingValue(tun, "route-exclude-address")
@@ -407,6 +432,18 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	}
 	var status map[string]any
 	if err := json.Unmarshal([]byte(value), &status); err != nil {
+		return false
+	}
+	// A stale healthy heartbeat must never keep the local SmartDNS endpoint
+	// selected after an Agent disconnects or stops reporting health. Use the
+	// server-stamped received_at field, not agent_lastseen (config requests also
+	// update agent_lastseen and therefore cannot prove a fresh health report).
+	receivedAt, ok := status["received_at"].(float64)
+	if !ok || receivedAt <= 0 || receivedAt > 9.0e15 {
+		return false
+	}
+	age := time.Since(time.Unix(int64(receivedAt), 0))
+	if age > agentWSHeartbeatTTL || age < -30*time.Second {
 		return false
 	}
 	return status["smartdns_available"] == true &&
@@ -626,11 +663,20 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			if err := yaml.Unmarshal([]byte(generated), &generatedDoc); err != nil {
 				return fmt.Errorf("机器 %s 的生成 YAML 无效: %w", machineCode, err)
 			}
-			for _, section := range []string{"proxies", "rules"} {
-				if value, ok := generatedDoc[section]; ok {
-					currentDoc[section] = value
-				}
+			// Mihomo must stay in rule mode for managed routing rules to take
+			// effect. A stale/custom "mode: global" would bypass MATCH,REJECT and
+			// silently defeat the node's selected routing policy.
+			if value, ok := generatedDoc["mode"]; ok {
+				currentDoc["mode"] = value
 			}
+			if value, ok := generatedDoc["proxies"]; ok {
+				currentDoc["proxies"] = value
+			}
+			mergedRules, mergeErr := mergeManagedRuleValues(currentDoc["rules"], generatedDoc["rules"])
+			if mergeErr != nil {
+				return fmt.Errorf("合并机器 %s 的自定义规则失败: %w", machineCode, mergeErr)
+			}
+			currentDoc["rules"] = mergedRules
 			marshaled, marshalErr := yaml.Marshal(currentDoc)
 			if marshalErr != nil {
 				return fmt.Errorf("序列化机器 %s 的独立配置失败: %w", machineCode, marshalErr)
@@ -658,18 +704,23 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 
 func normalizeProxyRoutingMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "global", "split", "return", "game", "legacy":
+	case "global", "split", "rule", "return", "game":
 		return strings.ToLower(strings.TrimSpace(raw))
 	case "proxy":
 		return "return"
 	case "china":
 		return "split"
 	default:
-		return "return"
+		return "rule"
 	}
 }
 
 func routingModeForMachine(proxies []Proxy, machineCode string) string {
+	// A Mihomo config has one routing mode for the whole machine, not one mode
+	// per proxy. ListProxies is persisted in stable ID order, so the first
+	// enabled proxy assigned to this machine remains the compatibility anchor.
+	// Additional proxies contribute outbound nodes but cannot silently change
+	// an existing machine's traffic policy.
 	for _, p := range proxies {
 		if !p.Enabled || p.Mode == "direct" || p.Mode == "reject" {
 			continue
@@ -682,15 +733,15 @@ func routingModeForMachine(proxies []Proxy, machineCode string) string {
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(p.Mode)) {
-		case "global", "split", "return", "game":
-			return strings.ToLower(strings.TrimSpace(p.Mode))
+		case "global", "split", "rule", "return", "game":
+			return normalizeProxyRoutingMode(p.Mode)
 		case "proxy":
 			return "return"
 		case "china":
 			return "split"
 		}
 	}
-	return "return"
+	return "rule"
 }
 
 func controllerHostFromSettings(settings map[string]string) string {
@@ -777,7 +828,7 @@ func marshalProxiesWithSharedAnchor(proxies []proxyOut) ([]byte, error) {
 }
 
 func buildConfigFromProxies(proxies []Proxy, machineCode, secret string) (string, error) {
-	return buildConfigFromProxiesWithMode(proxies, machineCode, secret, "legacy", "")
+	return buildConfigFromProxiesWithMode(proxies, machineCode, secret, "rule", "")
 }
 
 func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routingMode, controllerHost string) (string, error) {
@@ -820,7 +871,7 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 			return "", fmt.Errorf("代理名称不能为空且不能超过 100 个字符")
 		}
 		switch p.Mode {
-		case "proxy", "china", "global", "split", "return", "game":
+		case "proxy", "china", "global", "split", "rule", "return", "game":
 		default:
 			return "", fmt.Errorf("代理 %q 的运行模式无效：%q", p.Name, p.Mode)
 		}
@@ -878,7 +929,13 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 			rules = append(rules, fmt.Sprintf("DOMAIN,%s,DIRECT", controllerHost))
 		}
 	}
-	// DNS bootstrap remains direct to avoid a DNS/proxy dependency loop.
+	// SmartDNS uses literal-IP DoT upstreams, so it does not need DNS bootstrap
+	// through Mihomo. Route its encrypted upstream sockets through the selected
+	// proxy explicitly; this rule must precede source-CIDR and terminal MATCH rules.
+	if len(outs) > 0 {
+		rules = append(rules, fmt.Sprintf("PROCESS-NAME,smartdns,%s", outs[0].Name))
+	}
+	// Mihomo's own DoH bootstrap stays independent from SmartDNS and uses literal-IP DNS.
 	if len(outs) > 0 && routingMode != "global" {
 		for _, domain := range []string{"dns.alidns.com", "doh.pub", "dns.cloudflare.com", "dns.google"} {
 			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, outs[0].Name))
@@ -951,13 +1008,15 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 			rules = append(rules, "MATCH,DIRECT")
 		}
 	case "split":
-		// Split mode is rule-driven: do not force mainland IP ranges to DIRECT.
-		// Unmatched traffic follows the configured default proxy rule below.
+		// Legacy split mode keeps its historical proxy fallback for existing records.
 		if firstProxy != "" {
 			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
 		} else {
 			rules = append(rules, "MATCH,DIRECT")
 		}
+	case "rule":
+		// Strict rule mode: only explicit rules may pass traffic; unmatched traffic is rejected.
+		rules = append(rules, "MATCH,REJECT")
 	case "return":
 		// Return-to-China mode: mainland destinations use the proxy; overseas destinations go direct.
 		if firstProxy != "" {
@@ -965,8 +1024,6 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		} else {
 			rules = append(rules, "GEOIP,CN,DIRECT")
 		}
-		rules = append(rules, "MATCH,DIRECT")
-	case "legacy":
 		rules = append(rules, "MATCH,DIRECT")
 	case "game":
 		gameProxy := firstGameProxy
@@ -1016,6 +1073,60 @@ func (a *App) BuildConfig() (string, error) {
 
 // mergeManagedProxySections keeps the admin's global YAML settings but refreshes
 // proxies/rules from the authoritative proxy database before preview or publish.
+// mergeManagedRuleValues keeps operator rules ahead of the generated terminal MATCH.
+// System bypasses (v2net.cc/controller) and generated safety rules remain first.
+// Operator-provided MATCH rules are ignored so they cannot shadow the final policy.
+func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
+	generated, ok := generatedValue.([]any)
+	if !ok {
+		return nil, fmt.Errorf("生成的 rules 必须是数组")
+	}
+	var custom []any
+	if customValue != nil {
+		var valid bool
+		custom, valid = customValue.([]any)
+		if !valid {
+			return nil, fmt.Errorf("自定义 rules 必须是数组")
+		}
+	}
+	merged := make([]any, 0, len(generated)+len(custom))
+	var terminal any
+	terminalCount := 0
+	for _, raw := range generated {
+		rule, valid := raw.(string)
+		if !valid || strings.TrimSpace(rule) == "" {
+			return nil, fmt.Errorf("生成的规则必须是非空字符串")
+		}
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rule)), "MATCH,") {
+			terminal = strings.TrimSpace(rule)
+			terminalCount++
+			continue
+		}
+		merged = append(merged, rule)
+	}
+	seen := make(map[string]bool, len(merged)+len(custom))
+	for _, raw := range merged {
+		seen[strings.TrimSpace(raw.(string))] = true
+	}
+	for _, raw := range custom {
+		rule, valid := raw.(string)
+		if !valid || strings.TrimSpace(rule) == "" {
+			return nil, fmt.Errorf("自定义规则必须是非空字符串")
+		}
+		rule = strings.TrimSpace(rule)
+		if strings.HasPrefix(strings.ToUpper(rule), "MATCH,") || seen[rule] {
+			continue
+		}
+		merged = append(merged, rule)
+		seen[rule] = true
+	}
+	if terminalCount != 1 {
+		return nil, fmt.Errorf("生成的 rules 必须且只能包含一条最终 MATCH 规则，实际为 %d 条", terminalCount)
+	}
+	merged = append(merged, terminal)
+	return merged, nil
+}
+
 func mergeManagedProxySections(customYAML, generatedYAML string) (string, error) {
 	var customDoc map[string]any
 	if err := yaml.Unmarshal([]byte(customYAML), &customDoc); err != nil {
@@ -1029,11 +1140,19 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	if err := yaml.Unmarshal([]byte(generatedYAML), &generatedDoc); err != nil {
 		return "", fmt.Errorf("生成的 YAML 无效: %w", err)
 	}
-	for _, section := range []string{"proxies", "rules"} {
-		if value, ok := generatedDoc[section]; ok {
-			customDoc[section] = value
-		}
+	// The top-level Mihomo mode is managed: generated rules (including the
+	// terminal MATCH policy) are only authoritative when Mihomo evaluates rules.
+	if value, ok := generatedDoc["mode"]; ok {
+		customDoc["mode"] = value
 	}
+	if value, ok := generatedDoc["proxies"]; ok {
+		customDoc["proxies"] = value
+	}
+	mergedRules, err := mergeManagedRuleValues(customDoc["rules"], generatedDoc["rules"])
+	if err != nil {
+		return "", fmt.Errorf("合并自定义规则失败: %w", err)
+	}
+	customDoc["rules"] = mergedRules
 	merged, err := yaml.Marshal(customDoc)
 	if err != nil {
 		return "", fmt.Errorf("序列化全局 YAML 失败: %w", err)
