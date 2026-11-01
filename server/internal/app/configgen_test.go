@@ -1054,14 +1054,25 @@ func TestRestoreAgentDNSNameserverSkipsNonLegacyAndRejectsMissingFallback(t *tes
 	ordinary := "dns:\n  nameserver:\n    - 8.8.8.8\n"
 	got, changed, err := restoreAgentDNSNameserver(ordinary, "dns:\n  nameserver:\n    - 1.1.1.1\n")
 	if err != nil || changed || got != ordinary { t.Fatalf("ordinary config changed: changed=%v err=%v got=%q", changed, err, got) }
-	legacy := "dns:\n  nameserver:\n    - 127.0.0.1:6053\n"
+	legacy := `dns:
+  nameserver:
+    - 127.0.0.1:6053
+  enable: true
+`
 	if _, _, err := restoreAgentDNSNameserver(legacy, "dns:\n  enable: true\n"); err == nil { t.Fatal("missing fallback nameserver must fail safely") }
 }
 
 
 func TestRestoreAgentDNSNameserverIsIdempotentAndRejectsMalformedYAML(t *testing.T) {
-	legacy := "dns:\\n  nameserver:\\n    - 127.0.0.1:6053\\n  enable: true\\n"
-	baseline := "dns:\\n  nameserver:\\n    - 1.1.1.1\\n"
+	legacy := `dns:
+  nameserver:
+    - 127.0.0.1:6053
+  enable: true
+`
+	baseline := `dns:
+  nameserver:
+    - 1.1.1.1
+`
 	first, changed, err := restoreAgentDNSNameserver(legacy, baseline)
 	if err != nil || !changed { t.Fatalf("first migration: changed=%v err=%v", changed, err) }
 	second, changed, err := restoreAgentDNSNameserver(first, baseline)
