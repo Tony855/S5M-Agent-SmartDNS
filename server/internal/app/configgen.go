@@ -123,7 +123,7 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 		}
 		return nil
 	}
-	deleteKeys := map[string]bool{"mixed-port": true, "port": true, "socks-port": true, "redir-port": true, "tproxy-port": true, "listeners": true, "allow-lan": true}
+	deleteKeys := map[string]bool{"mixed-port": true, "port": true, "socks-port": true, "redir-port": true, "tproxy-port": true, "listeners": true, "allow-lan": true, "external-controller": true}
 	filtered := make([]*yaml.Node, 0, len(root.Content))
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if !deleteKeys[root.Content[i].Value] {
