@@ -12,6 +12,7 @@ on:
       - "s5m-agent/Dockerfile.routeros"
       - "s5m-agent/smartdns/**"
       - "s5m-agent/main.go"
+      - "s5m-agent/telemetry.go"
       - "s5m-agent/*_test.go"
       - "s5m-agent/smartdns_runtime.go"
       - "s5m-agent/go.mod"
@@ -20,6 +21,9 @@ on:
       - "s5m-agent/healthcheck.sh"
       - "s5m-agent/cont-init.d/**"
       - "s5m-agent/services/**"
+      - "server/internal/app/agent_websocket.go"
+      - "server/internal/app/agent_telemetry_test.go"
+      - "server/internal/app/router.go"
       - "server/internal/app/configgen.go"
       - "server/internal/app/configgen_test.go"
       - "server/web/index.html"
@@ -33,6 +37,7 @@ on:
       - "s5m-agent/docker-compose.yml"
       - "s5m-agent/smartdns/**"
       - "s5m-agent/main.go"
+      - "s5m-agent/telemetry.go"
       - "s5m-agent/*_test.go"
       - "s5m-agent/smartdns_runtime.go"
       - "source/**"
@@ -56,6 +61,26 @@ env:
   SMARTDNS_REF: Release48.4
 
 jobs:
+  test-server:
+    name: Server tests and vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+          cache-dependency-path: server/go.sum
+      - name: Run server tests
+        working-directory: server
+        run: go test ./...
+      - name: Run server vet
+        working-directory: server
+        run: go vet ./...
+
   test-amd64:
     name: Build and runtime smoke test (linux/amd64)
     runs-on: ubuntu-latest
@@ -348,7 +373,7 @@ jobs:
   publish:
     name: Publish multi-arch image to GHCR
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test-amd64, build-arm64]
+    needs: [test-server, test-amd64, build-arm64]
     concurrency:
       group: s5m-agent-smartdns-publish-${{ github.ref }}
       queue: max

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -22,6 +23,7 @@ type App struct {
 	agentWSGeneration  map[string]uint64
 	agentWSConnections map[string]*agentWSConnection
 	agentHeartbeatAt   map[string]int64
+	agentTelemetryPersistAt map[string]time.Time
 	browserWSMu        sync.Mutex
 	browserWSClients   map[*browserEventClient]struct{}
 	browserTicketMu    sync.Mutex

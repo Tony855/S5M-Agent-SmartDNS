@@ -342,7 +342,7 @@
                     </div>
                   </div>
                   <span>关联代理：<strong>{{ proxyCountForMachine(item.code) }}</strong></span>
-                  <span v-if="item.runtimeMessage || item.lastError" class="instance-summary-error">Agent 状态/错误信息：{{ item.runtimeMessage || item.lastError }}</span>
+                  <span v-if="item.runtimeMessage || item.lastError || item.telemetryError" class="instance-summary-error">Agent 状态/错误信息：{{ [item.runtimeMessage, item.lastError, item.telemetryError].filter(Boolean).join('；') }}</span>
                 </div>
               </div>
               <div class="instance-actions">
