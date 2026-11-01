@@ -33,7 +33,7 @@
 - `/data/config.yaml`：Mihomo 配置；
 - `/data/bin/mihomo`：Agent 更新后的内核。
 
-将容器网络接入一个受控的 LAN/管理网段。只允许管理终端访问 Agent 注册页 TCP/80；只有确实需要为其他设备提供代理时才开放 TCP/7890。Mihomo 控制 API 8088 仅监听容器回环地址，不要转发到 RouterOS 或公网。
+将容器网络接入一个受控的 LAN/管理网段。只允许管理终端访问 Agent 注册页 TCP/80。Agent 不提供 7890 HTTP/SOCKS 显式代理入口；Mihomo 控制 API 8088 仅监听容器回环地址，不要转发到 RouterOS 或公网。RouterOS 上的透明代理必须另行验证设备对 TUN、`/dev/net/tun`、`NET_ADMIN` 和策略路由的支持；当前文档不宣称这些能力已在真实 RouterOS 设备通过验收。
 
 ## 注册、心跳与配置同步
 
@@ -58,5 +58,5 @@
 - [ ] Agent 注册成功，主控心跳连续更新。
 - [ ] 主控发布节点 YAML 后，Agent 成功同步并显示对应配置 SHA-256。
 - [ ] amd64/arm64 Mihomo 内核更新与回滚在目标设备实测成功。
-- [ ] 8088 未暴露；80/7890 仅按需开放。
+- [ ] 8088 未暴露；80 仅管理网可访问；7890 未发布。
 - [ ] TUN 未验证前保持关闭。
