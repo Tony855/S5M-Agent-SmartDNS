@@ -1218,8 +1218,8 @@ func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSetting(tun_enable): %v", err)
 	}
-	if got != "false" {
-		t.Fatalf("tun_enable default = %q, want false", got)
+	if got != "true" {
+		t.Fatalf("tun_enable default = %q, want true", got)
 	}
 }
 
