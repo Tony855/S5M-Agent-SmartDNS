@@ -209,6 +209,10 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 			return
 		case now := <-ticker.C:
 			snapshot := state.snapshot()
+			sampledAtMS := int64(0)
+			if !snapshot.SampledAt.IsZero() {
+				sampledAtMS = snapshot.SampledAt.UnixMilli()
+			}
 			payload := map[string]any{
 				"type": "telemetry",
 				"status": map[string]any{
@@ -220,7 +224,7 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 					"traffic_error":     snapshot.TrafficError,
 					"connections_error": snapshot.ConnectionsError,
 					"telemetry_at_ms":        now.UnixMilli(),
-					"telemetry_sampled_at_ms": snapshot.SampledAt.UnixMilli(),
+					"telemetry_sampled_at_ms": sampledAtMS,
 					"telemetry_stale":         mihomoTelemetryIsStale(snapshot.SampledAt, now),
 				},
 			}
