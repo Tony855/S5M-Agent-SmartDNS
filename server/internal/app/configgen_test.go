@@ -704,8 +704,8 @@ func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 	if got := routingModeForMachine(proxies, "node-a"); got != "return" {
 		t.Fatalf("node-a routing mode = %q, want return", got)
 	}
-	if got := routingModeForMachine(proxies, "node-b"); got != "split" {
-		t.Fatalf("node-b routing mode = %q, want split", got)
+	if got := routingModeForMachine(proxies, "node-b"); got != "rule" {
+		t.Fatalf("node-b routing mode = %q, want rule", got)
 	}
 	if got := routingModeForMachine(proxies, ""); got != "game" {
 		t.Fatalf("global routing mode = %q, want game", got)
