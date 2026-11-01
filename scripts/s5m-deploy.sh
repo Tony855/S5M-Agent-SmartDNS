@@ -182,6 +182,7 @@ docker run -d \
   --restart unless-stopped \
   --network bridge \
   "${TUN_ARGS[@]}" \
+  -e "S5M_HOSTNAME=$(hostname)" \
   -p "${PORT_WEB}:80" \
   -v "$DATA_DIR":/data \
   "$IMAGE_LOCAL" || die "容器启动失败"
