@@ -568,6 +568,28 @@ func TestParseProxyImportContentSOCKS5JSONIPv4IPv6(t *testing.T) {
 	}
 }
 
+func TestParseProxyImportContentPreservesVLESSRealityOptions(t *testing.T) {
+	content := "vless://test-uuid@example.com:443?type=tcp&security=reality&sni=www.example.com&pbk=public-key-value&sid=short-id&fp=chrome&flow=xtls-rprx-vision#reality-node"
+	proxies, failures := parseProxyImportContent(content)
+	if len(failures) != 0 || len(proxies) != 1 {
+		t.Fatalf("proxies=%v failures=%v", proxies, failures)
+	}
+	p := proxies[0]
+	if p.Type != "vless" || p.Server != "example.com" || p.Port != 443 {
+		t.Fatalf("unexpected endpoint: %+v", p)
+	}
+	if p.Extra["uuid"] != "test-uuid" || p.Extra["flow"] != "xtls-rprx-vision" || p.Extra["servername"] != "www.example.com" {
+		t.Fatalf("VLESS identity/TLS fields lost: %#v", p.Extra)
+	}
+	reality, ok := p.Extra["reality-opts"].(map[string]any)
+	if !ok || reality["public-key"] != "public-key-value" || reality["short-id"] != "short-id" {
+		t.Fatalf("Reality options lost: %#v", p.Extra["reality-opts"])
+	}
+	if p.Extra["client-fingerprint"] != "chrome" {
+		t.Fatalf("client fingerprint lost: %#v", p.Extra)
+	}
+}
+
 func TestParseProxyImportContentPreservesVMessLinkOptions(t *testing.T) {
 	vmessJSON := `{"v":"2","ps":"link-name","add":"109.176.19.70","port":"22080","id":"test-uuid","aid":"0","scy":"auto","net":"ws","type":"none","host":"ws.example.test","path":"/ws","tls":""}`
 	link := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))
