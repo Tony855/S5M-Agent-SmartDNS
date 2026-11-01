@@ -132,7 +132,7 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 		}
 	}
 	root.Content = filtered
-	setScalar(root, "allow-lan", "false", "!!bool")
+	// Expose only the authenticated Agent mixed proxy listener on the standard S5M port.\n	// All other listener forms remain stripped; LAN exposure stays disabled.\n	setScalar(root, "mixed-port", "7890", "!!int")\n	setScalar(root, "allow-lan", "false", "!!bool")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
 	setScalar(root, "find-process-mode", "strict", "!!str")
