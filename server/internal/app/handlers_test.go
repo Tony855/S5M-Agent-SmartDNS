@@ -1157,7 +1157,7 @@ func TestParseProxyLinePreservesProtocolOptions(t *testing.T) {
 	}
 }
 
-func TestGetNodeConfigRepairsStaleAgentPort(t *testing.T) {
+func TestGetNodeConfigRemovesExplicitProxyListeners(t *testing.T) {
 	app, code, _ := websocketTestApp(t)
 	staleYAML := "mixed-port: 8080\nsecret: keep-this-secret\ntun:\n  enable: false\ndns:\n  enable: true\n"
 	if err := app.store.SaveNodeConfig(code, staleYAML); err != nil {
@@ -1178,8 +1178,17 @@ func TestGetNodeConfigRepairsStaleAgentPort(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode node config response: %v", err)
 	}
-	if err := validateAgentPublishedProxyPort(response.YAML); err != nil {
-		t.Fatalf("response contains unpublished proxy port: %v; YAML=%s", err, response.YAML)
+	var normalized map[string]any
+	if err := yaml.Unmarshal([]byte(response.YAML), &normalized); err != nil {
+		t.Fatalf("decode normalized response YAML: %v", err)
+	}
+	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
+		if _, exists := normalized[key]; exists {
+			t.Errorf("Agent config must not expose %q: %s", key, response.YAML)
+		}
+	}
+	if normalized["allow-lan"] != false || normalized["external-controller"] != "127.0.0.1:8088" {
+		t.Fatalf("Agent listener security normalization failed: %s", response.YAML)
 	}
 	if !strings.Contains(response.YAML, "secret: keep-this-secret") ||
 		!strings.Contains(response.YAML, "enable: false") ||
