@@ -153,13 +153,13 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() == nil {
-				state.update(func(v *mihomoTelemetrySnapshot) { v.ConnectionsError = "Mihomo /connections 请求失败: " + err.Error() })
+				state.update(func(v *mihomoTelemetrySnapshot) { v.Connections = 0; v.ConnectionsError = safeMihomoValidationDiagnostic([]byte("Mihomo /connections 请求失败: " + err.Error())) })
 			}
 			return
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			state.update(func(v *mihomoTelemetrySnapshot) { v.ConnectionsError = fmt.Sprintf("Mihomo /connections 返回 HTTP %d", resp.StatusCode) })
+			state.update(func(v *mihomoTelemetrySnapshot) { v.Connections = 0; v.ConnectionsError = fmt.Sprintf("Mihomo /connections 返回 HTTP %d", resp.StatusCode) })
 			return
 		}
 		var payload struct {
@@ -168,7 +168,7 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 			DownloadTotal uint64          `json:"downloadTotal"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			state.update(func(v *mihomoTelemetrySnapshot) { v.ConnectionsError = "解析 Mihomo /connections 失败: " + err.Error() })
+			state.update(func(v *mihomoTelemetrySnapshot) { v.Connections = 0; v.ConnectionsError = safeMihomoValidationDiagnostic([]byte("解析 Mihomo /connections 失败: " + err.Error())) })
 			return
 		}
 		state.update(func(v *mihomoTelemetrySnapshot) {
