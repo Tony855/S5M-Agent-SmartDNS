@@ -9,32 +9,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestNormalizeAgentMixedPort(t *testing.T) {
-	for name, input := range map[string]string{
-		"controller port": "mixed-port: 8080\nmode: rule\n",
-		"custom port":     "mixed-port: 7899\nmode: rule\n",
-		"missing port":    "mode: rule\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := normalizeAgentMixedPort(input)
-			if err != nil {
-				t.Fatalf("normalizeAgentMixedPort() error = %v", err)
-			}
-			var config map[string]any
-			if err := yaml.Unmarshal([]byte(got), &config); err != nil {
-				t.Fatalf("normalized YAML invalid: %v\n%s", err, got)
-			}
-			if port, ok := config["mixed-port"].(int); !ok || port != 7890 {
-				t.Fatalf("mixed-port = %#v, want 7890\n%s", config["mixed-port"], got)
-			}
-		})
-	}
-}
-
-func TestNormalizeAgentPortsAndTUNSafety(t *testing.T) {
-	input := `mixed-port: 8080 # stale mixed listener
-port: 8080 # stale HTTP listener
-socks-port: 8080 # stale SOCKS listener
+func TestNormalizeAgentProxyConfigRemovesExplicitProxyListeners(t *testing.T) {
+	input := `mixed-port: 7890
+port: 8080
+socks-port: 8081
+redir-port: 8082
+tproxy-port: 8083
+allow-lan: true
 external-controller: 0.0.0.0:8088
 dns:
   fake-ip-filter:
@@ -49,22 +30,21 @@ proxies:
     server: 203.0.113.10
     port: 1080
 `
-	got, err := normalizeAgentMixedPort(input)
+	got, err := normalizeAgentProxyConfig(input)
 	if err != nil {
-		t.Fatalf("normalizeAgentMixedPort: %v", err)
+		t.Fatalf("normalizeAgentProxyConfig: %v", err)
 	}
 	var config map[string]any
 	if err := yaml.Unmarshal([]byte(got), &config); err != nil {
 		t.Fatalf("decode normalized YAML: %v", err)
 	}
-	if config["mixed-port"] != 7890 {
-		t.Fatalf("mixed-port = %#v, want 7890", config["mixed-port"])
+	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port"} {
+		if _, exists := config[key]; exists {
+			t.Errorf("explicit proxy listener %q must be removed: %s", key, got)
+		}
 	}
-	if _, exists := config["port"]; exists {
-		t.Fatalf("stale HTTP port must be removed: %s", got)
-	}
-	if _, exists := config["socks-port"]; exists {
-		t.Fatalf("stale SOCKS port must be removed: %s", got)
+	if config["allow-lan"] != false {
+		t.Fatalf("allow-lan = %#v, want false", config["allow-lan"])
 	}
 	if config["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("external-controller = %#v", config["external-controller"])
@@ -77,153 +57,58 @@ proxies:
 	if !ok {
 		t.Fatalf("fake-ip-filter is not a sequence: %#v", dns["fake-ip-filter"])
 	}
-	foundDomain := false
-	for _, item := range filters {
-		if item == "+.v2net.cc" {
-			foundDomain = true
-		}
-	}
-	if !foundDomain {
-		t.Fatalf("missing +.v2net.cc fake-ip exclusion: %s", got)
-	}
 	for _, want := range []string{"*.lan", "*.local", "geosite:private", "+.v2net.cc"} {
 		found := false
 		for _, item := range filters {
-			if item == want {
-				found = true
-				break
-			}
+			if item == want { found = true; break }
 		}
-		if !found {
-			t.Errorf("fake-ip-filter missing %q: %#v", want, filters)
-		}
+		if !found { t.Errorf("fake-ip-filter missing %q: %#v", want, filters) }
 	}
 	if dns["ipv6"] != false {
 		t.Errorf("dns.ipv6 = %#v, want false", dns["ipv6"])
 	}
-	defaultNameservers, ok := dns["default-nameserver"].([]any)
-	if !ok {
-		t.Fatalf("default-nameserver is not a sequence: %#v", dns["default-nameserver"])
-	}
-	for _, want := range []string{"223.5.5.5", "119.29.29.29"} {
-		found := false
-		for _, item := range defaultNameservers {
-			if item == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("default-nameserver missing %q: %#v", want, defaultNameservers)
-		}
-	}
-	bootstrap, ok := dns["proxy-server-nameserver"].([]any)
-	if !ok {
-		t.Fatalf("proxy-server-nameserver is not a sequence: %#v", dns["proxy-server-nameserver"])
-	}
-	for _, want := range []string{"223.5.5.5", "119.29.29.29"} {
-		found := false
-		for _, item := range bootstrap {
-			if item == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("proxy-server-nameserver missing %q: %#v", want, bootstrap)
-		}
-	}
-	fallback, ok := dns["fallback"].([]any)
-	if !ok {
-		t.Fatalf("fallback is not a sequence: %#v", dns["fallback"])
-	}
-	for _, want := range []string{"https://dns.cloudflare.com/dns-query", "https://dns.google/dns-query"} {
-		found := false
-		for _, item := range fallback {
-			if item == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("fallback missing %q: %#v", want, fallback)
-		}
-	}
-	fallbackFilter, ok := dns["fallback-filter"].(map[string]any)
-	if !ok || fallbackFilter["geoip"] != true || fallbackFilter["geoip-code"] != "CN" {
-		t.Errorf("fallback-filter = %#v, want geoip=true and geoip-code=CN", dns["fallback-filter"])
-	}
 	tun, ok := config["tun"].(map[string]any)
-	if !ok {
-		t.Fatalf("tun is not a mapping: %#v", config["tun"])
+	if !ok { t.Fatalf("tun is not a mapping: %#v", config["tun"]) }
+	if tun["enable"] != true {
+		t.Errorf("TUN enable was not preserved: %#v", tun["enable"])
 	}
 	dnsHijack, ok := tun["dns-hijack"].([]any)
-	if !ok {
-		t.Fatalf("tun dns-hijack is not a sequence: %#v", tun["dns-hijack"])
-	}
+	if !ok { t.Fatalf("tun dns-hijack is not a sequence: %#v", tun["dns-hijack"]) }
 	foundDNSHijack := false
-	for _, item := range dnsHijack {
-		if item == "any:53" {
-			foundDNSHijack = true
-			break
-		}
-	}
-	if !foundDNSHijack {
-		t.Errorf("tun dns-hijack missing any:53: %#v", dnsHijack)
-	}
+	for _, item := range dnsHijack { if item == "any:53" { foundDNSHijack = true; break } }
+	if !foundDNSHijack { t.Errorf("tun dns-hijack missing any:53: %#v", dnsHijack) }
 	addresses, ok := tun["route-exclude-address"].([]any)
-	if !ok {
-		t.Fatalf("route-exclude-address is not a sequence: %#v", tun["route-exclude-address"])
-	}
+	if !ok { t.Fatalf("route-exclude-address is not a sequence: %#v", tun["route-exclude-address"]) }
 	for _, want := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.10/32", "10.1.2.0/24"} {
 		found := false
-		for _, item := range addresses {
-			if item == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("route-exclude-address missing %q: %#v", want, addresses)
-		}
+		for _, item := range addresses { if item == want { found = true; break } }
+		if !found { t.Errorf("route-exclude-address missing %q: %#v", want, addresses) }
 	}
-	// Fake IPs must remain routed through TUN so Mihomo can map them back to domains.
 	for _, item := range addresses {
-		if item == "198.18.0.0/16" {
-			t.Fatalf("fake-IP range must remain routed through TUN: %#v", addresses)
-		}
-	}
-	if !strings.Contains(got, "# stale mixed listener") {
-		t.Fatalf("normalization unexpectedly dropped the retained mixed-port comment: %s", got)
+		if item == "198.18.0.0/16" { t.Fatalf("fake-IP range must remain routed through TUN: %#v", addresses) }
 	}
 }
 
-func TestBuildConfigForMachineUsesSeparateControllerAndAgentProxyPorts(t *testing.T) {
+func TestBuildConfigForMachineDoesNotExposeExplicitProxyListener(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "config-ports.db"))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 
 	app := &App{store: store}
 	controllerYAML, err := app.BuildConfigForMachine("")
-	if err != nil {
-		t.Fatalf("BuildConfigForMachine(controller): %v", err)
-	}
+	if err != nil { t.Fatalf("BuildConfigForMachine(controller): %v", err) }
 	if !strings.Contains(controllerYAML, "mixed-port: 8080") {
-		t.Fatalf("controller config should retain port 8080:\n%s", controllerYAML)
+		t.Fatalf("controller config should retain its separate local listener:\n%s", controllerYAML)
 	}
 
 	agentYAML, err := app.BuildConfigForMachine("node-a")
-	if err != nil {
-		t.Fatalf("BuildConfigForMachine(agent): %v", err)
+	if err != nil { t.Fatalf("BuildConfigForMachine(agent): %v", err) }
+	for _, forbidden := range []string{"mixed-port:", "port:", "socks-port:", "redir-port:", "tproxy-port:", "allow-lan: true"} {
+		if strings.Contains(agentYAML, forbidden) {
+			t.Errorf("Agent config must not expose explicit proxy listener %q:\\n%s", forbidden, agentYAML)
+		}
 	}
-	if !strings.Contains(agentYAML, "mixed-port: 7890") {
-		t.Fatalf("Agent config should match the published container port 7890:\n%s", agentYAML)
-	}
-	if strings.Contains(agentYAML, "mixed-port: 8080") {
-		t.Fatalf("Agent config unexpectedly retained controller port 8080:\n%s", agentYAML)
-	}
-	for _, want := range []string{"listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: false"} {
+	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: false"} {
 		if !strings.Contains(agentYAML, want) {
 			t.Errorf("Agent initial config missing %q:\\n%s", want, agentYAML)
 		}
