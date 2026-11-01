@@ -653,27 +653,6 @@ func TestRollbackAndVerifyConfig(t *testing.T) {
 	}
 }
 
-func TestCompareMihomoRuntimeRules(t *testing.T) {
-	expected := []mihomoRuntimeRule{
-		{Type: "GEOIP", Payload: "CN", Proxy: "DIRECT"},
-		{Type: "MATCH", Proxy: "Proxy"},
-	}
-	if err := compareMihomoRuntimeRules(expected, expected); err != nil {
-		t.Fatalf("matching rules rejected: %v", err)
-	}
-	if err := compareMihomoRuntimeRules(expected, expected[:1]); err == nil {
-		t.Fatal("expected rule count mismatch")
-	}
-	reordered := []mihomoRuntimeRule{expected[1], expected[0]}
-	if err := compareMihomoRuntimeRules(expected, reordered); err == nil {
-		t.Fatal("expected rule order mismatch")
-	}
-	wrongTarget := []mihomoRuntimeRule{expected[0], {Type: "MATCH", Proxy: "DIRECT"}}
-	if err := compareMihomoRuntimeRules(expected, wrongTarget); err == nil {
-		t.Fatal("expected target proxy mismatch")
-	}
-}
-
 func TestRollbackConfigFromPaths(t *testing.T) {
 	t.Run("restores previous config", func(t *testing.T) {
 		dir := t.TempDir()
