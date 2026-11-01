@@ -143,6 +143,18 @@ docker tag "$IMAGE_SRC" "$IMAGE_LOCAL" 2>/dev/null || {
 log "保留持久化数据目录：$DATA_DIR"
 install -d -m 0700 "$DATA_DIR"
 
+config_uses_tun() {
+  awk '
+    /^tun:[[:space:]]*$/ { in_tun=1; next }
+    /^[^[:space:]#]/ { in_tun=0 }
+    in_tun && /^[[:space:]]+enable:[[:space:]]*true([[:space:]]*(#.*)?)?$/ { found=1 }
+    END { exit !found }
+  ' "$1"
+}
+if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "$DATA_DIR/config.yaml"; then
+  die "现有 config.yaml 中 tun.enable=true；为避免升级后 TUN 失效，请使用 ENABLE_TUN=1 或先明确关闭 TUN。"
+fi
+
 # TUN 默认开启；仅在 ENABLE_TUN=0 时关闭 TUN 权限。
 TUN_ARGS=()
 if [ "$ENABLE_TUN" = "1" ]; then
