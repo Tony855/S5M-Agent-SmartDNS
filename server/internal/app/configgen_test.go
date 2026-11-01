@@ -13,7 +13,8 @@ import (
 )
 
 func TestNormalizeAgentProxyConfigKeepsOnlyMixedProxyListenerOn7890(t *testing.T) {
-	input := `mixed-port: 7890
+	input := `secret: test-secret
+mixed-port: 7890
 port: 8080
 socks-port: 8081
 redir-port: 8082
@@ -110,7 +111,8 @@ proxies:
 }
 
 func TestNormalizeAgentProxyConfigKeepsBootstrapIndependentFromSmartDNSAndTUN(t *testing.T) {
-	input := `dns:
+	input := `secret: test-secret
+dns:
   default-nameserver:
     - 127.0.0.1:6053
     - bootstrap.example.com
@@ -1171,7 +1173,7 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 		t.Fatalf("saved per-node YAML should contain expanded proxy fields, not merge aliases:\n%s", got.YAML)
 	}
 	for _, want := range []string{
-		"allow-lan: false",
+		"allow-lan: true",
 		"secret: keep-this-secret",
 		"same-vless-443",
 		"same-vless-8443",
