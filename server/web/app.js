@@ -59,7 +59,7 @@ createApp({
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
     let smartdnsLoadGeneration = 0;
     let smartdnsApplyGeneration = 0;
-    watch(selectedConfigNode, () => {
+    watch(selectedConfigNode, (code) => {
       smartdnsLoadGeneration++;
       smartdnsApplyGeneration++;
       applyingSmartDNS.value = false;
@@ -67,6 +67,13 @@ createApp({
       smartdnsYaml.value = '';
       smartdnsResult.value = '';
       smartdnsStatus.value = { available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' };
+      configYaml.value = '';
+      syncConfigQuickSettingsFromYaml();
+      if (code && String(code).trim()) {
+        // Both editors follow the same node selection; load immediately on every change.
+        loadNodeConfig();
+        loadSmartDNSConfig();
+      }
     });
     let nodeConfigLoadGeneration = 0;
     const publishing = ref(false);
@@ -133,10 +140,9 @@ createApp({
       activeGroup.value = code;
       switchPage('proxies');
     };
-    const openNodeConfigForMachine = async (code) => {
-      selectedConfigNode.value = code;
+    const openNodeConfigForMachine = (code) => {
       switchPage('config');
-      await loadNodeConfig();
+      selectedConfigNode.value = code;
     };
 
     const filteredProxies = computed(() => {
@@ -362,6 +368,15 @@ createApp({
                 lastCommandMessage: queued ? ('命令已排队' + (message.version ? '：' + message.version : '')) : String(message.message || ''),
                 lastCommandAt: Number(message.at) || Math.floor(Date.now() / 1000)
               });
+            }
+            // A successful SmartDNS read persists the Agent's disk YAML before
+            // this event is published. Refresh the saved snapshot without queuing
+            // another read command (which would create a read/refresh loop).
+            if (message.type === 'agent.command.updated'
+                && message.status === 'success'
+                && page.value === 'config'
+                && String(selectedConfigNode.value || '').trim() === code) {
+              loadSmartDNSSavedConfigAfterCommand(code);
             }
           }
         };
@@ -1200,32 +1215,53 @@ createApp({
       } finally { savingConfig.value = false; }
     };
 
+    const loadSmartDNSSavedSnapshot = async (code, generation) => {
+      const [agents, saved] = await Promise.all([
+        sendBrowserWSControl({ type: 'agents.list.get' }),
+        sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code })
+      ]);
+      if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
+      const item = (agents.data || {})[code] || {};
+      const status = item.status || {};
+      smartdnsStatus.value = {
+        available: status.smartdns_available === true,
+        running: status.smartdns_running === true,
+        dnsHealthy: status.smartdns_dns_healthy === true,
+        version: String(status.smartdns_version || ''),
+        configHash: String(status.smartdns_config_sha256 || ''),
+        lastError: String(status.smartdns_last_error || '')
+      };
+      const config = String((saved.data || {}).config || '');
+      smartdnsYaml.value = config;
+      smartdnsResult.value = config
+        ? '已显示该节点最近一次从 Agent 确认保存的 SmartDNS 配置'
+        : '当前节点尚无已回传的 SmartDNS 配置；正在请求 Agent 读取磁盘配置';
+    };
+
+    const loadSmartDNSSavedConfigAfterCommand = async (code) => {
+      const generation = smartdnsLoadGeneration;
+      try {
+        await loadSmartDNSSavedSnapshot(code, generation);
+      } catch (e) {
+        if (String(selectedConfigNode.value || '').trim() === code) {
+          smartdnsResult.value = 'Agent 已返回命令结果，但刷新配置副本失败：' + (e.message || String(e));
+        }
+      }
+    };
+
     const loadSmartDNSConfig = async () => {
       const code = String(selectedConfigNode.value || '').trim();
       if (!code || loadingSmartDNS.value) return;
       loadingSmartDNS.value = true;
       const generation = ++smartdnsLoadGeneration;
       try {
-        const agents = await sendBrowserWSControl({ type: 'agents.list.get' });
+        await loadSmartDNSSavedSnapshot(code, generation);
         if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
-        const item = (agents.data || {})[code] || {};
-        const status = item.status || {};
-        smartdnsStatus.value = {
-          available: status.smartdns_available === true,
-          running: status.smartdns_running === true,
-          dnsHealthy: status.smartdns_dns_healthy === true,
-          version: String(status.smartdns_version || ''),
-          configHash: String(status.smartdns_config_sha256 || ''),
-          lastError: String(status.smartdns_last_error || '')
-        };
-        const saved = await sendBrowserWSControl({ type: 'smartdns.config.get', machine_code: code });
-        if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
-        smartdnsYaml.value = String((saved.data || {}).config || '');
-        smartdnsResult.value = smartdnsYaml.value ? '已加载主控最近保存的配置副本' : '主控尚无该节点的 SmartDNS 配置副本';
         try {
           const requested = await sendBrowserWSControl({ type: 'smartdns.config.read', machine_code: code });
           if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
-          smartdnsResult.value += '；' + (requested.message || '已请求 Agent 回传实际配置，稍后再次刷新');
+          smartdnsResult.value += '；已请求 Agent 读取当前磁盘配置，收到回执后会自动更新此处内容';
+          if (requested.message) smartdnsResult.value += '（' + requested.message + '）';
         } catch (readError) {
           if (generation !== smartdnsLoadGeneration || String(selectedConfigNode.value || '').trim() !== code) return;
           smartdnsResult.value += '；Agent 实时读取请求未排队：' + (readError.message || String(readError));
