@@ -913,7 +913,7 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		}
 	}
 	// Repair stale persisted node configs before hashing/sending; otherwise the Agent
-	// would keep receiving controller port 8080 despite Docker publishing 7890.
+	// would keep receiving the controller's local listener configuration instead of the Agent's transparent-only configuration.
 	normalized, normalizeErr := normalizeAgentProxyConfig(yml)
 	if normalizeErr != nil {
 		return normalizeErr
