@@ -380,6 +380,8 @@ createApp({
                 uploadTotal: Math.max(0, Number(status.upload_total) || 0),
                 downloadTotal: Math.max(0, Number(status.download_total) || 0),
                 telemetryError: [status.traffic_error, status.connections_error].filter(Boolean).join('；'),
+                telemetryStale: status.telemetry_stale === true,
+                telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
                 telemetryUpdatedAt: receivedAt,
                 updated_at: new Date(receivedAt).toLocaleString()
               });
@@ -946,6 +948,8 @@ createApp({
             connections: Number.isFinite(Number(status.connections)) ? Math.max(0, Number(status.connections)) : null,
             uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
             downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
+            telemetryStale: status.telemetry_stale === true,
+            telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
             online,
             last_seen: last,
             hostname,
