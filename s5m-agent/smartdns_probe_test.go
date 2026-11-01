@@ -727,6 +727,29 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
 	})
 
+	t.Run("stopped process is restarted by s6 before controller fallback", func(t *testing.T) {
+		deps := good
+		deps.process = func() ([]byte, error) { return nil, os.ErrNotExist }
+		deps.probe = func() bool { return false }
+		restartCalls, waitCalls := 0, 0
+		deps.restart = func() error { restartCalls++; return nil }
+		deps.waitHealthy = func(timeout time.Duration) bool {
+			waitCalls++
+			if timeout != 5*time.Second { t.Fatalf("health wait timeout = %v, want 5s", timeout) }
+			return true
+		}
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_available", true)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_recovery", "restarted")
+		assert(t, status, "smartdns_last_error", "")
+		if restartCalls != 1 || waitCalls != 1 {
+			t.Fatalf("restart calls=%d wait calls=%d; want one each", restartCalls, waitCalls)
+		}
+	})
+
 	t.Run("restart recovers unhealthy resolver before fallback", func(t *testing.T) {
 		deps := good
 		probeCalls, restartCalls := 0, 0
