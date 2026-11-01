@@ -937,6 +937,15 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 			yml = latest.YAML
 		}
 	}
+	// Saved per-node YAML is authoritative for routing policy, but SmartDNS
+	// integration is a runtime capability: once healthy, point its resolver to
+	// the Agent-local SmartDNS listener before hashing and delivering the config.
+	if a.agentHasHealthySmartDNS(machineCode) {
+		yml, normalizeErr = routeAgentDNSViaSmartDNS(yml)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+	}
 	sum := sha256.Sum256([]byte(yml))
 	hash := hex.EncodeToString(sum[:])
 	if err := a.store.UpdateSettings(map[string]string{"agent_lastseen_" + machineCode: strconv.FormatInt(time.Now().Unix(), 10)}); err != nil {
