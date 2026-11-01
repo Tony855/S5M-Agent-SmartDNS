@@ -91,19 +91,14 @@ jobs:
 
       - name: Validate routing mode selector defaults and availability
         run: |
-          grep -q "mode: 'rule'" server/web/app.js
-          grep -q 'value="rule"' server/web/index.html
-          grep -q 'value="split"' server/web/index.html
-          ! grep -Eq 'el-option[^>]*value="split"[^>]*disabled|el-option[^>]*disabled[^>]*value="split"' server/web/index.html
-          rule_line="$(grep -n 'value="rule"' server/web/index.html | head -n1 | cut -d: -f1)"
-          split_line="$(grep -n 'value="split"' server/web/index.html | head -n1 | cut -d: -f1)"
-          test "$rule_line" -lt "$split_line"
-          grep -q 'return "rule"' server/internal/app/configgen.go
+          ! grep -q 'proxyForm.mode' server/web/app.js
+          ! grep -q 'label="代理模式"' server/web/index.html
+          grep -q 'machineProxyModes\[item.code\]' server/web/index.html
+          grep -q 'handleSetMachineProxyMode' server/internal/app/router.go
+          grep -q 'GetMachineProxyMode(machineCode)' server/internal/app/configgen.go
+          grep -q 'CREATE TABLE IF NOT EXISTS machine_proxy_settings' server/internal/app/store.go
+          grep -q 'DOMAIN-SUFFIX,v2net.cc,DIRECT' server/internal/app/configgen.go
           grep -q 'MATCH,REJECT' server/internal/app/configgen.go
-          grep -q "mode: proxyForm.mode || 'rule'" server/web/app.js
-          grep -q "china: 'split'" server/web/app.js
-          grep -q 'case "proxy", "china", "global", "split", "rule", "return", "game"' server/internal/app/handlers.go
-          grep -q 'label="代理模式"' server/web/index.html
 
       - name: Validate default and opt-in TUN deployment permissions
         run: |
@@ -163,9 +158,9 @@ jobs:
           ! grep -q '^mixed-port:' s5m-agent/default-config.yaml
           ! grep -q '^mixed-port:' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '^allow-lan: true' s5m-agent/default-config.yaml
-          grep -q '^authentication:' s5m-agent/default-config.yaml
+          ! grep -q '^authentication:' s5m-agent/default-config.yaml
           grep -q '^allow-lan: true' s5m-agent/smartdns/default-config-smartdns.yaml
-          grep -q '^authentication:' s5m-agent/smartdns/default-config-smartdns.yaml
+          ! grep -q '^authentication:' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '127.0.0.1:6053' s5m-agent/default-config.yaml
           grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'enable: true' s5m-agent/default-config.yaml
