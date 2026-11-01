@@ -9,6 +9,7 @@ on:
       - "scripts/deploy-agent.sh"
       - "scripts/s5m-deploy.sh"
       - "server/**"
+      - "scripts/tests/proxy-import-parser.test.js"
       - ".github/workflows/installer-validation.yml"
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - "scripts/install-server.sh"
       - "scripts/deploy-agent.sh"
       - "server/**"
+      - "scripts/tests/proxy-import-parser.test.js"
       - ".github/workflows/installer-validation.yml"
   workflow_dispatch:
 
@@ -132,7 +134,9 @@ jobs:
         run: bash scripts/tests/deploy-agent-rollback.sh
 
       - name: Check embedded web JavaScript syntax
-        run: node --check server/web/app.js
+        run: |
+          node --check server/web/app.js
+          node scripts/tests/proxy-import-parser.test.js
 
       - name: Test and build bundled S5M-Server source
         uses: actions/setup-go@v5
