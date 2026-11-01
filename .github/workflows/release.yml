@@ -80,7 +80,9 @@ jobs:
           major_minor="$(printf '%s' "$version" | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1/')"
           image_tags="$IMAGE_NAME:$version"
           if [[ "$prerelease" != "true" ]]; then
-            image_tags+=
+            image_tags="${image_tags}"$'\n'"$IMAGE_NAME:$major_minor"
+          fi
+
           git fetch origin main --force
           git merge-base --is-ancestor "$COMMIT_SHA" origin/main || {
             echo "The release commit must already be contained in origin/main." >&2
