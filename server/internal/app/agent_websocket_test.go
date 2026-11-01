@@ -1529,3 +1529,51 @@ func TestNewAgentCommandIDUsesUniqueHexadecimalIdentifiers(t *testing.T) {
 		seen[id] = struct{}{}
 	}
 }
+
+
+func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDNS(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	persisted := "allow-lan: false\\ndns:\\n  enable: true\\n  nameserver:\\n    - 8.8.8.8\\n  default-nameserver:\\n    - 223.5.5.5\\n"
+	if err := app.store.SaveNodeConfig(code, persisted); err != nil { t.Fatalf("save node config: %v", err) }
+	setHealth := func(healthy bool) {
+		t.Helper()
+		status := map[string]any{"smartdns_available": true, "smartdns_running": healthy, "smartdns_dns_healthy": healthy}
+		data, _ := json.Marshal(status)
+		if err := app.store.UpdateSettings(map[string]string{"agent_status_" + code: string(data)}); err != nil { t.Fatalf("set SmartDNS health: %v", err) }
+	}
+	setHealth(true)
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+	if err != nil { t.Fatalf("dial authenticated WebSocket: %v", err) }
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var welcome map[string]any
+	if err := conn.ReadJSON(&welcome); err != nil { t.Fatalf("read welcome: %v", err) }
+
+	if err := conn.WriteJSON(map[string]any{"type":"config.request", "id":"smartdns-healthy", "config_sha256":""}); err != nil { t.Fatal(err) }
+	var healthy map[string]any
+	if err := conn.ReadJSON(&healthy); err != nil { t.Fatalf("read healthy config: %v", err) }
+	if healthy["type"] != "config.sync" || !strings.Contains(healthy["yaml"].(string), "127.0.0.1:6053") { t.Fatalf("healthy SmartDNS config was not routed locally: %#v", healthy) }
+	healthyHash, ok := healthy["sha256"].(string)
+	if !ok || healthyHash == "" { t.Fatalf("missing healthy config hash: %#v", healthy) }
+
+	stored, err := app.store.GetNodeConfig(code)
+	if err != nil { t.Fatal(err) }
+	if stored == nil || stored.YAML != persisted { t.Fatalf("runtime DNS leaked into persisted node config: %#v", stored) }
+
+	setHealth(false)
+	if err := conn.WriteJSON(map[string]any{"type":"config.request", "id":"smartdns-unhealthy", "config_sha256":healthyHash}); err != nil { t.Fatal(err) }
+	var fallback map[string]any
+	if err := conn.ReadJSON(&fallback); err != nil { t.Fatalf("read fallback config: %v", err) }
+	fallbackYAML, _ := fallback["yaml"].(string)
+	if fallback["type"] != "config.sync" || !strings.Contains(fallbackYAML, "8.8.8.8") || strings.Contains(fallbackYAML, "127.0.0.1:6053") {
+		t.Fatalf("SmartDNS health loss did not trigger upstream fallback sync: %#v", fallback)
+	}
+	if fallback["sha256"] == healthyHash { t.Fatal("SmartDNS health transition did not change config hash") }
+	stored, err = app.store.GetNodeConfig(code)
+	if err != nil { t.Fatal(err) }
+	if stored == nil || stored.YAML != persisted { t.Fatalf("fallback sync mutated persisted node config: %#v", stored) }
+}
