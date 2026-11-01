@@ -88,3 +88,16 @@ func TestMihomoTelemetryStaleThreshold(t *testing.T) {
 		t.Fatal("sample older than the stale threshold must be stale")
 	}
 }
+
+func TestMihomoAPISecretValidationFailsClosed(t *testing.T) {
+	if _, err := mihomoAPISecretFromConfig(map[string]any{}); err == nil {
+		t.Fatal("missing Mihomo API secret must be rejected")
+	}
+	secret, err := mihomoAPISecretFromConfig(map[string]any{"secret": "  local-secret  "})
+	if err != nil {
+		t.Fatalf("valid Mihomo API secret was rejected: %v", err)
+	}
+	if secret != "local-secret" {
+		t.Fatalf("secret was not normalized: got %q", secret)
+	}
+}
