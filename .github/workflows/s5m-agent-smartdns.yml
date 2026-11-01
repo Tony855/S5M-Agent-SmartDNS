@@ -194,6 +194,7 @@ jobs:
           trap cleanup EXIT
 
           docker run -d --name "$container" --restart no \
+            --cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun \
             -p 127.0.0.1::80/tcp \
             -v "$data_dir:/data" \
             s5m-agent-smartdns:test >/dev/null
@@ -317,6 +318,7 @@ jobs:
           trap cleanup EXIT
 
           docker run -d --name "$container" --restart no \
+            --cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun \
             -p 127.0.0.1::80/tcp \
             -v "$data_dir:/data" \
             s5m-agent-smartdns:arm64-test >/dev/null
