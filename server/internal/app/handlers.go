@@ -1620,6 +1620,33 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 	return proxies, failures
 }
 
+func proxyImportFingerprint(p *Proxy) string {
+	if p == nil { return "" }
+	extra, _ := json.Marshal(p.Extra)
+	payload, _ := json.Marshal(struct {
+		Type string `json:"type"`
+		Server string `json:"server"`
+		Port int `json:"port"`
+		Extra json.RawMessage `json:"extra"`
+	}{Type: strings.ToLower(strings.TrimSpace(p.Type)), Server: strings.ToLower(strings.TrimSpace(p.Server)), Port: p.Port, Extra: extra})
+	return string(payload)
+}
+
+func filterDuplicateProxyImports(existing []Proxy, incoming []*Proxy) (unique []*Proxy, skipped int) {
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	for i := range existing {
+		seen[proxyImportFingerprint(&existing[i])] = struct{}{}
+	}
+	for _, proxy := range incoming {
+		key := proxyImportFingerprint(proxy)
+		if key == "" { continue }
+		if _, ok := seen[key]; ok { skipped++; continue }
+		seen[key] = struct{}{}
+		unique = append(unique, proxy)
+	}
+	return unique, skipped
+}
+
 func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Content string `json:"content"`
@@ -1636,6 +1663,12 @@ func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	}
 	successCount := 0
 	proxies, failReasons := parseProxyImportContent(in.Content)
+	existing, err := a.store.ListProxies()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取现有代理列表失败，未执行导入")
+		return
+	}
+	proxies, skippedCount := filterDuplicateProxyImports(existing, proxies)
 	for _, p := range proxies {
 		if err := a.store.CreateProxy(p); err != nil {
 			p.Name = p.Name + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -1647,6 +1680,9 @@ func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 		successCount++
 	}
 	msg := "导入完成"
+	if skippedCount > 0 {
+		msg = fmt.Sprintf("已跳过 %d 条已存在的相同节点", skippedCount)
+	}
 	if len(failReasons) > 0 {
 		msg = strings.Join(failReasons, "; ")
 	}
@@ -1660,6 +1696,7 @@ func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"success":     successCount,
 		"fail":        len(failReasons),
+		"skipped":     skippedCount,
 		"sync_failed": syncFailed,
 		"message":     msg,
 	})
