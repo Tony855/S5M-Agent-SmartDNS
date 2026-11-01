@@ -806,6 +806,7 @@ createApp({
         const server = String(endpoint.address || endpoint.server || '').trim();
         const port = Number(endpoint.port || 0);
         if (!server || !Number.isInteger(port) || port < 1 || port > 65535) continue;
+        const host = server.includes(':') && !server.startsWith('[') ? '[' + server + ']' : server;
         const name = String(outbound.tag || outbound.name || `节点-${index + 1}`).replace(/[\\r\\n#]/g, ' ');
         const stream = outbound.streamSettings || {};
         const network = String(stream.network || 'tcp').toLowerCase();
@@ -840,21 +841,21 @@ createApp({
             if (reality.publicKey) query.set('pbk', reality.publicKey);
             if (reality.shortId) query.set('sid', reality.shortId);
           }
-          links.push('vless://' + encodeURIComponent(id) + '@' + server + ':' + port + '?' + query.toString() + '#' + fragment);
+          links.push('vless://' + encodeURIComponent(id) + '@' + host + ':' + port + '?' + query.toString() + '#' + fragment);
         } else if (protocol === 'trojan') {
           const password = String(endpoint.password || '');
           if (!password) continue;
-          links.push('trojan://' + encodeURIComponent(password) + '@' + server + ':' + port + '?' + query.toString() + '#' + fragment);
+          links.push('trojan://' + encodeURIComponent(password) + '@' + host + ':' + port + '?' + query.toString() + '#' + fragment);
         } else if (protocol === 'shadowsocks') {
           const method = String(endpoint.method || '');
           const password = String(endpoint.password || '');
           if (!method || !password) continue;
           const auth = btoa(unescape(encodeURIComponent(method + ':' + password)));
-          links.push('ss://' + auth + '@' + server + ':' + port + '#' + fragment);
+          links.push('ss://' + auth + '@' + host + ':' + port + '#' + fragment);
         } else {
           const users = endpoint.users || [];
           const auth = users[0] ? encodeURIComponent(String(users[0].user || '')) + ':' + encodeURIComponent(String(users[0].pass || '')) + '@' : '';
-          links.push((protocol === 'socks' ? 'socks5' : 'http') + '://' + auth + server + ':' + port + '#' + fragment);
+          links.push((protocol === 'socks' ? 'socks5' : 'http') + '://' + auth + host + ':' + port + '#' + fragment);
         }
       }
       return links;
@@ -883,7 +884,7 @@ createApp({
               if (directURI && /^(socks5|socks|http|https|ss|vmess|vless|trojan):\/\//i.test(directURI)) {
                 return directURI.includes('#') ? directURI : directURI + '#' + encodeURIComponent(name);
               }
-              let type = String(item.type || item.protocol || item.scheme || inheritedProtocol || '').trim().toLowerCase();
+              let type = String(item.type || item.protocol || item.scheme || item.configType || item.config_type || item.protocolType || inheritedProtocol || '').trim().toLowerCase();
               if (type === 'socks') type = 'socks5';
               if (type === 'https') type = 'http';
               const server = String(item.server || item.address || item.host || item.add || '').trim();
@@ -903,8 +904,8 @@ createApp({
                   v: '2', ps: name, add: server, port: String(port),
                   id: uuid, aid: String(item.alterId ?? item.aid ?? 0),
                   scy: String(item.cipher || item.scy || 'auto'),
-                  net: String(item.network || item.net || 'tcp'),
-                  tls: item.tls ? 'tls' : '',
+                  net: String(item.network || item.net || item.headerType || 'tcp'),
+                  tls: tls ? 'tls' : '',
                   sni: String(item.servername || item.sni || ''),
                   host: String(headers.Host || headers.host || item.host || ''),
                   path: String(ws.path || item.path || '')
@@ -921,7 +922,7 @@ createApp({
               const query = new URLSearchParams();
               const network = String(item.network || item.net || '');
               if (network) query.set('type', network);
-              const tls = item.tls === true || String(item.tls).toLowerCase() === 'true' || item.security === 'tls' || item.security === 'reality';
+              const tls = item.tls === true || String(item.tls).toLowerCase() === 'true' || ['tls', 'reality'].includes(String(item.security || item.streamSecurity || '').toLowerCase());
               if (tls) query.set('security', item.security || 'tls');
               const sni = String(item.servername || item.sni || '');
               if (sni) query.set('sni', sni);
