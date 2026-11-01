@@ -128,7 +128,7 @@ func TestValidateProxyRejectsUnknownModeAndInvalidPorts(t *testing.T) {
 			proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Server: "example.com", Port: 65535},
 		},
 		{
-			name:  "empty mode defaults to proxy",
+			name:  "empty mode defaults to strict rule mode",
 			proxy: Proxy{Name: "proxy-a", Type: "socks5", Server: "example.com", Port: 1080},
 		},
 		{
