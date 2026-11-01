@@ -1548,7 +1548,20 @@ func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDN
 	if err := conn.ReadJSON(&welcome); err != nil { t.Fatalf("read welcome: %v", err) }
 	setHealth := func(healthy bool, id string) {
 		t.Helper()
-		status := map[string]any{"smartdns_available": true, "smartdns_running": healthy, "smartdns_dns_healthy": healthy}
+		status := map[string]any{
+			"mihomo_version": "v1.19.33",
+			"mihomo_healthy": true,
+			"upload_total": float64(12),
+			"download_total": float64(34),
+			"upload_speed": float64(1),
+			"download_speed": float64(2),
+			"connections": float64(3),
+			"config_sha256": strings.Repeat("a", 64),
+			"last_error": "",
+			"smartdns_available": true,
+			"smartdns_running": healthy,
+			"smartdns_dns_healthy": healthy,
+		}
 		if err := conn.WriteJSON(map[string]any{"type":"heartbeat", "id":id, "status":status}); err != nil { t.Fatalf("send SmartDNS health heartbeat: %v", err) }
 		var ack map[string]any
 		if err := conn.ReadJSON(&ack); err != nil { t.Fatalf("read SmartDNS heartbeat ACK: %v", err) }
