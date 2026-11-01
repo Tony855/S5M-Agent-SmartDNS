@@ -193,7 +193,18 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 	}
 }
 
-var agentWSWriteMu sync.Mutex
+var agentWSWriteLocks sync.Map
+
+func lockAgentWSWrite(conn *websocket.Conn) func() {
+	value, _ := agentWSWriteLocks.LoadOrStore(conn, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func forgetAgentWSWriteLock(conn *websocket.Conn) {
+	agentWSWriteLocks.Delete(conn)
+}
 
 func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 	secret, err := mihomoControllerSecret()
