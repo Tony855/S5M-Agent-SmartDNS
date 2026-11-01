@@ -173,6 +173,7 @@ func validateSmartDNSConfig(data []byte) error {
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	usable := 0
 	bindUDP, bindTCP := false, false
+	encryptedUpstream := false
 	for lineNo, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -199,6 +200,12 @@ func validateSmartDNSConfig(data []byte) error {
 				bindTCP = true
 			}
 		}
+		if directive == "server" || directive == "server-tcp" {
+			return fmt.Errorf("第 %d 行必须使用加密 DNS 上游（server-tls/server-https/server-quic），禁止明文 DNS", lineNo+1)
+		}
+		if directive == "server-tls" || directive == "server-https" || directive == "server-quic" {
+			encryptedUpstream = true
+		}
 		if strings.HasPrefix(directive, "server") && len(fields) < 2 {
 			return fmt.Errorf("第 %d 行上游 DNS 地址不能为空", lineNo+1)
 		}
@@ -209,6 +216,9 @@ func validateSmartDNSConfig(data []byte) error {
 	}
 	if !bindUDP || !bindTCP {
 		return fmt.Errorf("必须同时配置 bind 127.0.0.1:6053 和 bind-tcp 127.0.0.1:6053")
+	}
+	if !encryptedUpstream {
+		return fmt.Errorf("SmartDNS 至少需要一个加密上游（server-tls/server-https/server-quic）")
 	}
 	return nil
 }
@@ -285,6 +295,9 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
+		if configErr := validateSmartDNSConfig(data); configErr != nil {
+			appendSmartDNSStatusError(status, "SmartDNS 配置未通过加密上游策略校验: "+safeSmartDNSDiagnostic(configErr.Error()))
+		}
 	} else {
 		appendSmartDNSStatusError(status, "读取 SmartDNS 配置失败: "+safeSmartDNSDiagnostic(err.Error()))
 	}
