@@ -77,6 +77,17 @@ if [[ "$ENABLE_TUN" == "1" && ! -c /dev/net/tun ]]; then
 fi
 
 install -d -m 0700 "$DATA_DIR"
+config_uses_tun() {
+  awk '
+    /^tun:[[:space:]]*$/ { in_tun=1; next }
+    /^[^[:space:]#]/ { in_tun=0 }
+    in_tun && /^[[:space:]]+enable:[[:space:]]*true([[:space:]]*(#.*)?)?$/ { found=1 }
+    END { exit !found }
+  ' "$1"
+}
+if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "$DATA_DIR/config.yaml"; then
+  die "现有 config.yaml 中 tun.enable=true；为避免升级后 TUN 失效，请使用 ENABLE_TUN=1 或先明确关闭 TUN。"
+fi
 if [[ "$PULL_IMAGE" == "1" ]]; then
   log "拉取镜像：$IMAGE"
   docker pull "$IMAGE"
