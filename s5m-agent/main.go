@@ -571,7 +571,14 @@ func refreshCentralRouteExclusions(centralURL string) (bool, error) {
 	return true, nil
 }
 
+// mihomoConfigApplyMu serializes controller YAML updates and dynamic route
+// exclusion refreshes. The latter now runs asynchronously beside the WebSocket
+// session and must never race a controller config apply or rollback.
+var mihomoConfigApplyMu sync.Mutex
+
 func refreshAndApplyCentralRouteExclusions(centralURL string) error {
+	mihomoConfigApplyMu.Lock()
+	defer mihomoConfigApplyMu.Unlock()
 	oldManaged := readManagedRouteCIDRs()
 	oldManagedValues := make([]string, 0, len(oldManaged))
 	for cidr := range oldManaged {
@@ -623,6 +630,8 @@ func mergeConfig(agentYml []byte) (bool, error) {
 }
 
 func mergeConfigWithCentralURL(agentYml []byte, centralURL string) (bool, error) {
+	mihomoConfigApplyMu.Lock()
+	defer mihomoConfigApplyMu.Unlock()
 	mainPath := mihomoConfigPath()
 	previousPath := mainPath + ".previous"
 	nextCfg, err := validateMihomoConfigYAML(agentYml)
@@ -1030,11 +1039,16 @@ func collectMihomoStatus() map[string]any {
 	status := map[string]any{
 		"arch": runtime.GOARCH, "os": runtime.GOOS,
 		"hostname": "", "mihomo_version": "", "mihomo_healthy": false,
+		"mihomo_process_running": false, "mihomo_api_healthy": false,
 		"upload_total": int64(0), "download_total": int64(0),
 		"upload_speed": float64(0), "download_speed": float64(0),
 		"connections": 0, "config_sha256": "", "last_error": "",
 	}
 	collectSmartDNSStatus(status)
+	status["mihomo_process_running"] = exec.Command("pidof", "mihomo").Run() == nil
+	// Preserve the last known telemetry even when the config file or Mihomo
+	// version endpoint is temporarily unavailable.
+	applyMihomoTelemetrySnapshot(status, agentMihomoTelemetry.snapshot(), time.Now())
 	if hostname, err := agentHostname(); err == nil {
 		status["hostname"] = hostname
 	}
@@ -1054,16 +1068,18 @@ func collectMihomoStatus() map[string]any {
 		status["last_error"] = "解析配置失败: " + err.Error()
 		return status
 	}
-	secret, _ := cfg["secret"].(string)
+	secret, err := mihomoAPISecretFromConfig(cfg)
+	if err != nil {
+		status["last_error"] = err.Error()
+		return status
+	}
 	client := &http.Client{Timeout: 3 * time.Second}
 	get := func(path string) (map[string]any, error) {
 		req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8088"+path, nil)
 		if err != nil {
 			return nil, err
 		}
-		if secret != "" {
-			req.Header.Set("Authorization", "Bearer "+secret)
-		}
+		req.Header.Set("Authorization", "Bearer "+secret)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
@@ -1089,23 +1105,10 @@ func collectMihomoStatus() map[string]any {
 		return status
 	}
 	status["mihomo_version"] = versionText
-	status["mihomo_healthy"] = true
-	connections, err := get("/connections")
-	if err == nil {
-		items, _ := connections["connections"].([]any)
-		status["connections"] = len(items)
-		status["upload_total"] = connections["uploadTotal"]
-		status["download_total"] = connections["downloadTotal"]
-		uploadTotal, uploadOK := trafficCounter(connections["uploadTotal"])
-		downloadTotal, downloadOK := trafficCounter(connections["downloadTotal"])
-		if uploadOK && downloadOK {
-			upSpeed, downSpeed := calculateMihomoSpeeds(uploadTotal, downloadTotal, time.Now())
-			status["upload_speed"] = upSpeed
-			status["download_speed"] = downSpeed
-		}
-	} else if status["last_error"] == "" {
-		status["last_error"] = "读取连接数失败: " + err.Error()
-	}
+	status["mihomo_healthy"] = true // Backward-compatible alias for API health.
+	status["mihomo_api_healthy"] = true
+	// The dedicated telemetry poller is the sole owner of /connections;
+	// the heartbeat reuses its cached sample instead of issuing a duplicate request.
 	return status
 }
 
@@ -2017,6 +2020,31 @@ func controllerWebSocketResponseError(operation, message string) error {
 	return fmt.Errorf("主控端%s失败: %s", operation, message)
 }
 
+func runAgentRouteRefreshLoop(ctx context.Context, centralURL string, interval time.Duration) {
+	if interval < 30*time.Second {
+		interval = 30 * time.Second
+	}
+	refresh := func() {
+		if err := refreshAndApplyCentralRouteExclusions(centralURL); err != nil {
+			setAgentRouteSyncError("主控直连路由更新失败: " + err.Error())
+			fmt.Printf("刷新主控直连排除地址失败: %s\n", safeMihomoValidationDiagnostic([]byte(err.Error())))
+			return
+		}
+		setAgentRouteSyncError("")
+	}
+	refresh()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
+}
+
 func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	base, err := url.Parse(strings.TrimRight(cfg.CentralURL, "/"))
 	if err != nil || base.Host == "" {
@@ -2076,21 +2104,15 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	if heartbeatInterval < 5*time.Second || heartbeatInterval > 60*time.Second {
 		heartbeatInterval = 30 * time.Second
 	}
-	// Telemetry has its own 200ms publisher and does not wait for the heartbeat,
-	// config sync, or command polling cycle.
+	// Telemetry and dynamic controller-route refresh run independently from
+	// heartbeat/config/command exchanges so DNS or route operations cannot stall
+	// the control-plane read/write cycle.
 	telemetryCtx, stopTelemetry := context.WithCancel(context.Background())
 	defer stopTelemetry()
 	go runAgentTelemetryPublisher(telemetryCtx, conn)
+	go runAgentRouteRefreshLoop(telemetryCtx, cfg.CentralURL, heartbeatInterval)
 
 	for {
-		// Refresh the controller's resolved A/AAAA addresses on each heartbeat
-		// cycle, without changing the hash of the controller-provided YAML.
-		if routeErr := refreshAndApplyCentralRouteExclusions(cfg.CentralURL); routeErr != nil {
-			setAgentRouteSyncError("主控直连路由更新失败: " + routeErr.Error())
-			fmt.Printf("刷新主控直连排除地址失败: %s\n", safeMihomoValidationDiagnostic([]byte(routeErr.Error())))
-		} else {
-			setAgentRouteSyncError("")
-		}
 		// 1. Status/heartbeat is WebSocket-only.
 		status := collectMihomoStatus()
 		configSyncError, routeSyncError := agentControlSyncErrors()

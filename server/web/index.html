@@ -317,8 +317,8 @@
                   <div class="instance-mihomo-status">
                     <div class="instance-mihomo-runtime">
                       <strong class="instance-mihomo-label">Mihomo 运行状态</strong>
-                      <span class="instance-summary-mihomo" :class="!item.online ? 'is-unknown' : (item.mihomoRunning ? 'is-running' : (item.runtimeReported ? 'is-stopped' : 'is-unknown'))">
-                        {{ !item.online ? (item.runtimeReported ? '状态未知（Agent 离线）' : '状态未知') : (item.mihomoRunning ? '运行中' : (item.runtimeReported ? '未运行/异常' : '状态未知')) }}
+                      <span class="instance-summary-mihomo" :class="!item.online ? 'is-unknown' : (item.mihomoRunning && item.mihomoApiHealthy ? 'is-running' : (item.mihomoRunning ? 'is-unknown' : (item.runtimeReported ? 'is-stopped' : 'is-unknown')))">
+                        {{ !item.online ? (item.runtimeReported ? '状态未知（Agent 离线）' : '状态未知') : (item.mihomoRunning ? (item.mihomoApiHealthy ? '运行中' : '进程运行中 · API异常') : (item.runtimeReported ? '未运行/异常' : '状态未知')) }}
                       </span>
                       <strong class="instance-mihomo-version" v-if="item.mihomoVersion">{{ item.online ? 'v' : '最后上报 v' }}{{ item.mihomoVersion }}</strong>
                       <span class="instance-mihomo-version is-unknown" v-else>版本未知</span>
@@ -333,6 +333,7 @@
                     </div>
                   </div>
                   <span>关联代理：<strong>{{ proxyCountForMachine(item.code) }}</strong></span>
+                  <span v-if="item.telemetryStale" class="instance-summary-error">流量数据已过期，当前显示最后一次成功采样{{ item.telemetrySampledAt ? '（' + new Date(item.telemetrySampledAt).toLocaleString() + '）' : '（尚无有效采样）' }}</span>
                   <span v-if="item.runtimeMessage || item.lastError || item.telemetryError" class="instance-summary-error">Agent 状态/错误信息：{{ [item.runtimeMessage, item.lastError, item.telemetryError].filter(Boolean).join('；') }}</span>
                 </div>
               </div>

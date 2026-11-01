@@ -344,14 +344,17 @@ createApp({
                 hostname: String(status.hostname || previous.hostname || ''),
                 os: String(status.os || previous.os || ''),
                 arch: String(status.arch || previous.arch || ''),
-                mihomoRunning: status.mihomo_healthy === true,
+                mihomoRunning: status.mihomo_process_running === true || (status.mihomo_process_running === undefined && status.mihomo_healthy === true),
+                mihomoApiHealthy: status.mihomo_api_healthy === true || status.mihomo_healthy === true,
                 mihomoVersion: normalizeMihomoVersion(status.mihomo_version || previous.mihomoVersion),
                 connections: Number.isFinite(Number(status.connections)) ? Math.max(0, Number(status.connections)) : previous.connections,
                 uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
                 downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
                 runtimeReported: true,
                 lastError: String(status.last_error || ''),
-                runtimeMessage: status.mihomo_healthy === true ? '' : String(status.last_error || 'Agent 已连接，但 Mihomo 健康检查未通过'),
+                runtimeMessage: status.mihomo_process_running === true && status.mihomo_api_healthy !== true && status.mihomo_healthy !== true
+                  ? String(status.last_error || 'Mihomo 进程运行中，但 API 健康检查未通过')
+                  : (status.mihomo_healthy === true ? '' : String(status.last_error || 'Agent 已连接，但 Mihomo 健康检查未通过')),
                 updated_at: new Date(receivedAt * 1000).toLocaleString()
               };
               agentEntries.value.splice(index, 1, updated);
@@ -380,6 +383,8 @@ createApp({
                 uploadTotal: Math.max(0, Number(status.upload_total) || 0),
                 downloadTotal: Math.max(0, Number(status.download_total) || 0),
                 telemetryError: [status.traffic_error, status.connections_error].filter(Boolean).join('；'),
+                telemetryStale: status.telemetry_stale === true,
+                telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
                 telemetryUpdatedAt: receivedAt,
                 updated_at: new Date(receivedAt).toLocaleString()
               });
@@ -946,12 +951,15 @@ createApp({
             connections: Number.isFinite(Number(status.connections)) ? Math.max(0, Number(status.connections)) : null,
             uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
             downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
+            telemetryStale: status.telemetry_stale === true,
+            telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
             online,
             last_seen: last,
             hostname,
             os,
             arch,
-            mihomoRunning: online && status.mihomo_healthy === true,
+            mihomoRunning: online && (status.mihomo_process_running === true || (status.mihomo_process_running === undefined && status.mihomo_healthy === true)),
+            mihomoApiHealthy: online && (status.mihomo_api_healthy === true || status.mihomo_healthy === true),
             mihomoVersion,
             runtimeReported,
             runtimeMessage,

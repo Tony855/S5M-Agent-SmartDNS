@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -28,12 +29,17 @@ type mihomoTelemetrySnapshot struct {
 	TrafficError     string    `json:"traffic_error"`
 	ConnectionsError string    `json:"connections_error"`
 	UpdatedAt        time.Time `json:"-"`
+	SampledAt         time.Time `json:"-"`
 }
 
 type mihomoTelemetryState struct {
 	mu    sync.RWMutex
 	value mihomoTelemetrySnapshot
 }
+
+// Shared by the heartbeat snapshot and the high-frequency WebSocket publisher.
+// This avoids a second /connections poll on the control-plane heartbeat path.
+var agentMihomoTelemetry = &mihomoTelemetryState{}
 
 func (s *mihomoTelemetryState) update(fn func(*mihomoTelemetrySnapshot)) {
 	s.mu.Lock()
@@ -57,10 +63,14 @@ func mihomoControllerSecret() (string, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return "", fmt.Errorf("解析 Mihomo 配置失败: %w", err)
 	}
+	return mihomoAPISecretFromConfig(cfg)
+}
+
+func mihomoAPISecretFromConfig(cfg map[string]any) (string, error) {
 	secret, _ := cfg["secret"].(string)
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
-		return "", fmt.Errorf("Mihomo 配置缺少 API secret，拒绝发起未鉴权统计请求")
+		return "", fmt.Errorf("Mihomo 配置缺少 API secret，拒绝发起未鉴权 API 请求")
 	}
 	return secret, nil
 }
@@ -83,6 +93,36 @@ func calculateCounterRate(current, previous uint64, elapsed time.Duration) float
 	return float64(current-previous) / elapsed.Seconds()
 }
 
+func mihomoTelemetryIsStale(sampledAt, now time.Time) bool {
+	return sampledAt.IsZero() || now.Sub(sampledAt) > 3*defaultConnectionsInterval
+}
+
+func applyMihomoTelemetrySnapshot(status map[string]any, snapshot mihomoTelemetrySnapshot, now time.Time) {
+	status["upload_speed"] = snapshot.UploadSpeed
+	status["download_speed"] = snapshot.DownloadSpeed
+	status["upload_total"] = snapshot.UploadTotal
+	status["download_total"] = snapshot.DownloadTotal
+	status["connections"] = snapshot.Connections
+	status["traffic_error"] = snapshot.TrafficError
+	status["connections_error"] = snapshot.ConnectionsError
+	sampledAtMS := int64(0)
+	if !snapshot.SampledAt.IsZero() {
+		sampledAtMS = snapshot.SampledAt.UnixMilli()
+	}
+	status["telemetry_sampled_at_ms"] = sampledAtMS
+	status["telemetry_stale"] = mihomoTelemetryIsStale(snapshot.SampledAt, now)
+}
+
+func recordMihomoTelemetryError(state *mihomoTelemetryState, message string) {
+	message = safeMihomoValidationDiagnostic([]byte(message))
+	state.update(func(v *mihomoTelemetrySnapshot) {
+		// Keep the last successful counters and connection count. A temporary
+		// API/network failure must not be rendered as a real zero-traffic state.
+		v.TrafficError = message
+		v.ConnectionsError = message
+	})
+}
+
 func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, secret string) {
 	ticker := time.NewTicker(defaultConnectionsInterval)
 	defer ticker.Stop()
@@ -94,30 +134,21 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 		req, err := newMihomoAPIRequest(ctx, "/connections", secret)
 		if err != nil {
 			previousAt = time.Time{}
-			state.update(func(v *mihomoTelemetrySnapshot) {
-				v.UploadSpeed, v.DownloadSpeed, v.Connections = 0, 0, 0
-				v.ConnectionsError = safeMihomoValidationDiagnostic([]byte(err.Error()))
-			})
+			recordMihomoTelemetryError(state, "创建 Mihomo /connections 请求失败: "+err.Error())
 			return
 		}
 		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() == nil {
 				previousAt = time.Time{}
-				state.update(func(v *mihomoTelemetrySnapshot) {
-					v.UploadSpeed, v.DownloadSpeed, v.Connections = 0, 0, 0
-					v.ConnectionsError = safeMihomoValidationDiagnostic([]byte("Mihomo /connections 请求失败: " + err.Error()))
-				})
+				recordMihomoTelemetryError(state, "Mihomo /connections 请求失败: "+err.Error())
 			}
 			return
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			previousAt = time.Time{}
-			state.update(func(v *mihomoTelemetrySnapshot) {
-				v.UploadSpeed, v.DownloadSpeed, v.Connections = 0, 0, 0
-				v.ConnectionsError = fmt.Sprintf("Mihomo /connections 返回 HTTP %d", resp.StatusCode)
-			})
+			recordMihomoTelemetryError(state, fmt.Sprintf("Mihomo /connections 返回 HTTP %d", resp.StatusCode))
 			return
 		}
 		var payload struct {
@@ -125,12 +156,9 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 			UploadTotal   uint64            `json:"uploadTotal"`
 			DownloadTotal uint64            `json:"downloadTotal"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, (4<<20)+1)).Decode(&payload); err != nil {
 			previousAt = time.Time{}
-			state.update(func(v *mihomoTelemetrySnapshot) {
-				v.UploadSpeed, v.DownloadSpeed, v.Connections = 0, 0, 0
-				v.ConnectionsError = safeMihomoValidationDiagnostic([]byte("解析 Mihomo /connections 失败: " + err.Error()))
-			})
+			recordMihomoTelemetryError(state, "解析 Mihomo /connections 失败: "+err.Error())
 			return
 		}
 
@@ -151,6 +179,7 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 			v.DownloadTotal = payload.DownloadTotal
 			v.UploadSpeed = upSpeed
 			v.DownloadSpeed = downSpeed
+			v.SampledAt = now
 			v.TrafficError = ""
 			v.ConnectionsError = ""
 		})
@@ -182,7 +211,7 @@ func forgetAgentWSWriteLock(conn *websocket.Conn) {
 
 func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 	secret, err := mihomoControllerSecret()
-	state := &mihomoTelemetryState{}
+	state := agentMihomoTelemetry
 	if err != nil {
 		diagnostic := safeMihomoValidationDiagnostic([]byte(err.Error()))
 		state.update(func(v *mihomoTelemetrySnapshot) {
@@ -200,6 +229,10 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 			return
 		case now := <-ticker.C:
 			snapshot := state.snapshot()
+			sampledAtMS := int64(0)
+			if !snapshot.SampledAt.IsZero() {
+				sampledAtMS = snapshot.SampledAt.UnixMilli()
+			}
 			payload := map[string]any{
 				"type": "telemetry",
 				"status": map[string]any{
@@ -210,7 +243,9 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 					"download_total":    snapshot.DownloadTotal,
 					"traffic_error":     snapshot.TrafficError,
 					"connections_error": snapshot.ConnectionsError,
-					"telemetry_at_ms":   now.UnixMilli(),
+					"telemetry_at_ms":        now.UnixMilli(),
+					"telemetry_sampled_at_ms": sampledAtMS,
+					"telemetry_stale":         mihomoTelemetryIsStale(snapshot.SampledAt, now),
 				},
 			}
 			if err := writeAgentWSJSON(conn, payload); err != nil {
