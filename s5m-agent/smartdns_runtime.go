@@ -292,11 +292,14 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	}
 	status["smartdns_available"] = true
 
+	configHealthy := false
 	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
 		if configErr := validateSmartDNSConfig(data); configErr != nil {
 			appendSmartDNSStatusError(status, "SmartDNS 配置未通过加密上游策略校验: "+safeSmartDNSDiagnostic(configErr.Error()))
+		} else {
+			configHealthy = true
 		}
 	} else {
 		appendSmartDNSStatusError(status, "读取 SmartDNS 配置失败: "+safeSmartDNSDiagnostic(err.Error()))
@@ -318,10 +321,15 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 
 	processOutput, processErr := deps.process()
 	processHealthy := processErr == nil && len(bytes.TrimSpace(processOutput)) > 0
-	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
 	if processHealthy {
 		status["smartdns_running"] = true
 	}
+	// A running process with an unreadable or policy-invalid configuration is
+	// not a usable resolver. Do not restart it into the same invalid config.
+	if !configHealthy {
+		return
+	}
+	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
 	if dnsHealthy {
 		status["smartdns_dns_healthy"] = true
 		return
