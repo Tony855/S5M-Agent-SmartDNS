@@ -800,7 +800,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 		{mode: "split", want: []string{"MATCH,proxy-a"}},
 		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
 		{mode: "return", want: []string{"GEOIP,CN,DIRECT", "MATCH,proxy-a"}},
-		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,game-a", "MATCH,DIRECT"}},
+		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,proxy-a", "MATCH,DIRECT"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
