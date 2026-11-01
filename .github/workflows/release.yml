@@ -35,7 +35,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
-      major_minor: ${{ steps.version.outputs.major_minor }}
+      image_tags: ${{ steps.version.outputs.image_tags }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Checkout full history
@@ -78,6 +78,206 @@ jobs:
           }
           version="${tag#v}"
           major_minor="$(printf '%s' "$version" | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1/')"
+          image_tags="$IMAGE_NAME:$version"
+          if [[ "$prerelease" != "true" ]]; then
+            image_tags+=
+          git fetch origin main --force
+          git merge-base --is-ancestor "$COMMIT_SHA" origin/main || {
+            echo "The release commit must already be contained in origin/main." >&2
+            exit 1
+          }
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]] &&
+             git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists. Use a new version number." >&2
+            exit 1
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "image_tags<<EOF"
+            printf '%s\n' "$image_tags"
+            echo "EOF"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  test-amd64:
+    name: AMD64 build and runtime verification
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: s5m-agent/go.mod
+          cache: true
+          cache-dependency-path: s5m-agent/go.sum
+      - name: SmartDNS config fault tests
+        run: sh s5m-agent/smartdns/tests/config-init-faults.sh
+      - name: Agent unit tests
+        working-directory: s5m-agent
+        run: go test ./...
+      - name: Build AMD64 image
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg SMARTDNS_REF="$SMARTDNS_REF" \
+            -f s5m-agent/Dockerfile.smartdns \
+            -t s5m-agent-smartdns:release-amd64 .
+      - name: Verify image services and DNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          container=s5m-release-amd64
+          data_dir="$(mktemp -d)"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            sudo rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+          docker run -d --name "$container" --restart no \
+            -p 127.0.0.1::80/tcp -v "$data_dir:/data" \
+            s5m-agent-smartdns:release-amd64 >/dev/null
+          for attempt in $(seq 1 60); do
+            state="$(docker inspect --format '{{.State.Status}}' "$container")"
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
+            [[ "$state" == running ]] || { docker logs "$container"; exit 1; }
+            [[ "$health" == healthy ]] && break
+            sleep 2
+          done
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == healthy ]]
+          docker exec "$container" pidof mihomo
+          docker exec "$container" pidof smartdns
+          docker exec "$container" /healthcheck.sh
+          docker run --rm --network "container:$container" alpine:3.24 sh -ec '
+            apk add --no-cache bind-tools >/dev/null
+            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          '
+          if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
+            echo "Unexpected public proxy port 7890" >&2
+            exit 1
+          fi
+          if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
+            echo "Mihomo controller API 8088 must not be published" >&2
+            exit 1
+          fi
+
+  test-arm64:
+    name: ARM64 build and runtime verification
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ARM64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: s5m-agent/Dockerfile.smartdns
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: s5m-agent-smartdns:release-arm64
+          build-args: |
+            SMARTDNS_REF=${{ env.SMARTDNS_REF }}
+      - name: Verify ARM64 services and DNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          container=s5m-release-arm64
+          data_dir="$(mktemp -d)"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            sudo rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+          docker run -d --name "$container" --platform linux/arm64 --restart no \
+            -p 127.0.0.1::80/tcp -v "$data_dir:/data" \
+            s5m-agent-smartdns:release-arm64 >/dev/null
+          for attempt in $(seq 1 60); do
+            state="$(docker inspect --format '{{.State.Status}}' "$container")"
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
+            [[ "$state" == running ]] || { docker logs "$container"; exit 1; }
+            [[ "$health" == healthy ]] && break
+            sleep 2
+          done
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == healthy ]]
+          docker exec "$container" pidof mihomo
+          docker exec "$container" pidof smartdns
+          docker exec "$container" /healthcheck.sh
+          docker run --rm --platform linux/arm64 --network "container:$container" alpine:3.24 sh -ec '
+            apk add --no-cache bind-tools >/dev/null
+            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          '
+
+  publish:
+    name: Publish versioned multi-arch image
+    needs: [prepare, test-amd64, test-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Build and push immutable version tags
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: s5m-agent/Dockerfile.smartdns
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            SMARTDNS_REF=${{ env.SMARTDNS_REF }}
+          tags: |
+            ${{ needs.prepare.outputs.image_tags }}
+          labels: |
+            org.opencontainers.image.title=S5M Agent + SmartDNS
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: true
+          sbom: true
+
+  github-release:
+    name: Create GitHub Release
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create tag for manual release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TARGET_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" "$TARGET_SHA" -m "Release $TAG"
+          git push origin "refs/tags/$TAG"
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: S5M Agent + SmartDNS ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          fail_on_unmatched_files: false
+\n'$IMAGE_NAME:$major_minor
+          fi
 
           git fetch origin main --force
           git merge-base --is-ancestor "$COMMIT_SHA" origin/main || {
