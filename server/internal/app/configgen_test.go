@@ -910,6 +910,41 @@ func TestNormalizeProxyRoutingModePreservesHistoricalAliases(t *testing.T) {
 	}
 }
 
+func TestBuildConfigForHistoricalProxyAliasesKeepsTheirTrafficPolicy(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+		want []string
+		avoid []string
+	}{
+		{name: "proxy alias", mode: "proxy", want: []string{"GEOIP,CN,legacy-proxy", "MATCH,DIRECT"}, avoid: []string{"MATCH,REJECT"}},
+		{name: "china alias", mode: "china", want: []string{"MATCH,legacy-proxy"}, avoid: []string{"GEOIP,CN,", "MATCH,REJECT"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proxies := []Proxy{{
+				Name: "legacy-proxy", Mode: tc.mode, Type: "socks5",
+				Server: "192.0.2.20", Port: 1080, MachineCode: "node-legacy", Enabled: true,
+			}}
+			mode := routingModeForMachine(proxies, "node-legacy")
+			got, err := buildConfigFromProxiesWithMode(proxies, "node-legacy", "test-secret", mode, "")
+			if err != nil {
+				t.Fatalf("build config: %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("historical mode %q lost expected rule %q:\\n%s", tc.mode, want, got)
+				}
+			}
+			for _, avoid := range tc.avoid {
+				if strings.Contains(got, avoid) {
+					t.Errorf("historical mode %q unexpectedly contains %q:\\n%s", tc.mode, avoid, got)
+				}
+			}
+		})
+	}
+}
+
 func TestRoutingModeForMachineUsesPersistedProxyIDOrder(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "routing-mode-order.db"))
 	if err != nil {
