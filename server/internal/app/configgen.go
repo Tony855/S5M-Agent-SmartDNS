@@ -393,6 +393,21 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "route-exclude-address"}, routeExclude)
 		}
 	}
+	// Remove legacy public DNS bypasses from persisted/custom TUN exclusions.
+	// These addresses were previously excluded to reach bootstrap resolvers, but
+	// doing so lets plaintext DNS escape the TUN. Proxy endpoint exclusions are
+	// added separately above and remain intact.
+	legacyDNSBypasses := map[string]bool{
+		"223.5.5.5/32": true,
+		"119.29.29.29/32": true,
+	}
+	filteredRouteExcludes := routeExclude.Content[:0]
+	for _, item := range routeExclude.Content {
+		if item == nil || !legacyDNSBypasses[item.Value] {
+			filteredRouteExcludes = append(filteredRouteExcludes, item)
+		}
+	}
+	routeExclude.Content = filteredRouteExcludes
 	for _, cidr := range excluded {
 		found := false
 		for _, item := range routeExclude.Content {
