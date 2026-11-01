@@ -1538,7 +1538,9 @@ func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDN
 	if err := app.store.SaveNodeConfig(code, persisted); err != nil { t.Fatalf("save node config: %v", err) }
 	setHealth := func(healthy bool) {
 		t.Helper()
-		status := map[string]any{"smartdns_available": true, "smartdns_running": healthy, "smartdns_dns_healthy": healthy}
+		// Health status is server-stamped in production; the fixture must carry
+		// a fresh received_at or the stale-heartbeat guard correctly fails closed.
+		status := map[string]any{"smartdns_available": true, "smartdns_running": healthy, "smartdns_dns_healthy": healthy, "received_at": time.Now().Unix()}
 		data, _ := json.Marshal(status)
 		if err := app.store.UpdateSettings(map[string]string{"agent_status_" + code: string(data)}); err != nil { t.Fatalf("set SmartDNS health: %v", err) }
 	}
