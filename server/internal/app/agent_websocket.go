@@ -829,7 +829,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 					for key, value := range telemetry { saved[key] = value }
 					if payload, marshalErr := json.Marshal(saved); marshalErr == nil {
 						if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr != nil {
-							fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
+							fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
 						}
 					}
 				}
