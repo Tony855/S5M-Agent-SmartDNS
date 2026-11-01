@@ -804,15 +804,13 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				"telemetry_received_at_ms": receivedAt.UnixMilli(),
 			}
 			a.agentWSMu.Lock()
-			if a.agentWSGeneration[machineCode] != generation {
+			if a.agentWSGeneration[machineCode] != generation || a.agentWSConnections[machineCode] != session {
 				a.agentWSMu.Unlock()
 				return
 			}
-			authorizedCode, authErr := a.agentMachineFromRequest(r)
-			if authErr != nil || authorizedCode != machineCode {
-				a.agentWSMu.Unlock()
-				return
-			}
+			// The socket was authenticated at upgrade. Its generation/session
+			// identity is the revocation fence; do not hit the credential store
+			// for every 200ms telemetry frame. Heartbeats still revalidate tokens.
 			// Keep the latest snapshot in the existing status record at most once
 			// every 5 seconds. Browser updates remain high-frequency and are never
 			// coupled to SQLite write latency.
