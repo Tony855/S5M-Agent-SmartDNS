@@ -939,6 +939,11 @@ func TestImportProxiesPersistsAndFeedsGeneratedConfig(t *testing.T) {
 	if len(proxies) != 2 {
 		t.Fatalf("stored proxy count = %d, want 2", len(proxies))
 	}
+	for _, proxy := range proxies {
+		if proxy.Mode != "rule" {
+			t.Errorf("imported proxy %q mode = %q, want rule", proxy.Name, proxy.Mode)
+		}
+	}
 	for i := range proxies {
 		proxies[i].MachineCode = "__GLOBAL__"
 	}
@@ -952,7 +957,7 @@ func TestImportProxiesPersistsAndFeedsGeneratedConfig(t *testing.T) {
 		"server: 192.0.2.10",
 		"server: 192.0.2.11",
 		"DOMAIN-SUFFIX,dns.alidns.com,imported-proxy-a",
-		"MATCH,DIRECT",
+		"MATCH,REJECT",
 	} {
 		if !strings.Contains(generated, want) {
 			t.Errorf("generated config missing %q:\\n%s", want, generated)
