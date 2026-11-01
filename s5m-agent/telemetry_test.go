@@ -47,3 +47,44 @@ func TestCalculateCounterRateHandlesResetAndInvalidIntervals(t *testing.T) {
 		t.Fatalf("zero interval rate = %v, want 0", got)
 	}
 }
+
+func TestTelemetryErrorPreservesLastSuccessfulSample(t *testing.T) {
+	state := &mihomoTelemetryState{}
+	sampledAt := time.Now().Add(-time.Second)
+	state.update(func(value *mihomoTelemetrySnapshot) {
+		value.UploadSpeed = 1250
+		value.DownloadSpeed = 2500
+		value.Connections = 7
+		value.UploadTotal = 10000
+		value.DownloadTotal = 20000
+		value.SampledAt = sampledAt
+	})
+
+	recordMihomoTelemetryError(state, "Mihomo /connections 请求失败: connection refused")
+	got := state.snapshot()
+	if got.UploadSpeed != 1250 || got.DownloadSpeed != 2500 || got.Connections != 7 {
+		t.Fatalf("temporary API failure erased last successful metrics: %+v", got)
+	}
+	if got.UploadTotal != 10000 || got.DownloadTotal != 20000 {
+		t.Fatalf("temporary API failure erased cumulative counters: %+v", got)
+	}
+	if got.SampledAt != sampledAt {
+		t.Fatalf("temporary API failure changed sample time: got %v want %v", got.SampledAt, sampledAt)
+	}
+	if got.ConnectionsError == "" || got.TrafficError == "" {
+		t.Fatalf("expected both telemetry diagnostics to be populated: %+v", got)
+	}
+}
+
+func TestMihomoTelemetryStaleThreshold(t *testing.T) {
+	now := time.Now()
+	if !mihomoTelemetryIsStale(time.Time{}, now) {
+		t.Fatal("missing telemetry sample must be stale")
+	}
+	if mihomoTelemetryIsStale(now.Add(-time.Second), now) {
+		t.Fatal("recent telemetry sample must not be stale")
+	}
+	if !mihomoTelemetryIsStale(now.Add(-2*time.Second), now) {
+		t.Fatal("sample older than the stale threshold must be stale")
+	}
+}
