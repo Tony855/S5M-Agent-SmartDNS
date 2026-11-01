@@ -160,10 +160,15 @@ tun:
 	}
 	tun := config["tun"].(map[string]any)
 	excluded := tun["route-exclude-address"].([]any)
-	for _, required := range []string{"223.5.5.5/32", "119.29.29.29/32", "::1/128", "fc00::/7", "fe80::/10"} {
+	for _, required := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10"} {
 		found := false
 		for _, raw := range excluded { if raw == required { found = true; break } }
 		if !found { t.Errorf("TUN route exclusions missing %s: %#v", required, excluded) }
+	}
+	for _, forbidden := range []string{"223.5.5.5/32", "119.29.29.29/32"} {
+		for _, raw := range excluded {
+			if raw == forbidden { t.Errorf("public bootstrap resolver %s must not bypass TUN by default: %#v", forbidden, excluded) }
+		}
 	}
 }
 
