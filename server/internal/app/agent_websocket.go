@@ -563,6 +563,27 @@ func validateAgentWSStatus(status map[string]any) error {
 	return nil
 }
 
+
+// validateAgentWSTelemetry validates high-frequency runtime metrics separately
+// from the slower, richer Agent heartbeat payload.
+func validateAgentWSTelemetry(status map[string]any) error {
+	if status == nil { return fmt.Errorf("telemetry 缺少 status") }
+	for _, key := range []string{"upload_speed", "download_speed", "upload_total", "download_total", "connections"} {
+		value, ok := status[key].(float64)
+		if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 9.0e15 {
+			return fmt.Errorf("telemetry %s 必须是有限的非负数", key)
+		}
+		if (key == "upload_total" || key == "download_total" || key == "connections") && math.Trunc(value) != value {
+			return fmt.Errorf("telemetry %s 必须是整数", key)
+		}
+	}
+	for _, key := range []string{"traffic_error", "connections_error"} {
+		value, ok := status[key].(string)
+		if !ok || len(value) > 512 { return fmt.Errorf("telemetry %s 必须是长度不超过 512 字节的字符串", key) }
+	}
+	return nil
+}
+
 func newAgentCommandID() (string, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -765,6 +786,59 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				fmt.Printf("agent_ws: read failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("读取消息", err))
 			}
 			return
+		}
+		if msg.Type == "telemetry" {
+			if err := validateAgentWSTelemetry(msg.Status); err != nil {
+				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": err.Error()})
+				continue
+			}
+			receivedAt := time.Now()
+			telemetry := map[string]any{
+				"upload_speed": msg.Status["upload_speed"],
+				"download_speed": msg.Status["download_speed"],
+				"connections": msg.Status["connections"],
+				"upload_total": msg.Status["upload_total"],
+				"download_total": msg.Status["download_total"],
+				"traffic_error": msg.Status["traffic_error"],
+				"connections_error": msg.Status["connections_error"],
+				"telemetry_received_at_ms": receivedAt.UnixMilli(),
+			}
+			a.agentWSMu.Lock()
+			if a.agentWSGeneration[machineCode] != generation {
+				a.agentWSMu.Unlock()
+				return
+			}
+			authorizedCode, authErr := a.agentMachineFromRequest(r)
+			if authErr != nil || authorizedCode != machineCode {
+				a.agentWSMu.Unlock()
+				return
+			}
+			// Keep the latest snapshot in the existing status record at most once
+			// every 5 seconds. Browser updates remain high-frequency and are never
+			// coupled to SQLite write latency.
+			if a.agentTelemetryPersistAt == nil {
+				a.agentTelemetryPersistAt = make(map[string]time.Time)
+			}
+			if receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second {
+				settings, settingsErr := a.store.GetSettings()
+				if settingsErr == nil {
+					var saved map[string]any
+					_ = json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &saved)
+					if saved == nil { saved = make(map[string]any) }
+					for key, value := range telemetry { saved[key] = value }
+					if payload, marshalErr := json.Marshal(saved); marshalErr == nil {
+						if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr == nil {
+							a.agentTelemetryPersistAt[machineCode] = receivedAt
+						} else {
+							fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
+						}
+					}
+				}
+			}
+			a.agentWSMu.Unlock()
+			a.publishBrowserEvent(map[string]any{"type": "agent.telemetry.updated", "machine_code": machineCode, "received_at_ms": receivedAt.UnixMilli(), "status": telemetry})
+			_ = conn.SetReadDeadline(time.Now().Add(agentWSHeartbeatTTL))
+			continue
 		}
 		if msg.Type != "heartbeat" {
 			if msg.Type == "config.request" {
