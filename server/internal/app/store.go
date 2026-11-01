@@ -159,8 +159,8 @@ CREATE INDEX IF NOT EXISTS idx_cv_version ON config_versions(version DESC);
 		return fmt.Errorf("迁移旧代理模式到机器设置失败: %w", err)
 	}
 
-	// TUN is enabled by default for new installations. Preserve any existing explicit operator choice.
-	if _, err := s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'true')`); err != nil { return fmt.Errorf("初始化 TUN 默认设置失败: %w", err) }
+	// TUN is opt-in for new installations. INSERT OR IGNORE preserves an existing operator choice during upgrades.
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'false')`); err != nil { return fmt.Errorf("初始化 TUN 默认设置失败: %w", err) }
 	// 首次启动时自动生成随机 Agent 注册密钥（不再硬编码默认值）
 	var atCount int
 	s.db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='agent_token' AND value != ''`).Scan(&atCount)
