@@ -708,6 +708,13 @@ func TestStrictRuleModeIsDefault(t *testing.T) {
 	if got := routingModeForMachine(nil, "node-without-proxy"); got != "rule" {
 		t.Fatalf("routing mode without a matching proxy = %q, want rule", got)
 	}
+	generated, err := buildConfigFromProxies(nil, "node-without-proxy", "test-secret")
+	if err != nil {
+		t.Fatalf("build default config: %v", err)
+	}
+	if !strings.Contains(generated, "MATCH,REJECT") || strings.Contains(generated, "MATCH,DIRECT") {
+		t.Fatalf("default config must reject unmatched traffic:\\n%s", generated)
+	}
 }
 
 func TestStoreCreateProxyDefaultsToStrictRuleMode(t *testing.T) {
