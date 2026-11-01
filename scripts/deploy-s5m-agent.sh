@@ -20,9 +20,9 @@ PORT_MAP=(
 )
 
 # 如需启用 TUN 透明代理，取消下面两行注释（宿主机需存在 /dev/net/tun）
-# DEVICE_MAP=(
-#   "--cap-add" "NET_ADMIN"
-#   "--device" "/dev/net/tun"
+DEVICE_MAP=(
+   "--cap-add" "NET_ADMIN"
+   "--device" "/dev/net/tun"
 # )
 DEVICE_MAP=()
 
