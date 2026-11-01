@@ -1533,14 +1533,8 @@ func TestNewAgentCommandIDUsesUniqueHexadecimalIdentifiers(t *testing.T) {
 
 func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDNS(t *testing.T) {
 	app, code, token := websocketTestApp(t)
-	persisted := `allow-lan: false
-dns:
-  enable: true
-  nameserver:
-    - 8.8.8.8
-  default-nameserver:
-    - 223.5.5.5
-`
+	persisted, err := app.BuildConfigForMachine(code)
+	if err != nil { t.Fatalf("build baseline node config: %v", err) }
 	if err := app.store.SaveNodeConfig(code, persisted); err != nil { t.Fatalf("save node config: %v", err) }
 	setHealth := func(healthy bool) {
 		t.Helper()
@@ -1576,7 +1570,7 @@ dns:
 	var fallback map[string]any
 	if err := conn.ReadJSON(&fallback); err != nil { t.Fatalf("read fallback config: %v", err) }
 	fallbackYAML, _ := fallback["yaml"].(string)
-	if fallback["type"] != "config.sync" || !strings.Contains(fallbackYAML, "8.8.8.8") || strings.Contains(fallbackYAML, "127.0.0.1:6053") {
+	if fallback["type"] != "config.sync" || fallbackYAML != persisted || strings.Contains(fallbackYAML, "127.0.0.1:6053") {
 		t.Fatalf("SmartDNS health loss did not trigger upstream fallback sync: %#v", fallback)
 	}
 	if fallback["sha256"] == healthyHash { t.Fatal("SmartDNS health transition did not change config hash") }
