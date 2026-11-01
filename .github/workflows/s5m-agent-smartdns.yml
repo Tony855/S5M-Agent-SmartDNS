@@ -119,6 +119,10 @@ jobs:
           grep -q 'ENABLE_TUN=.*:-0' scripts/s5m-deploy.sh
           grep -q 'TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)' scripts/s5m-deploy.sh
           grep -q 'ENABLE_TUN=1.*缺少字符设备' scripts/s5m-deploy.sh
+          grep -q 'config_uses_tun' scripts/s5m-deploy.sh
+          grep -q 'tun.enable=true' scripts/s5m-deploy.sh
+          grep -q 'config_uses_tun' scripts/deploy-agent.sh
+          grep -q 'tun.enable=true' scripts/deploy-agent.sh
           grep -q 'BACKUP_NAME=.*rollback' scripts/s5m-deploy.sh
           grep -q 'docker rename "$CONTAINER" "$BACKUP_NAME"' scripts/s5m-deploy.sh
           grep -q 'restore_previous()' scripts/s5m-deploy.sh
@@ -187,7 +191,7 @@ jobs:
             test -s /usr/share/licenses/smartdns/LICENSE
             test -s /usr/share/licenses/smartdns/SOURCE_COMMIT
             grep -q "127.0.0.1:6053" /app/default-config.yaml
-            grep -q "enable: true" /app/default-config.yaml
+            grep -q "enable: false" /app/default-config.yaml
             /usr/local/bin/mihomo -v
             /usr/sbin/smartdns -h >/dev/null 2>&1 || true
           '
@@ -328,7 +332,6 @@ jobs:
           trap cleanup EXIT
 
           docker run -d --name "$container" --restart no \
-            --cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun \
             -p 127.0.0.1::80/tcp \
             -v "$data_dir:/data" \
             s5m-agent-smartdns:arm64-test >/dev/null
