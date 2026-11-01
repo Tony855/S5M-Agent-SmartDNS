@@ -280,6 +280,42 @@ func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
 	}
 }
 
+func TestValidateSmartDNSConfigRejectsBootstrapDependentEncryptedUpstreams(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{"hostname endpoint", "server-tls dns.cloudflare.com:853 -host-name cloudflare-dns.com"},
+		{"missing TLS name", "server-tls 1.1.1.1:853"},
+		{"invalid endpoint", "server-tls 1.1.1.1 -host-name cloudflare-dns.com"},
+		{"hostname DoH URL", "server-https https://dns.google/dns-query -host-name dns.google"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + tc.line + "\n")
+			if err := validateSmartDNSConfig(config); err == nil {
+				t.Fatalf("bootstrap-dependent upstream must be rejected: %s", tc.line)
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSConfigAcceptsLiteralIPEncryptedUpstreams(t *testing.T) {
+	cases := []string{
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"server-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+	}
+	for _, upstream := range cases {
+		t.Run(upstream, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + upstream + "\n")
+			if err := validateSmartDNSConfig(config); err != nil {
+				t.Fatalf("literal-IP encrypted upstream rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 	config, err := os.ReadFile(filepath.Join("smartdns", "smartdns.conf"))
 	if err != nil {
