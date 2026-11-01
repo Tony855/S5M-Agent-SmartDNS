@@ -140,8 +140,8 @@ CREATE INDEX IF NOT EXISTS idx_cv_version ON config_versions(version DESC);
 		s.db.Exec("ALTER TABLE proxies ADD COLUMN machine_code TEXT NOT NULL DEFAULT ''")
 	}
 
-	// TUN is disabled by default for new installations. Preserve an existing explicit operator choice.
-	s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'false')`)
+	// TUN is enabled by default for new installations. Preserve any existing explicit operator choice.
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'true')`); err != nil { return fmt.Errorf("初始化 TUN 默认设置失败: %w", err) }
 	// 首次启动时自动生成随机 Agent 注册密钥（不再硬编码默认值）
 	var atCount int
 	s.db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='agent_token' AND value != ''`).Scan(&atCount)
