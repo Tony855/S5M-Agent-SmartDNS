@@ -1258,7 +1258,7 @@ func TestSaveNodeConfigDistinguishesEmptyYAMLDocument(t *testing.T) {
 	}
 }
 
-func TestSaveNodeConfigRejectsUnpublishedProxyPort(t *testing.T) {
+func TestSaveNodeConfigRemovesUnpublishedProxyPort(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "node-config-port.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -1279,14 +1279,20 @@ func TestSaveNodeConfigRejectsUnpublishedProxyPort(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	app.handleSaveNodeConfig(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	cfg, err := store.GetNodeConfig(code)
 	if err != nil {
 		t.Fatalf("GetNodeConfig: %v", err)
 	}
-	if cfg != nil {
-		t.Fatalf("invalid proxy port config was persisted: %#v", cfg)
+	if cfg == nil {
+		t.Fatal("normalized node config was not persisted")
+	}
+	if strings.Contains(cfg.YAML, "mixed-port:") || strings.Contains(cfg.YAML, "port: 7899") {
+		t.Fatalf("explicit proxy listener was not removed before persistence: %s", cfg.YAML)
+	}
+	if !strings.Contains(cfg.YAML, "secret: node-secret") {
+		t.Fatalf("unrelated node settings were not preserved: %s", cfg.YAML)
 	}
 }
