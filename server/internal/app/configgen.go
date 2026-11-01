@@ -134,6 +134,8 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	root.Content = filtered
 	setScalar(root, "allow-lan", "false", "!!bool")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
+	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
+	setScalar(root, "find-process-mode", "strict", "!!str")
 
 	// Keep the controller's own hostname out of fake-IP answers to avoid breaking
 	// Agent registration/heartbeats when strict-route TUN is enabled.
