@@ -2075,6 +2075,12 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	if heartbeatInterval < 5*time.Second || heartbeatInterval > 60*time.Second {
 		heartbeatInterval = 30 * time.Second
 	}
+	// Telemetry has its own 200ms publisher and does not wait for the heartbeat,
+	// config sync, or command polling cycle.
+	telemetryCtx, stopTelemetry := context.WithCancel(context.Background())
+	defer stopTelemetry()
+	go runAgentTelemetryPublisher(telemetryCtx, conn)
+
 	for {
 		// Refresh the controller's resolved A/AAAA addresses on each heartbeat
 		// cycle, without changing the hash of the controller-provided YAML.
@@ -2375,6 +2381,8 @@ func agentConfigHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeAgentWSJSON(conn *websocket.Conn, value any) error {
+	agentWSWriteMu.Lock()
+	defer agentWSWriteMu.Unlock()
 	if err := conn.SetWriteDeadline(time.Now().Add(8 * time.Second)); err != nil {
 		return err
 	}
