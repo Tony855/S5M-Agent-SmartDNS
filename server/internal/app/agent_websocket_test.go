@@ -852,7 +852,7 @@ func TestAgentWebSocketDeliversAndAcknowledgesPendingCommand(t *testing.T) {
 
 func TestAgentWebSocketConfigSyncAndUnchangedHash(t *testing.T) {
 	app, code, token := websocketTestApp(t)
-	configYAML := strings.TrimSpace("mixed-port: 7890\nsecret: test-secret\ntun:\n  enable: true\ndns:\n  enable: true\n")
+	configYAML := strings.TrimSpace("allow-lan: true\nmixed-port: 7890\nsecret: test-secret\ntun:\n  enable: true\ndns:\n  enable: true\n")
 	if err := app.store.SaveNodeConfig(code, configYAML); err != nil {
 		t.Fatalf("save node config: %v", err)
 	}
@@ -886,7 +886,7 @@ func TestAgentWebSocketConfigSyncAndUnchangedHash(t *testing.T) {
 	if err := conn.ReadJSON(&first); err != nil {
 		t.Fatalf("read initial config response: %v", err)
 	}
-	expectedYAML, err := normalizeAgentMixedPort(configYAML)
+	expectedYAML, err := normalizeAgentProxyConfig(configYAML)
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
 	}
@@ -1106,7 +1106,7 @@ func TestLegacyHTTPAgentEndpointsRejectRevokedBinding(t *testing.T) {
 // must work sequentially without opening a replacement connection.
 func TestAgentWebSocketSupportsMultipleRuntimeOperationsOnOneSession(t *testing.T) {
 	app, code, token := websocketTestApp(t)
-	configYAML := strings.TrimSpace("mixed-port: 7890\nsecret: test-secret\ntun:\n  enable: true\ndns:\n  enable: true\n")
+	configYAML := strings.TrimSpace("allow-lan: true\nmixed-port: 7890\nsecret: test-secret\ntun:\n  enable: true\ndns:\n  enable: true\n")
 	if err := app.store.SaveNodeConfig(code, configYAML); err != nil {
 		t.Fatalf("save node config: %v", err)
 	}
@@ -1159,7 +1159,7 @@ func TestAgentWebSocketSupportsMultipleRuntimeOperationsOnOneSession(t *testing.
 	if err := conn.ReadJSON(&configResponse); err != nil {
 		t.Fatalf("read config response: %v", err)
 	}
-	expectedYAML, err := normalizeAgentMixedPort(configYAML)
+	expectedYAML, err := normalizeAgentProxyConfig(configYAML)
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
 	}
