@@ -421,6 +421,16 @@ func (s *Store) DeleteInstance(id int64) error {
 }
 
 // GetMachineProxyMode returns the persisted routing policy for one machine.
+func (s *Store) ListMachineProxyModes() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT machine_code,routing_mode FROM machine_proxy_settings ORDER BY machine_code`)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() { var code, mode string; if err := rows.Scan(&code, &mode); err != nil { return nil, err }; out[code] = mode }
+	if err := rows.Err(); err != nil { return nil, err }
+	return out, nil
+}
+
 func (s *Store) GetMachineProxyMode(machineCode string) (string, error) {
 	var mode string
 	err := s.db.QueryRow(`SELECT routing_mode FROM machine_proxy_settings WHERE machine_code=?`, strings.TrimSpace(machineCode)).Scan(&mode)
