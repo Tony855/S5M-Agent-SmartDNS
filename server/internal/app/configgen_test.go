@@ -698,7 +698,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 	proxies := []Proxy{
 		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
-		{Name: "node-b-proxy", Mode: "split", MachineCode: "node-b", Enabled: true},
+		{Name: "node-b-proxy", Mode: "rule", MachineCode: "node-b", Enabled: true},
 		{Name: "global-proxy", Mode: "game", MachineCode: "__GLOBAL__", Enabled: true},
 	}
 	if got := routingModeForMachine(proxies, "node-a"); got != "return" {
