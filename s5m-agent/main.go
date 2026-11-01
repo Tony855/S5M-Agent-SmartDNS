@@ -1092,22 +1092,10 @@ func collectMihomoStatus() map[string]any {
 	}
 	status["mihomo_version"] = versionText
 	status["mihomo_healthy"] = true
-	connections, err := get("/connections")
-	if err == nil {
-		items, _ := connections["connections"].([]any)
-		status["connections"] = len(items)
-		status["upload_total"] = connections["uploadTotal"]
-		status["download_total"] = connections["downloadTotal"]
-		uploadTotal, uploadOK := trafficCounter(connections["uploadTotal"])
-		downloadTotal, downloadOK := trafficCounter(connections["downloadTotal"])
-		if uploadOK && downloadOK {
-			upSpeed, downSpeed := calculateMihomoSpeeds(uploadTotal, downloadTotal, time.Now())
-			status["upload_speed"] = upSpeed
-			status["download_speed"] = downSpeed
-		}
-	} else if status["last_error"] == "" {
-		status["last_error"] = "读取连接数失败: " + err.Error()
-	}
+	// The dedicated telemetry poller is the sole owner of /connections.
+	// Heartbeats reuse its last successful sample and therefore cannot block
+	// control-plane progress on a second stats request.
+	applyMihomoTelemetrySnapshot(status, agentMihomoTelemetry.snapshot(), time.Now())
 	return status
 }
 
