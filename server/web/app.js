@@ -895,6 +895,7 @@ createApp({
               const fragment = encodeURIComponent(name);
               const username = item.username == null ? '' : String(item.username);
               const password = item.password == null ? '' : String(item.password);
+              const tls = item.tls === true || String(item.tls).toLowerCase() === 'true' || ['tls', 'reality'].includes(String(item.security || item.streamSecurity || '').toLowerCase());
               if (type === 'vmess') {
                 const ws = item['ws-opts'] || item.wsOpts || {};
                 const headers = ws.headers || {};
@@ -922,8 +923,7 @@ createApp({
               const query = new URLSearchParams();
               const network = String(item.network || item.net || '');
               if (network) query.set('type', network);
-              const tls = item.tls === true || String(item.tls).toLowerCase() === 'true' || ['tls', 'reality'].includes(String(item.security || item.streamSecurity || '').toLowerCase());
-              if (tls) query.set('security', item.security || 'tls');
+              if (tls) query.set('security', item.security || item.streamSecurity || 'tls');
               const sni = String(item.servername || item.sni || '');
               if (sni) query.set('sni', sni);
               const flow = String(item.flow || '');
