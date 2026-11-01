@@ -2051,6 +2051,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	}
 	defer clearAgentActiveWebSocket(conn)
 	defer conn.Close()
+	defer forgetAgentWSWriteLock(conn)
 	conn.SetReadLimit(3 << 20)
 	_ = conn.SetWriteDeadline(time.Now().Add(8 * time.Second))
 	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -2381,8 +2382,8 @@ func agentConfigHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeAgentWSJSON(conn *websocket.Conn, value any) error {
-	agentWSWriteMu.Lock()
-	defer agentWSWriteMu.Unlock()
+	unlock := lockAgentWSWrite(conn)
+	defer unlock()
 	if err := conn.SetWriteDeadline(time.Now().Add(8 * time.Second)); err != nil {
 		return err
 	}
