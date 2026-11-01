@@ -113,7 +113,6 @@ sudo docker run -d \
   --init \
   -e S5M_HOSTNAME="$(hostname)" \
   -p 80:80 \
-  -p 7890:7890 \
   -v /opt/s5m-agent/data:/data \
   s5m-agent:local
 ```
@@ -229,7 +228,6 @@ sudo docker run -d \
   --init \
   -e S5M_HOSTNAME="$(hostname)" \
   -p 80:80 \
-  -p 7890:7890 \
   -v /opt/s5m-agent/data:/data \
   s5m-agent:local
 ```
