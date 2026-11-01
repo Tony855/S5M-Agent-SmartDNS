@@ -1259,7 +1259,7 @@ func parseProxyLine(line string) (*Proxy, error) {
 	if line == "" {
 		return nil, fmt.Errorf("内容为空")
 	}
-	p := &Proxy{Mode: "proxy", SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
+	p := &Proxy{Mode: "rule", SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
 	if idx := strings.LastIndex(line, "#"); idx != -1 {
 		name, _ := url.QueryUnescape(line[idx+1:])
 		p.Name = strings.TrimSpace(name)
