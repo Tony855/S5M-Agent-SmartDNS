@@ -2509,16 +2509,17 @@ func (a *App) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "完整配置缺少 dns 配置块")
 		return
 	}
-	if err := validateAgentPublishedProxyPort(in.YAML); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+	normalizedYAML, normalizeErr := normalizeAgentProxyConfig(in.YAML)
+	if normalizeErr != nil {
+		writeErr(w, http.StatusBadRequest, "透明代理配置校验失败: "+normalizeErr.Error())
 		return
 	}
-	if err := a.store.SaveNodeConfig(code, in.YAML); err != nil {
+	if err := a.store.SaveNodeConfig(code, normalizedYAML); err != nil {
 		writeErr(w, 500, "保存节点配置失败")
 		return
 	}
-	// 手工保存完整 YAML 后，标记为独立配置，避免错误显示为模板同步。
-	_, _ = a.store.db.Exec("INSERT INTO node_template_bindings(machine_code, template_version, config_sha256, source, updated_at) VALUES(?, 0, ?, 'independent', ?) ON CONFLICT(machine_code) DO UPDATE SET template_version=0, config_sha256=excluded.config_sha256, source='independent', updated_at=excluded.updated_at", code, hashConfig(in.YAML), time.Now().UTC().Format(time.RFC3339))
+	// Persist the exact normalized bytes that the Agent will receive and hash.
+	_, _ = a.store.db.Exec("INSERT INTO node_template_bindings(machine_code, template_version, config_sha256, source, updated_at) VALUES(?, 0, ?, 'independent', ?) ON CONFLICT(machine_code) DO UPDATE SET template_version=0, config_sha256=excluded.config_sha256, source='independent', updated_at=excluded.updated_at", code, hashConfig(normalizedYAML), time.Now().UTC().Format(time.RFC3339))
 	writeJSON(w, 200, map[string]string{"message": "完整节点配置已保存为独立配置；Agent 将在下一次拉取时应用"})
 }
 
