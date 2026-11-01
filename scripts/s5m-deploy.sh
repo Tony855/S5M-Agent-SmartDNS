@@ -9,10 +9,11 @@ CONTAINER="s5m-agent"
 DATA_DIR="/opt/s5m-agent/data"
 PORT_WEB=80
 PORT_PROXY=7890
+ENABLE_TUN="${ENABLE_TUN:-0}"
 
-log()  { echo -e "\033[32m[+]\033[0m $*"; }
-warn() { echo -e "\033[33m[!]\033[0m $*"; }
-die()  { echo -e "\033[31m[x]\033[0m $*"; exit 1; }
+log()  { echo -e "\\033[32m[+]\\033[0m $*"; }
+warn() { echo -e "\\033[33m[!]\\033[0m $*"; }
+die()  { echo -e "\\033[31m[x]\\033[0m $*"; exit 1; }
 
 http_get() {
   local url="$1"
@@ -70,12 +71,20 @@ find_image_tar() {
   return 1
 }
 
+[ "$(id -u)" -eq 0 ] || die "请用 root 运行"
+case "$ENABLE_TUN" in
+  0) ;;
+  1)
+    [ -c /dev/net/tun ] || die "ENABLE_TUN=1 但宿主机缺少 /dev/net/tun；请先启用 TUN 设备"
+    ;;
+  *) die "ENABLE_TUN 只允许 0 或 1" ;;
+esac
+
 if [ -z "${IMAGE_TAR:-}" ]; then
   IMAGE_TAR="$(find_image_tar)" || IMAGE_TAR=""
 fi
 [ -n "$IMAGE_TAR" ] && [ -f "$IMAGE_TAR" ] || \
   die "未找到 $IMAGE_NAME。可指定：IMAGE_TAR=/path/to/$IMAGE_NAME $0"
-[ "$(id -u)" -eq 0 ] || die "请用 root 运行"
 log "使用镜像文件：$IMAGE_TAR"
 
 # 确保 Docker 可用；绝不执行全局容器/镜像/卷清理。
@@ -86,7 +95,6 @@ if ! command -v docker >/dev/null 2>&1 || ! docker version >/dev/null 2>&1; then
 fi
 systemctl enable --now docker >/dev/null 2>&1 || die "Docker 服务启动失败"
 
-# 保留现有数据目录和 Docker/containerd 状态，只导入指定镜像。
 log "加载镜像 $IMAGE_TAR（不会删除旧镜像或重启 Docker）..."
 ok=0
 for i in 1 2 3; do
@@ -104,6 +112,15 @@ docker tag "$IMAGE_SRC" "$IMAGE_LOCAL" 2>/dev/null || {
 log "保留持久化数据目录：$DATA_DIR"
 install -d -m 0700 "$DATA_DIR"
 
+# TUN is opt-in: default deployments receive no NET_ADMIN capability or device.
+TUN_ARGS=()
+if [ "$ENABLE_TUN" = "1" ]; then
+  TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)
+  log "已启用容器内 TUN 所需权限；不会使用 host 网络模式。"
+else
+  log "TUN 权限保持关闭；如需 TUN，使用 ENABLE_TUN=1 并先配置 Mihomo。"
+fi
+
 # 只替换目标 Agent 容器；不触碰其他容器、镜像、卷或网络。
 if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
   log "停止并移除旧 Agent 容器（仅目标容器）..."
@@ -111,14 +128,12 @@ if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
 fi
 
 log "启动容器 $CONTAINER ..."
-# Keep Mihomo TUN routes inside the Agent container's network namespace.
-# Do not use --network host: changing the host namespace's routes can lock out SSH.
 docker run -d \
   --name "$CONTAINER" \
   --restart unless-stopped \
   --network bridge \
-  --cap-add=NET_ADMIN \
-  --device=/dev/net/tun:/dev/net/tun \
+  "${TUN_ARGS[@]}" \
+  -e "S5M_HOSTNAME=$(hostname)" \
   -p "${PORT_WEB}:80" \
   -p "${PORT_PROXY}:7890" \
   -v "$DATA_DIR":/data \
@@ -136,7 +151,7 @@ log "网络隔离检查通过：Agent 使用 bridge 网络；容器 TUN 路由�
 sleep 3
 echo
 log "===== 部署结果 ====="
-docker ps --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker ps --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'
 echo
 log "容器日志（末 20 行）："
 docker logs --tail 20 "$CONTAINER" 2>&1 || true
