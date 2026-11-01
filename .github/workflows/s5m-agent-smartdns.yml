@@ -102,6 +102,7 @@ jobs:
             test -x /usr/local/bin/mihomo
             test -x /usr/sbin/smartdns
             test -x /init
+  test -x /command/s6-svc
             test -x /etc/s6-overlay/s6-rc.d/smartdns/run
             test -s /etc/s6-overlay/s6-rc.d/smartdns/type
             test -e /etc/s6-overlay/s6-rc.d/user/contents.d/smartdns
@@ -173,7 +174,7 @@ jobs:
           '
 
           # Verify the exact s6 service path used by Agent self-recovery.
-          docker exec "$container" s6-svc -r /run/service/smartdns
+          docker exec "$container" /command/s6-svc -r /run/service/smartdns
           for attempt in $(seq 1 30); do
             if docker exec "$container" /healthcheck.sh; then break; fi
             sleep 1
