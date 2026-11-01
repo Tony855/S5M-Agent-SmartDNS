@@ -9,8 +9,6 @@ ipv6: false
 # 控制接口
 external-controller: 127.0.0.1:8088
 secret: __S5M_GENERATED_SECRET__
-authentication:
-  - "s5m:__S5M_GENERATED_SECRET__"
 
 # 状态持久化
 profile:
