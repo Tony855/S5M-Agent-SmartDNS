@@ -746,7 +746,7 @@ func TestSafeSmartDNSDiagnosticTruncatesAtUTF8Boundary(t *testing.T) {
 
 func TestReadSmartDNSConfigAtRejectsSymlinksAndInvalidFiles(t *testing.T) {
 	dir := t.TempDir()
-	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 1.1.1.1\n")
+	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
 	target := filepath.Join(dir, "target.conf")
 	if err := os.WriteFile(target, valid, 0600); err != nil {
 		t.Fatal(err)
@@ -929,7 +929,7 @@ func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T)
 	restartCalls := 0
 	deps := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return info, nil },
-		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\\n"), nil },
+		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"), nil },
 		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
 		process: func() ([]byte, error) { return []byte("1234"), nil },
 		probe: func() bool { return false },
