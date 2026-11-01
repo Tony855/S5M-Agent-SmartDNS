@@ -456,7 +456,13 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	// Reuse the node config validator so invalid or incomplete configs cannot be applied.
+	// Normalize every applied node template to transparent-only listeners before saving.
+	normalizedTemplate, normalizeErr := normalizeAgentProxyConfig(template)
+	if normalizeErr != nil {
+		writeErr(w, 400, "模板不能应用: "+normalizeErr.Error())
+		return
+	}
+	template = normalizedTemplate
 	if err := validateMihomoTemplate(template); err != nil {
 		writeErr(w, 400, "模板不能应用: "+err.Error())
 		return
@@ -476,10 +482,6 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 	}
 	if _, ok := cfg["dns"]; !ok {
 		writeErr(w, 400, "应用到节点的完整配置必须包含 dns 配置块")
-		return
-	}
-	if err := validateAgentPublishedProxyPort(template); err != nil {
-		writeErr(w, http.StatusBadRequest, "模板不能应用: "+err.Error())
 		return
 	}
 	tx, err := a.store.db.Begin()
