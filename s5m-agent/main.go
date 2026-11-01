@@ -1035,6 +1035,9 @@ func collectMihomoStatus() map[string]any {
 		"connections": 0, "config_sha256": "", "last_error": "",
 	}
 	collectSmartDNSStatus(status)
+	// Preserve the last known telemetry even when the config file or Mihomo
+	// version endpoint is temporarily unavailable.
+	applyMihomoTelemetrySnapshot(status, agentMihomoTelemetry.snapshot(), time.Now())
 	if hostname, err := agentHostname(); err == nil {
 		status["hostname"] = hostname
 	}
@@ -1092,10 +1095,8 @@ func collectMihomoStatus() map[string]any {
 	}
 	status["mihomo_version"] = versionText
 	status["mihomo_healthy"] = true
-	// The dedicated telemetry poller is the sole owner of /connections.
-	// Heartbeats reuse its last successful sample and therefore cannot block
-	// control-plane progress on a second stats request.
-	applyMihomoTelemetrySnapshot(status, agentMihomoTelemetry.snapshot(), time.Now())
+	// The dedicated telemetry poller is the sole owner of /connections;
+	// the heartbeat reuses its cached sample instead of issuing a duplicate request.
 	return status
 }
 
