@@ -469,6 +469,27 @@ func TestDecodeLimitedRejectsTrailingJSONAndOversizedBody(t *testing.T) {
 	})
 }
 
+func TestFilterDuplicateProxyImportsIsIdempotent(t *testing.T) {
+	existing := []Proxy{{
+		Type: "socks5", Server: "EXAMPLE.com", Port: 1080,
+		Extra: map[string]any{"username": "user", "password": "secret"},
+	}}
+	incoming := []*Proxy{
+		{Type: "socks5", Server: "example.com", Port: 1080, Extra: map[string]any{"username": "user", "password": "secret"}},
+		{Type: "socks5", Server: "example.com", Port: 1080, Extra: map[string]any{"username": "other", "password": "secret"}},
+		{Type: "vless", Server: "example.com", Port: 443, Extra: map[string]any{"uuid": "uuid"}},
+	}
+	unique, skipped := filterDuplicateProxyImports(existing, incoming)
+	if skipped != 1 { t.Fatalf("skipped = %d, want 1", skipped) }
+	if len(unique) != 2 { t.Fatalf("unique count = %d, want 2", len(unique)) }
+	secondExisting := append([]Proxy(nil), existing...)
+	for _, proxy := range unique { secondExisting = append(secondExisting, *proxy) }
+	again, skippedAgain := filterDuplicateProxyImports(secondExisting, unique)
+	if skippedAgain != len(unique) || len(again) != 0 {
+		t.Fatalf("second import was not idempotent: unique=%d skipped=%d", len(again), skippedAgain)
+	}
+}
+
 func TestImportProxiesRejectsOversizedBodyWith413(t *testing.T) {
 	app := &App{}
 	body := `{"content":"` + strings.Repeat("x", (1<<20)+1) + `"}`
@@ -546,6 +567,28 @@ func TestParseProxyImportContentSOCKS5JSONIPv4IPv6(t *testing.T) {
 		if p.Extra["udp"] != true {
 			t.Errorf("proxy %d UDP flag not preserved", i)
 		}
+	}
+}
+
+func TestParseProxyImportContentPreservesVLESSRealityOptions(t *testing.T) {
+	content := "vless://test-uuid@example.com:443?type=tcp&security=reality&sni=www.example.com&pbk=public-key-value&sid=short-id&fp=chrome&flow=xtls-rprx-vision#reality-node"
+	proxies, failures := parseProxyImportContent(content)
+	if len(failures) != 0 || len(proxies) != 1 {
+		t.Fatalf("proxies=%v failures=%v", proxies, failures)
+	}
+	p := proxies[0]
+	if p.Type != "vless" || p.Server != "example.com" || p.Port != 443 {
+		t.Fatalf("unexpected endpoint: %+v", p)
+	}
+	if p.Extra["uuid"] != "test-uuid" || p.Extra["flow"] != "xtls-rprx-vision" || p.Extra["servername"] != "www.example.com" {
+		t.Fatalf("VLESS identity/TLS fields lost: %#v", p.Extra)
+	}
+	reality, ok := p.Extra["reality-opts"].(map[string]any)
+	if !ok || reality["public-key"] != "public-key-value" || reality["short-id"] != "short-id" {
+		t.Fatalf("Reality options lost: %#v", p.Extra["reality-opts"])
+	}
+	if p.Extra["client-fingerprint"] != "chrome" {
+		t.Fatalf("client fingerprint lost: %#v", p.Extra)
 	}
 }
 
