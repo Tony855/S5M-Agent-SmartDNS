@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"gopkg.in/yaml.v3"
 )
 
 func TestDecodeErrorStatus(t *testing.T) {
