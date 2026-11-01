@@ -1019,3 +1019,41 @@ func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
 		t.Fatalf("unhealthy SmartDNS must retain original DNS upstreams\nwant:\n%s\ngot:\n%s", source, fallback)
 	}
 }
+
+func TestRestoreAgentDNSNameserverOnlyMigratesLegacySmartDNSValue(t *testing.T) {
+	current := `dns:
+  enable: true
+  nameserver:
+    - 127.0.0.1:6053
+  default-nameserver:
+    - 223.5.5.5
+  proxy-server-nameserver:
+    - 119.29.29.29
+tun:
+  enable: true
+`
+	baseline := `dns:
+  enable: true
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  default-nameserver:
+    - 9.9.9.9
+`
+	got, changed, err := restoreAgentDNSNameserver(current, baseline)
+	if err != nil || !changed { t.Fatalf("restore legacy DNS: changed=%v err=%v", changed, err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	dns := doc["dns"].(map[string]any)
+	if got := dns["nameserver"].([]any); len(got) != 2 || got[0] != "1.1.1.1" || got[1] != "8.8.8.8" { t.Fatalf("restored nameserver = %#v", got) }
+	if got := dns["default-nameserver"].([]any); len(got) != 1 || got[0] != "223.5.5.5" { t.Fatalf("default-nameserver was overwritten: %#v", got) }
+	if got := dns["proxy-server-nameserver"].([]any); len(got) != 1 || got[0] != "119.29.29.29" { t.Fatalf("proxy-server-nameserver was overwritten: %#v", got) }
+	if !strings.Contains(got, "tun:\n  enable: true") { t.Fatalf("unrelated TUN setting was not retained:\n%s", got) }
+}
+func TestRestoreAgentDNSNameserverSkipsNonLegacyAndRejectsMissingFallback(t *testing.T) {
+	ordinary := "dns:\n  nameserver:\n    - 8.8.8.8\n"
+	got, changed, err := restoreAgentDNSNameserver(ordinary, "dns:\n  nameserver:\n    - 1.1.1.1\n")
+	if err != nil || changed || got != ordinary { t.Fatalf("ordinary config changed: changed=%v err=%v got=%q", changed, err, got) }
+	legacy := "dns:\n  nameserver:\n    - 127.0.0.1:6053\n"
+	if _, _, err := restoreAgentDNSNameserver(legacy, "dns:\n  enable: true\n"); err == nil { t.Fatal("missing fallback nameserver must fail safely") }
+}
