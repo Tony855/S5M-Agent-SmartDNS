@@ -1480,11 +1480,25 @@ func TestSmartDNSProcessRoutingRulePrecedesAllTerminalPolicies(t *testing.T) {
 					terminalIndex = i
 				}
 			}
-			if processCount != 1 {
-				t.Fatalf("expected exactly one SmartDNS process route, got %d: %#v", processCount, rules)
+			if mode == "return" {
+				if processCount != 0 {
+					t.Fatalf("return mode must route SmartDNS upstreams by destination geography, not force all DNS overseas traffic through proxy: %#v", rules)
+				}
+				for _, raw := range rules {
+					if strings.Contains(raw.(string), "dns.cloudflare.com,") || strings.Contains(raw.(string), "dns.google,") {
+						t.Fatalf("return mode must not force overseas DNS endpoints through proxy: %#v", rules)
+					}
+				}
+			} else {
+				if processCount != 1 {
+					t.Fatalf("expected exactly one SmartDNS process route, got %d: %#v", processCount, rules)
+				}
+				if terminalCount != 1 || terminalIndex <= processIndex {
+					t.Fatalf("SmartDNS process route must precede the sole terminal MATCH: process=%d terminal=%d rules=%#v", processIndex, terminalIndex, rules)
+				}
 			}
-			if terminalCount != 1 || terminalIndex <= processIndex {
-				t.Fatalf("SmartDNS process route must precede the sole terminal MATCH: process=%d terminal=%d rules=%#v", processIndex, terminalIndex, rules)
+			if terminalCount != 1 {
+				t.Fatalf("expected exactly one terminal MATCH, got %d: %#v", terminalCount, rules)
 			}
 		})
 	}
