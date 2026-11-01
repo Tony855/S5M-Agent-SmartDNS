@@ -95,6 +95,28 @@ proxies:
 	}
 }
 
+func TestNormalizeAgentProxyConfigIsIdempotent(t *testing.T) {
+	input := `allow-lan: true
+mixed-port: 7890
+secret: test-secret
+tun:
+  enable: true
+dns:
+  enable: true
+`
+	first, err := normalizeAgentProxyConfig(input)
+	if err != nil {
+		t.Fatalf("first normalization: %v", err)
+	}
+	second, err := normalizeAgentProxyConfig(first)
+	if err != nil {
+		t.Fatalf("second normalization: %v", err)
+	}
+	if first != second {
+		t.Fatalf("normalization must be idempotent; first and second output differ:\nFIRST:\n%s\nSECOND:\n%s", first, second)
+	}
+}
+
 func TestBuildConfigForMachineDoesNotExposeExplicitProxyListener(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "config-ports.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
