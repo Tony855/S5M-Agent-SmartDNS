@@ -131,10 +131,30 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 		}
 	}
 	root.Content = filtered
-	// Expose only the authenticated Agent mixed proxy listener on the standard S5M port.
-	// All other listener forms remain stripped; LAN exposure stays disabled.
+	// Expose the Agent mixed proxy listener to the LAN, but require credentials.
+	// Reuse the per-Agent Mihomo secret as the proxy password; keep the API
+	// controller loopback-only and strip every other listener form.
 	setScalar(root, "mixed-port", "7890", "!!int")
-	setScalar(root, "allow-lan", "false", "!!bool")
+	setScalar(root, "allow-lan", "true", "!!bool")
+	secret := mappingValue(root, "secret")
+	if secret == nil || secret.Kind != yaml.ScalarNode || strings.TrimSpace(secret.Value) == "" {
+		return "", fmt.Errorf("Agent Mihomo 配置缺少代理认证密钥，拒绝开启 LAN 监听")
+	}
+	auth := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "s5m:" + secret.Value},
+	}}
+	foundAuth := false
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "authentication" {
+			root.Content[i+1] = auth
+			foundAuth = true
+			break
+		}
+	}
+	if !foundAuth {
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "authentication"}, auth)
+	}
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
 	setScalar(root, "find-process-mode", "strict", "!!str")
