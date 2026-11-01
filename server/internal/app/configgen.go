@@ -18,7 +18,8 @@ import (
 )
 
 const baseTemplate = `mode: rule
-allow-lan: false
+mixed-port: 8080
+allow-lan: true
 log-level: info
 ipv6: false
 external-controller: 127.0.0.1:8088
