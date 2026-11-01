@@ -22,6 +22,7 @@ createApp({
     let browserEventsGeneration = 0;
     let staleStatusTimer = null;
     const browserWSRequests = new Map();
+    const telemetryLastRenderAt = new Map();
     let overviewTimer = null;
     const proxies = ref([]);
     const loadingProxies = ref(false);
@@ -359,6 +360,8 @@ createApp({
             const code = String(message.machine_code);
             const status = message.status && typeof message.status === 'object' ? message.status : {};
             const receivedAt = Number(message.received_at_ms) || Date.now();
+            if (receivedAt - (telemetryLastRenderAt.get(code) || 0) < 450) return;
+            telemetryLastRenderAt.set(code, receivedAt);
             traffic.value = {
               up: Math.max(0, Number(status.upload_speed) || 0),
               down: Math.max(0, Number(status.download_speed) || 0),
