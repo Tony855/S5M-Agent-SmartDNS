@@ -220,8 +220,12 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	if !strings.Contains(agentYAML, "mixed-port: 7890") {
 		t.Errorf("Agent config missing mixed-port 7890:\\n%s", agentYAML)
 	}
-	if !strings.Contains(agentYAML, "tun:\n  enable: true") {
-		t.Errorf("new Agent config should enable TUN by default:\\n%s", agentYAML)
+	var agentConfig map[string]any
+	if err := yaml.Unmarshal([]byte(agentYAML), &agentConfig); err != nil {
+		t.Fatalf("decode generated Agent config: %v", err)
+	}
+	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != false {
+		t.Errorf("new Agent config must keep TUN disabled by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
 	}
 	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
 		if strings.Contains(agentYAML, forbidden) {
@@ -1245,8 +1249,41 @@ func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSetting(tun_enable): %v", err)
 	}
-	if got != "true" {
-		t.Fatalf("tun_enable default = %q, want true", got)
+	if got != "false" {
+		t.Fatalf("tun_enable default = %q, want false", got)
+	}
+}
+
+func TestOpenStorePreservesExplicitTUNChoiceAcrossUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tun-preserve.db")
+	store, err := OpenStore(path)
+	if err != nil { t.Fatalf("initial OpenStore: %v", err) }
+	if err := store.UpdateSettings(map[string]string{"tun_enable": "true"}); err != nil {
+		t.Fatalf("set explicit operator TUN choice: %v", err)
+	}
+	if err := store.db.Close(); err != nil { t.Fatalf("close initial store: %v", err) }
+
+	upgraded, err := OpenStore(path)
+	if err != nil { t.Fatalf("OpenStore after upgrade: %v", err) }
+	defer upgraded.db.Close()
+	got, err := upgraded.GetSetting("tun_enable")
+	if err != nil { t.Fatalf("GetSetting after upgrade: %v", err) }
+	if got != "true" { t.Fatalf("upgrade overwrote explicit TUN choice: got %q, want true", got) }
+}
+
+func TestBuildConfigForMachineHonorsExplicitTUNOptIn(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "tun-opt-in.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.UpdateSettings(map[string]string{"tun_enable": "true"}); err != nil {
+		t.Fatalf("enable TUN explicitly: %v", err)
+	}
+	got, err := (&App{store: store}).BuildConfigForMachine("node-opt-in")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	var generated map[string]any
+	if err := yaml.Unmarshal([]byte(got), &generated); err != nil { t.Fatalf("decode generated config: %v", err) }
+	if tun, ok := generated["tun"].(map[string]any); !ok || tun["enable"] != true {
+		t.Fatalf("explicit TUN opt-in was not applied to generated config, got %#v:\\n%s", generated["tun"], got)
 	}
 }
 
