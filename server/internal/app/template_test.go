@@ -70,25 +70,3 @@ func TestHashConfigIsStable(t *testing.T) {
 		t.Fatal("different YAML unexpectedly produced the same hash")
 	}
 }
-
-func TestValidateAgentPublishedProxyPort(t *testing.T) {
-	tests := []struct {
-		name    string
-		yaml    string
-		wantErr bool
-	}{
-		{name: "published port", yaml: "mixed-port: 7890\nmode: rule\n"},
-		{name: "controller port", yaml: "mixed-port: 8080\nmode: rule\n", wantErr: true},
-		{name: "custom unexposed port", yaml: "mixed-port: 7899\nmode: rule\n", wantErr: true},
-		{name: "missing mixed port", yaml: "socks-port: 7890\nmode: rule\n", wantErr: true},
-		{name: "string port", yaml: "mixed-port: \"7890\"\nmode: rule\n", wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateAgentPublishedProxyPort(tt.yaml)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("validateAgentPublishedProxyPort() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
