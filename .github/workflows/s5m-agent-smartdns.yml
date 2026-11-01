@@ -162,8 +162,10 @@ jobs:
           ! grep -q -- '-p .*7890' scripts/s5m-deploy.sh
           ! grep -q '^mixed-port:' s5m-agent/default-config.yaml
           ! grep -q '^mixed-port:' s5m-agent/smartdns/default-config-smartdns.yaml
-          grep -q '^allow-lan: false' s5m-agent/default-config.yaml
-          grep -q '^allow-lan: false' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '^allow-lan: true' s5m-agent/default-config.yaml
+          grep -q '^authentication:' s5m-agent/default-config.yaml
+          grep -q '^allow-lan: true' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '^authentication:' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '127.0.0.1:6053' s5m-agent/default-config.yaml
           grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'enable: true' s5m-agent/default-config.yaml
