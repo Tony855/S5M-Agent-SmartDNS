@@ -610,7 +610,7 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("读取 Mihomo 设置失败: %w", err)
 	}
-	mode := routingModeForMachine(proxies, machineCode)
+	mode := "rule"
 	if strings.TrimSpace(machineCode) != "" {
 		mode, err = a.store.GetMachineProxyMode(machineCode)
 		if err != nil { return "", fmt.Errorf("读取机器代理模式失败: %w", err) }
@@ -761,35 +761,6 @@ func normalizeProxyRoutingMode(raw string) string {
 	}
 }
 
-func routingModeForMachine(proxies []Proxy, machineCode string) string {
-	// A Mihomo config has one routing mode for the whole machine, not one mode
-	// per proxy. ListProxies is persisted in stable ID order, so the first
-	// enabled proxy assigned to this machine remains the compatibility anchor.
-	// Additional proxies contribute outbound nodes but cannot silently change
-	// an existing machine's traffic policy.
-	for _, p := range proxies {
-		if !p.Enabled || p.Mode == "direct" || p.Mode == "reject" {
-			continue
-		}
-		matches := p.MachineCode == "__GLOBAL__" && machineCode == ""
-		if machineCode != "" && strings.TrimSpace(p.MachineCode) == machineCode {
-			matches = true
-		}
-		if !matches {
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(p.Mode)) {
-		case "global", "split", "rule", "return", "game":
-			return normalizeProxyRoutingMode(p.Mode)
-		case "proxy":
-			return "return"
-		case "china":
-			return "split"
-		}
-	}
-	return "rule"
-}
-
 func controllerHostFromSettings(settings map[string]string) string {
 	candidates := []string{settings["central_url"], settings["public_url"], settings["server_url"], settings["agent_central_url"]}
 	candidates = append(candidates, os.Getenv("S5M_CENTRAL_URL"), os.Getenv("S5M_PUBLIC_URL"), os.Getenv("PUBLIC_URL"))
@@ -884,7 +855,6 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	proxies = append([]Proxy(nil), proxies...)
 	for i := range proxies {
 		proxies[i].Name = strings.TrimSpace(proxies[i].Name)
-		proxies[i].Mode = strings.TrimSpace(proxies[i].Mode)
 		proxies[i].Type = strings.ToLower(strings.TrimSpace(proxies[i].Type))
 		proxies[i].Server = strings.TrimSpace(proxies[i].Server)
 		proxies[i].MachineCode = strings.TrimSpace(proxies[i].MachineCode)
@@ -896,9 +866,9 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		}
 		return machineCode != "" && p.MachineCode == machineCode
 	}
-	eligible := func(p Proxy) bool {
-		return p.Enabled && p.Mode != "direct" && p.Mode != "reject" && matchesMachine(p)
-	}
+	// Proxy rows describe outbound nodes only. Their legacy mode column is
+	// intentionally ignored; machine_proxy_settings is the sole routing policy.
+	eligible := func(p Proxy) bool { return p.Enabled && matchesMachine(p) }
 	endpointKey := func(p Proxy) string {
 		return strings.ToLower(strings.TrimSpace(p.Type)) + "|" +
 			strings.Trim(strings.TrimSpace(p.Server), "[]") + "|" +
@@ -915,11 +885,6 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		}
 		if p.Name == "" || len(p.Name) > 100 {
 			return "", fmt.Errorf("代理名称不能为空且不能超过 100 个字符")
-		}
-		switch p.Mode {
-		case "proxy", "china", "global", "split", "rule", "return", "game":
-		default:
-			return "", fmt.Errorf("代理 %q 的运行模式无效：%q", p.Name, p.Mode)
 		}
 		switch p.Type {
 		case "socks5", "http", "ss", "vmess", "vless", "trojan":
@@ -1035,17 +1000,8 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		rules = append(rules, fmt.Sprintf("SRC-IP-CIDR,%s,%s", canonical, target))
 	}
 
-	firstProxy, firstGameProxy := "", ""
-	for _, p := range outs {
-		if firstProxy == "" {
-			firstProxy = p.Name
-		}
-		for _, original := range proxies {
-			if original.Name == p.Name && original.Mode == "game" && firstGameProxy == "" {
-				firstGameProxy = p.Name
-			}
-		}
-	}
+	firstProxy := ""
+	if len(outs) > 0 { firstProxy = outs[0].Name }
 	switch routingMode {
 	case "global":
 		if firstProxy != "" {
@@ -1070,13 +1026,11 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		if firstProxy != "" {
 			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
 		} else {
-			rules = append(rules, "MATCH,DIRECT")
+			// Never silently bypass the mainland-exit requirement when no proxy exists.
+			rules = append(rules, "MATCH,REJECT")
 		}
 	case "game":
-		gameProxy := firstGameProxy
-		if gameProxy == "" {
-			gameProxy = firstProxy
-		}
+		gameProxy := firstProxy
 		if gameProxy != "" {
 			for _, domain := range []string{"steampowered.com", "steamcommunity.com", "steamcontent.com", "epicgames.com", "playstation.net", "playstation.com", "xboxlive.com", "xbox.com", "battle.net", "blizzard.com", "riotgames.com", "leagueoflegends.com", "valorant.com", "ea.com"} {
 				rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, gameProxy))
