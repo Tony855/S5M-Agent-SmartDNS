@@ -656,12 +656,46 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	}
 	// SmartDNS is applied only to the runtime WebSocket payload. Never persist
 	// the Agent-local 127.0.0.1:6053 resolver into the operator's source YAML.
-	// TUN is opt-in for new installations. An explicit controller setting can
-	// enable it for newly generated configs; saved per-node YAML remains authoritative.
-	if strings.EqualFold(strings.TrimSpace(settings["tun_enable"]), "true") {
-		yml = strings.Replace(yml, "tun:\n    enable: false", "tun:\n    enable: true", 1)
+	// TUN is opt-in for new Agent configs; existing saved per-node YAML remains authoritative.
+	if strings.TrimSpace(machineCode) != "" {
+		yml, err = setAgentTUNEnabled(yml, strings.EqualFold(strings.TrimSpace(settings["tun_enable"]), "true"))
+		if err != nil { return "", fmt.Errorf("设置 Agent TUN 状态失败: %w", err) }
 	}
 	return yml, nil
+}
+
+// setAgentTUNEnabled updates the typed YAML value instead of relying on indentation-sensitive text replacement.
+func setAgentTUNEnabled(yml string, enabled bool) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil { return "", err }
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent Mihomo 配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	var tun *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "tun" { tun = root.Content[i+1]; break }
+	}
+	if tun == nil {
+		tun = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tun"}, tun)
+	}
+	if tun.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("tun 配置必须是 YAML 对象")
+	}
+	for i := 0; i+1 < len(tun.Content); i += 2 {
+		if tun.Content[i].Value == "enable" {
+			tun.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprint(enabled)}
+			out, err := yaml.Marshal(&doc)
+			return string(out), err
+		}
+	}
+	tun.Content = append(tun.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enable"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprint(enabled)})
+	out, err := yaml.Marshal(&doc)
+	return string(out), err
 }
 
 // getOrCreateMihomoSecret creates a cryptographically random API secret once per controller/Agent.
