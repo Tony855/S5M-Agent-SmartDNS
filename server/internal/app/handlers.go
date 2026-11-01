@@ -1421,6 +1421,12 @@ func parseProxyLine(line string) (*Proxy, error) {
 		if fp := query.Get("fp"); fp != "" {
 			p.Extra["client-fingerprint"] = fp
 		}
+		if security == "reality" {
+			reality := map[string]any{}
+			if publicKey := query.Get("pbk"); publicKey != "" { reality["public-key"] = publicKey }
+			if shortID := query.Get("sid"); shortID != "" { reality["short-id"] = shortID }
+			if len(reality) > 0 { p.Extra["reality-opts"] = reality }
+		}
 		if flow := query.Get("flow"); flow != "" {
 			p.Extra["flow"] = flow
 		}
