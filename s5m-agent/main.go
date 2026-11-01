@@ -839,6 +839,19 @@ func normalizeMihomoRuleType(value string) string {
 	return strings.ToLower(value)
 }
 
+// mihomoRulePayloadEqual applies case-insensitive comparison only where the
+// rule grammar defines the payload as case-insensitive. GEOIP country codes are
+// case-insensitive (for example CN and cn); domain matching, regexes, file
+// paths, and other rule payloads retain their existing exact comparison.
+func mihomoRulePayloadEqual(ruleType, expected, actual string) bool {
+	expected = strings.TrimSpace(expected)
+	actual = strings.TrimSpace(actual)
+	if normalizeMihomoRuleType(ruleType) == "geoip" {
+		return strings.EqualFold(expected, actual)
+	}
+	return expected == actual
+}
+
 func compareMihomoRuntimeRules(expected, actual []mihomoRuntimeRule) error {
 	if len(expected) != len(actual) {
 		return fmt.Errorf("Mihomo 生效规则数量不匹配: 期望 %d，实际 %d", len(expected), len(actual))
@@ -846,7 +859,7 @@ func compareMihomoRuntimeRules(expected, actual []mihomoRuntimeRule) error {
 	for i := range expected {
 		want, got := expected[i], actual[i]
 		if normalizeMihomoRuleType(want.Type) != normalizeMihomoRuleType(got.Type) ||
-			strings.TrimSpace(want.Payload) != strings.TrimSpace(got.Payload) ||
+			!mihomoRulePayloadEqual(want.Type, want.Payload, got.Payload) ||
 			strings.TrimSpace(want.Proxy) != strings.TrimSpace(got.Proxy) {
 			return fmt.Errorf("Mihomo 第 %d 条生效规则不匹配: 期望 %s,%s,%s；实际 %s,%s,%s",
 				i, want.Type, want.Payload, want.Proxy, got.Type, got.Payload, got.Proxy)
