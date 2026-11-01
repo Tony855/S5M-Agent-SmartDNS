@@ -1055,6 +1055,11 @@ func collectMihomoStatus() map[string]any {
 		return status
 	}
 	secret, _ := cfg["secret"].(string)
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		status["last_error"] = "Mihomo 配置缺少 API secret，拒绝发起未鉴权状态请求"
+		return status
+	}
 	client := &http.Client{Timeout: 3 * time.Second}
 	get := func(path string) (map[string]any, error) {
 		req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8088"+path, nil)
