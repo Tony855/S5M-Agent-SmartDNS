@@ -220,6 +220,25 @@ func TestProxyHandlersRejectInvalidMachineAssociation(t *testing.T) {
 	}
 }
 
+func TestCreateProxyPersistsIndependentRuleMode(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-rule-mode.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	body := `{"name":"strict-rule-proxy","mode":"rule","type":"socks5","server":"192.0.2.55","port":1080,"machine_code":"node-rule","enabled":true,"source_cidr":"0.0.0.0/0"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/proxies", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	app.handleCreateProxy(rec, req)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("create rule proxy status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	proxies, err := store.ListProxies()
+	if err != nil { t.Fatalf("ListProxies: %v", err) }
+	if len(proxies) != 1 || proxies[0].Mode != "rule" {
+		t.Fatalf("backend did not persist independent rule mode: %#v", proxies)
+	}
+}
+
 func TestParseProxyLineRejectsInvalidPort(t *testing.T) {
 	for _, line := range []string{
 		"socks5://user:pass@example.com:not-a-port",
