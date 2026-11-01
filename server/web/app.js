@@ -970,7 +970,7 @@ createApp({
           retryAfterRevocation = true;
         } else {
           agentEntries.value = list;
-          await Promise.all(list.map(item => loadMachineProxyMode(item.code)));
+          await loadMachineProxyModes(list);
         }
       } catch (e) {
         if (!hasExistingData) {
@@ -989,15 +989,15 @@ createApp({
       }
     };
 
-    const loadMachineProxyMode = async (code) => {
-      const machineCode = String(code || '').trim();
-      if (!machineCode) return;
+    const loadMachineProxyModes = async (items) => {
       try {
-        const res = await api('/api/v1/nodes/' + encodeURIComponent(machineCode) + '/proxy-mode');
+        const res = await api('/api/v1/nodes/proxy-modes');
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || '读取机器代理模式失败');
-        machineProxyModes[machineCode] = data.routing_mode || 'rule';
-      } catch (e) { console.warn('读取机器代理模式失败', machineCode, e); }
+        (Array.isArray(items) ? items : []).forEach(item => {
+          if (item && item.code) machineProxyModes[item.code] = data[item.code] || 'rule';
+        });
+      } catch (e) { console.warn('批量读取机器代理模式失败', e); }
     };
 
     const saveMachineProxyMode = async (code) => {
@@ -1012,7 +1012,7 @@ createApp({
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || data.message || '保存机器代理模式失败');
         showMsg(data.message || '机器代理模式已保存', 'success');
-      } catch (e) { showMsg(e.message || '保存机器代理模式失败', 'error'); await loadMachineProxyMode(machineCode); }
+      } catch (e) { showMsg(e.message || '保存机器代理模式失败', 'error'); await loadMachineProxyModes([{ code: machineCode }]); }
       finally { savingMachineProxyMode[machineCode] = false; }
     };
 
