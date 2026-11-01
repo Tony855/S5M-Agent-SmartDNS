@@ -39,5 +39,9 @@ if grep -Eq '^secret:[[:space:]]*"?(__S5M_GENERATED_SECRET__|__S5M_MIHOMO_SECRET
   secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d '[:space:]')"
   [ "${#secret}" -eq 64 ] || { echo "无法生成 Mihomo API secret" >&2; exit 1; }
   sed -i "s|^secret:.*|secret: \"$secret\"|" "$CONFIG_PATH"
+  # The default proxy authentication uses the same per-Agent random secret.
+  # Replace the placeholder before Mihomo starts so LAN access is never left
+  # with a public, predictable credential.
+  sed -i "s|__S5M_GENERATED_SECRET__|$secret|g; s|__S5M_MIHOMO_SECRET__|$secret|g" "$CONFIG_PATH"
   chmod 0600 "$CONFIG_PATH"
 fi
