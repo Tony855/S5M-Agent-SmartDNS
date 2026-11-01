@@ -127,6 +127,8 @@ fi
 # 不要添加 --init：镜像使用 s6-overlay 的 /init 作为 PID 1。
 args+=("$IMAGE")
 log "启动新容器：$CONTAINER_NAME"
+# docker run 失败时也可能留下已创建的容器，因此提前启用清理回滚。
+NEW_STARTED=1
 if ! docker "${args[@]}"; then
   deployment_failed "新容器创建失败，已回滚旧容器（如存在）。"
 fi
