@@ -482,7 +482,9 @@ func TestFilterDuplicateProxyImportsIsIdempotent(t *testing.T) {
 	unique, skipped := filterDuplicateProxyImports(existing, incoming)
 	if skipped != 1 { t.Fatalf("skipped = %d, want 1", skipped) }
 	if len(unique) != 2 { t.Fatalf("unique count = %d, want 2", len(unique)) }
-	again, skippedAgain := filterDuplicateProxyImports(append(existing, *unique...), unique)
+	secondExisting := append([]Proxy(nil), existing...)
+	for _, proxy := range unique { secondExisting = append(secondExisting, *proxy) }
+	again, skippedAgain := filterDuplicateProxyImports(secondExisting, unique)
 	if skippedAgain != len(unique) || len(again) != 0 {
 		t.Fatalf("second import was not idempotent: unique=%d skipped=%d", len(again), skippedAgain)
 	}
