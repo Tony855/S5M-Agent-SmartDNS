@@ -19,6 +19,8 @@ on:
       - "s5m-agent/healthcheck.sh"
       - "s5m-agent/cont-init.d/**"
       - "s5m-agent/services/**"
+      - "server/internal/app/configgen.go"
+      - "server/internal/app/configgen_test.go"
       - ".github/workflows/s5m-agent-smartdns.yml"
       - ".github/workflows/release.yml"
   push:
