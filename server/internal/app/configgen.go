@@ -414,6 +414,14 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 		status["smartdns_dns_healthy"] == true
 }
 
+// applyAgentRuntimeDNS derives the outgoing Agent config without mutating its persisted source.
+func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
+	if !smartDNSHealthy {
+		return yml, nil
+	}
+	return routeAgentDNSViaSmartDNS(yml)
+}
+
 // routeAgentDNSViaSmartDNS changes only the ordinary nameserver list. Bootstrap
 // and proxy-server DNS stay on literal IP resolvers to avoid resolver loops.
 func routeAgentDNSViaSmartDNS(yml string) (string, error) {
