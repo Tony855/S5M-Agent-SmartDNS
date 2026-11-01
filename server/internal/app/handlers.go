@@ -1772,10 +1772,10 @@ func (a *App) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Keep legacy config delivery aligned with the Agent container's 7890:7890 mapping.
+	// Normalize legacy node YAML before delivery so no explicit proxy listener is exposed.
 	normalized, normalizeErr := normalizeAgentProxyConfig(yml)
 	if normalizeErr != nil {
-		writeErr(w, http.StatusInternalServerError, "校正节点代理端口失败")
+		writeErr(w, http.StatusInternalServerError, "透明代理配置校正失败")
 		return
 	}
 	if normalized != yml {
