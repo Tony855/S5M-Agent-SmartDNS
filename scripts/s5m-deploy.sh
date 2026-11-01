@@ -8,6 +8,7 @@ IMAGE_LOCAL="s5m-agent:local"
 CONTAINER="s5m-agent"
 DATA_DIR="/opt/s5m-agent/data"
 PORT_WEB=80
+ENABLE_TUN="${ENABLE_TUN:-0}"
 
 log()  { echo -e "\033[32m[+]\033[0m $*"; }
 warn() { echo -e "\033[33m[!]\033[0m $*"; }
@@ -69,6 +70,12 @@ find_image_tar() {
   return 1
 }
 
+case "$ENABLE_TUN" in
+  0) ;;
+  1) [ -c /dev/net/tun ] || die "ENABLE_TUN=1 但宿主机缺少字符设备 /dev/net/tun" ;;
+  *) die "ENABLE_TUN 只允许 0 或 1" ;;
+esac
+
 if [ -z "${IMAGE_TAR:-}" ]; then
   IMAGE_TAR="$(find_image_tar)" || IMAGE_TAR=""
 fi
@@ -103,6 +110,15 @@ docker tag "$IMAGE_SRC" "$IMAGE_LOCAL" 2>/dev/null || {
 log "保留持久化数据目录：$DATA_DIR"
 install -d -m 0700 "$DATA_DIR"
 
+# TUN 默认关闭；只有显式 ENABLE_TUN=1 才授予 NET_ADMIN 和 TUN 设备。
+TUN_ARGS=()
+if [ "$ENABLE_TUN" = "1" ]; then
+  TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)
+  log "TUN 权限已显式启用，继续使用 bridge 网络隔离。"
+else
+  log "默认最小权限：未授予 NET_ADMIN，也未挂载 /dev/net/tun。"
+fi
+
 # 只替换目标 Agent 容器；不触碰其他容器、镜像、卷或网络。
 if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
   log "停止并移除旧 Agent 容器（仅目标容器）..."
@@ -116,8 +132,7 @@ docker run -d \
   --name "$CONTAINER" \
   --restart unless-stopped \
   --network bridge \
-  --cap-add=NET_ADMIN \
-  --device=/dev/net/tun:/dev/net/tun \
+  "${TUN_ARGS[@]}" \
   -p "${PORT_WEB}:80" \
   -v "$DATA_DIR":/data \
   "$IMAGE_LOCAL" || die "容器启动失败"
