@@ -57,6 +57,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate default and opt-in TUN Compose configurations
+        run: |
+          docker compose -f s5m-agent/docker-compose.yml config --quiet
+          docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config --quiet
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+          base = yaml.safe_load(Path('s5m-agent/docker-compose.yml').read_text())
+          tun = yaml.safe_load(Path('s5m-agent/docker-compose.tun.yml').read_text())
+          agent = base['services']['s5m-agent']
+          assert 'cap_add' not in agent and 'devices' not in agent
+          assert tun['services']['s5m-agent']['cap_add'] == ['NET_ADMIN']
+          assert tun['services']['s5m-agent']['devices'] == ['/dev/net/tun:/dev/net/tun']
+          PY
+
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh
 
