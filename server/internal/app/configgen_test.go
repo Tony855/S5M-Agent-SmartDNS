@@ -270,7 +270,7 @@ rules:
 				t.Errorf("attempt %d: synced YAML lost or omitted %q:\n%s", attempt, want, got.YAML)
 			}
 		}
-		if strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") {
+		if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") {
 			t.Errorf("attempt %d: managed proxy/rule sections were not refreshed:\n%s", attempt, got.YAML)
 		}
 	}
@@ -309,8 +309,8 @@ func TestSyncAuthorizedNodeConfigsSkipsUnauthorizedNodeConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read authorized config: %v", err)
 	}
-	if authorized == nil || !strings.Contains(authorized.YAML, "preserve-authorized-secret") {
-		t.Fatalf("authorized node's custom settings should be preserved: %+v", authorized)
+	if authorized == nil || !strings.Contains(authorized.YAML, "preserve-authorized-secret") || strings.Contains(authorized.YAML, "mixed-port:") {
+		t.Fatalf("authorized node's custom settings should be preserved while removing explicit proxy listeners: %+v", authorized)
 	}
 
 	revoked, err := store.GetNodeConfig("revoked")
@@ -862,7 +862,7 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 	if got == nil {
 		t.Fatal("node config missing after sync")
 	}
-	if strings.Contains(got.YAML, "&s5m_shared_proxy") || strings.Contains(got.YAML, "<<:") {
+	if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "&s5m_shared_proxy") || strings.Contains(got.YAML, "<<:") {
 		t.Fatalf("saved per-node YAML should contain expanded proxy fields, not merge aliases:\n%s", got.YAML)
 	}
 	for _, want := range []string{
