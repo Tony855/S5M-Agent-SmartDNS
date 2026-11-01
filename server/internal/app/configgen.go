@@ -698,7 +698,7 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 
 func normalizeProxyRoutingMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "global", "split", "rule", "return", "game", "legacy":
+	case "global", "split", "rule", "return", "game":
 		return strings.ToLower(strings.TrimSpace(raw))
 	case "proxy":
 		return "return"
@@ -727,7 +727,7 @@ func routingModeForMachine(proxies []Proxy, machineCode string) string {
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(p.Mode)) {
-		case "global", "split", "rule", "return", "game", "legacy":
+		case "global", "split", "rule", "return", "game":
 			return normalizeProxyRoutingMode(p.Mode)
 		case "proxy":
 			return "return"
@@ -1018,8 +1018,6 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		} else {
 			rules = append(rules, "GEOIP,CN,DIRECT")
 		}
-		rules = append(rules, "MATCH,DIRECT")
-	case "legacy":
 		rules = append(rules, "MATCH,DIRECT")
 	case "game":
 		gameProxy := firstGameProxy
