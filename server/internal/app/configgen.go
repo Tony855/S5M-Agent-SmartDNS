@@ -1047,15 +1047,16 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		// Strict rule mode: only explicit rules may pass traffic; unmatched traffic is rejected.
 		rules = append(rules, "MATCH,REJECT")
 	case "return":
-		// Return-to-China mode: mainland destinations stay direct; all other
-		// traffic uses the selected proxy to exit through the mainland node.
-		rules = append(rules, "GEOIP,CN,DIRECT")
+		// Return-to-China mode: mainland destinations must use the selected
+		// mainland egress proxy; destinations outside CN go direct.
+		// Explicit controller and v2net.cc bypasses above remain higher priority.
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
+			rules = append(rules, fmt.Sprintf("GEOIP,CN,%s", firstProxy))
 		} else {
-			// Never silently bypass the mainland-exit requirement when no proxy exists.
-			rules = append(rules, "MATCH,REJECT")
+			// Without a mainland egress, reject CN traffic rather than leak it direct.
+			rules = append(rules, "GEOIP,CN,REJECT")
 		}
+		rules = append(rules, "MATCH,DIRECT")
 	case "game":
 		gameProxy := firstProxy
 		if gameProxy != "" {
