@@ -122,7 +122,6 @@ jobs:
 
           docker run -d --name "$container" --restart no \
             -p 127.0.0.1::80/tcp \
-            -p 127.0.0.1::7890/tcp \
             -v "$data_dir:/data" \
             s5m-agent-smartdns:test >/dev/null
 
@@ -212,7 +211,6 @@ jobs:
 
           docker run -d --name "$container" --restart no \
             -p 127.0.0.1::80/tcp \
-            -p 127.0.0.1::7890/tcp \
             -v "$data_dir:/data" \
             s5m-agent-smartdns:arm64-test >/dev/null
 
