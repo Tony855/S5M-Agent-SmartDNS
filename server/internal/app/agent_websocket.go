@@ -767,7 +767,11 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if msg.Type != "heartbeat" {
-			fmt.Printf("agent_ws: request received machine_code=%q type=%q id=%q\n", machineCode, msg.Type, msg.ID)
+			if msg.Type == "config.request" {
+				fmt.Printf("agent_ws: config request machine_code=%q id=%q client_sha256=%q\\n", machineCode, msg.ID, msg.ConfigHash)
+			} else {
+				fmt.Printf("agent_ws: request received machine_code=%q type=%q id=%q\\n", machineCode, msg.Type, msg.ID)
+			}
 		}
 		if msg.Type == "config.request" || msg.Type == "command.request" || msg.Type == "command.ack" {
 			// Serialize sensitive WebSocket operations with connection replacement and
