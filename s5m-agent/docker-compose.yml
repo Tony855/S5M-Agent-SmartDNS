@@ -8,11 +8,6 @@ services:
       S5M_HOSTNAME: ${S5M_HOSTNAME:-}
     ports:
       - "80:80"
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
     volumes:
       - ./data:/data
-    # Transparent proxying uses Mihomo TUN; enable tun.enable per node after host support is verified.
-    # Keep Docker bridge mode; never use network_mode: host for a TUN-enabled Agent.
+    # Default is least privilege. Add docker-compose.tun.yml only after explicitly enabling TUN.
