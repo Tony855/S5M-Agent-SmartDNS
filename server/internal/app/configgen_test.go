@@ -110,6 +110,21 @@ proxies:
 	}
 }
 
+func TestNormalizeAgentProxyConfigPreservesExplicitProxyAuthentication(t *testing.T) {
+	input := `secret: api-secret
+allow-lan: false
+authentication:
+  - "operator:custom-password"
+`
+	got, err := normalizeAgentProxyConfig(input)
+	if err != nil { t.Fatalf("normalizeAgentProxyConfig: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode YAML: %v", err) }
+	auth, ok := config["authentication"].([]any)
+	if !ok || len(auth) != 1 || auth[0] != "operator:custom-password" { t.Fatalf("explicit operator authentication was not preserved: %#v", config["authentication"]) }
+	if config["allow-lan"] != true { t.Fatalf("allow-lan = %#v, want true", config["allow-lan"]) }
+}
+
 func TestNormalizeAgentProxyConfigKeepsBootstrapIndependentFromSmartDNSAndTUN(t *testing.T) {
 	input := `secret: test-secret
 dns:
