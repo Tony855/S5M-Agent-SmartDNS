@@ -304,13 +304,14 @@ proxies:
   - name: stale-proxy
     type: socks5
 rules:
+  - DOMAIN-SUFFIX,custom-node.example,DIRECT
   - MATCH,DIRECT
 `
 	if err := store.SaveNodeConfig("node-a", customYAML); err != nil {
 		t.Fatalf("SaveNodeConfig: %v", err)
 	}
 	proxy := &Proxy{
-		Name: "managed-proxy", Mode: "proxy", Type: "socks5",
+		Name: "managed-proxy", Mode: "rule", Type: "socks5",
 		Server: "192.0.2.50", Port: 1080, MachineCode: "node-a",
 		SourceCIDR: "0.0.0.0/0", Enabled: true,
 	}
@@ -336,12 +337,14 @@ rules:
 			"enable: false",
 			"listen: 127.0.0.1:5353",
 			"managed-proxy",
+			"DOMAIN-SUFFIX,custom-node.example,DIRECT",
+			"MATCH,REJECT",
 		} {
 			if !strings.Contains(got.YAML, want) {
 				t.Errorf("attempt %d: synced YAML lost or omitted %q:\n%s", attempt, want, got.YAML)
 			}
 		}
-		if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") {
+		if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") || strings.Contains(got.YAML, "MATCH,DIRECT") {
 			t.Errorf("attempt %d: managed proxy/rule sections were not refreshed:\n%s", attempt, got.YAML)
 		}
 	}
@@ -594,6 +597,7 @@ proxies:
   - name: stale-proxy
     type: socks5
 rules:
+  - DOMAIN-SUFFIX,custom.example,DIRECT
   - MATCH,DIRECT
 `
 	generated := `mode: rule
@@ -602,20 +606,26 @@ proxies:
   - name: managed-proxy
     type: http
 rules:
-  - MATCH,managed-proxy
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - DOMAIN,controller.example.com,DIRECT
+  - MATCH,REJECT
 `
 
 	got, err := mergeManagedProxySections(custom, generated)
 	if err != nil {
 		t.Fatalf("合并全局配置失败: %v", err)
 	}
-	for _, want := range []string{"mode: global", "mixed-port: 7890", "enable: true", "managed-proxy", "MATCH,managed-proxy"} {
+	for _, want := range []string{"mode: global", "mixed-port: 7890", "enable: true", "managed-proxy", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "DOMAIN-SUFFIX,custom.example,DIRECT", "MATCH,REJECT"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("合并配置缺少 %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "stale-proxy") || strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatalf("代理数据库管理的 proxies/rules 应覆盖旧内容:\n%s", got)
+	if strings.Contains(got, "stale-proxy") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "GEOIP,CN,DIRECT") {
+		t.Fatalf("严格规则模式必须移除旧终结 MATCH/DIRECT 和大陆自动直连:\n%s", got)
+	}
+	if strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "DOMAIN-SUFFIX,custom.example,DIRECT") ||
+		strings.Index(got, "DOMAIN-SUFFIX,custom.example,DIRECT") > strings.Index(got, "MATCH,REJECT") {
+		t.Fatalf("系统直连规则、自定义规则、最终 MATCH 顺序错误:\n%s", got)
 	}
 }
 
