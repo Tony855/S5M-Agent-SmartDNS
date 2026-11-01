@@ -11,6 +11,7 @@ awk '
 ' "$DEPLOY" >"$tmp"
 # shellcheck disable=SC1090
 CONTAINER_NAME=s5m-agent
+log() { :; }
 source "$tmp"
 trap - EXIT
 assert_eq() {
