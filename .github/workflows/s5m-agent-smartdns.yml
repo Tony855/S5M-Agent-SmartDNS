@@ -22,6 +22,8 @@ on:
       - "s5m-agent/services/**"
       - "server/internal/app/configgen.go"
       - "server/internal/app/configgen_test.go"
+      - "server/web/index.html"
+      - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
       - ".github/workflows/release.yml"
   push:
@@ -61,6 +63,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate routing mode selector defaults and availability
+        run: |
+          grep -q "mode: 'rule'" server/web/app.js
+          grep -q 'value="rule"' server/web/index.html
+          grep -q 'value="split"' server/web/index.html
+          ! grep -Eq 'el-option[^>]*value="split"[^>]*disabled|el-option[^>]*disabled[^>]*value="split"' server/web/index.html
+          rule_line="$(grep -n 'value="rule"' server/web/index.html | head -n1 | cut -d: -f1)"
+          split_line="$(grep -n 'value="split"' server/web/index.html | head -n1 | cut -d: -f1)"
+          test "$rule_line" -lt "$split_line"
+          grep -q 'return "rule"' server/internal/app/configgen.go
+          grep -q 'MATCH,REJECT' server/internal/app/configgen.go
 
       - name: Validate default and opt-in TUN deployment permissions
         run: |
