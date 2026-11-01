@@ -896,12 +896,15 @@ createApp({
             if (!arr || !arr.length) throw new Error('找不到包含 server/address 的节点数组');
             const inheritedProtocol = String(parsedJSON && !Array.isArray(parsedJSON) ? (parsedJSON.protocol || parsedJSON.type || parsedJSON.scheme || '') : '').trim().toLowerCase();
             const lines = arr.map((item, index) => {
-              const name = String(item.name || item.remark || item.proxy_name || item.ps || `节点-${index + 1}`).trim().replace(/[\r\n#]/g, ' ');
+              const name = String(item.name || item.remark || item.remarks || item.proxy_name || item.ps || `节点-${index + 1}`).trim().replace(/[\r\n#]/g, ' ');
               const directURI = String(item.uri || item.url || item.link || item.proxy || item.vmess_link || item.vmessLink || '').trim();
               if (directURI && /^(socks5|socks|http|https|ss|vmess|vless|trojan):\/\//i.test(directURI)) {
                 return directURI.includes('#') ? directURI : directURI + '#' + encodeURIComponent(name);
               }
               let type = String(item.type || item.protocol || item.scheme || item.configType || item.config_type || item.protocolType || inheritedProtocol || '').trim().toLowerCase();
+              // Legacy v2rayN export: {version, remarks, servers:[{address,port,id,alterId,security,network,path}]}
+              // does not declare a protocol. An id plus VMess transport fields identifies VMess.
+              if (!type && (item.id || item.uuid) && (item.alterId !== undefined || item.aid !== undefined || item.network || item.net)) type = 'vmess';
               if (type === 'socks') type = 'socks5';
               if (type === 'https') type = 'http';
               const server = String(item.server || item.address || item.host || item.add || '').trim();
