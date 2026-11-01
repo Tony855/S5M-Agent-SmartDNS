@@ -1,6 +1,6 @@
 # S5M Agent default config with local SmartDNS as the primary DNS resolver.
 # Existing /data/config.yaml is intentionally preserved by the init script.
-allow-lan: false
+allow-lan: true
 mode: rule
 log-level: info
 find-process-mode: strict
@@ -39,7 +39,7 @@ rules:
   - MATCH,DIRECT
 
 tun:
-  enable: false
+  enable: true
   stack: system
   auto-route: true
   auto-detect-interface: true

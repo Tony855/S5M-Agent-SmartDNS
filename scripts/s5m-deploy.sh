@@ -8,7 +8,7 @@ IMAGE_LOCAL="s5m-agent:local"
 CONTAINER="s5m-agent"
 DATA_DIR="/opt/s5m-agent/data"
 PORT_WEB=80
-ENABLE_TUN="${ENABLE_TUN:-0}"
+ENABLE_TUN="${ENABLE_TUN:-1}"
 BACKUP_NAME="${CONTAINER}.rollback.${BASHPID}"
 HAD_OLD=0
 NEW_STARTED=0
@@ -143,13 +143,13 @@ docker tag "$IMAGE_SRC" "$IMAGE_LOCAL" 2>/dev/null || {
 log "保留持久化数据目录：$DATA_DIR"
 install -d -m 0700 "$DATA_DIR"
 
-# TUN 默认关闭；只有显式 ENABLE_TUN=1 才授予 NET_ADMIN 和 TUN 设备。
+# TUN 默认开启；仅在 ENABLE_TUN=0 时关闭 TUN 权限。
 TUN_ARGS=()
 if [ "$ENABLE_TUN" = "1" ]; then
   TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)
-  log "TUN 权限已显式启用，继续使用 bridge 网络隔离。"
+  log "TUN 默认启用：授予 NET_ADMIN 并挂载 /dev/net/tun，继续使用 bridge 网络隔离。"
 else
-  log "默认最小权限：未授予 NET_ADMIN，也未挂载 /dev/net/tun。"
+  log "已显式关闭 TUN：未授予 NET_ADMIN，也未挂载 /dev/net/tun。"
 fi
 
 # 只替换目标 Agent 容器；不触碰其他容器、镜像、卷或网络。

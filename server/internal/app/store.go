@@ -37,7 +37,7 @@ type Instance struct {
 type Proxy struct {
 	ID          int64          `json:"id"`
 	Name        string         `json:"name"`
-	Mode        string         `json:"mode"`
+	Mode        string         `json:"-"`
 	Type        string         `json:"type"`
 	Server      string         `json:"server"`
 	Port        int            `json:"port"`
@@ -140,8 +140,27 @@ CREATE INDEX IF NOT EXISTS idx_cv_version ON config_versions(version DESC);
 		s.db.Exec("ALTER TABLE proxies ADD COLUMN machine_code TEXT NOT NULL DEFAULT ''")
 	}
 
-	// TUN is disabled by default for new installations. Preserve an existing explicit operator choice.
-	s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'false')`)
+	// Routing policy belongs to a machine, never to an individual proxy record.
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS machine_proxy_settings (
+		machine_code TEXT PRIMARY KEY,
+		routing_mode TEXT NOT NULL DEFAULT 'rule',
+		updated_at TEXT NOT NULL
+	)`); err != nil { return fmt.Errorf("创建机器代理模式表失败: %w", err) }
+	// One-time compatibility migration: preserve the earliest valid legacy mode
+	// for each machine. Global/unbound records are deliberately excluded.
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO machine_proxy_settings(machine_code,routing_mode,updated_at)
+		SELECT p.machine_code,
+			CASE p.mode WHEN 'proxy' THEN 'return' WHEN 'china' THEN 'split' ELSE p.mode END,
+			?
+		FROM proxies p
+		WHERE trim(p.machine_code) <> '' AND p.machine_code <> '__GLOBAL__'
+			AND p.enabled=1 AND p.mode IN ('global','split','rule','return','game','proxy','china')
+			AND p.id=(SELECT MIN(p2.id) FROM proxies p2 WHERE p2.machine_code=p.machine_code AND p2.enabled=1 AND p2.mode IN ('global','split','rule','return','game','proxy','china'))`, time.Now().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("迁移旧代理模式到机器设置失败: %w", err)
+	}
+
+	// TUN is enabled by default for new installations. Preserve any existing explicit operator choice.
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'true')`); err != nil { return fmt.Errorf("初始化 TUN 默认设置失败: %w", err) }
 	// 首次启动时自动生成随机 Agent 注册密钥（不再硬编码默认值）
 	var atCount int
 	s.db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='agent_token' AND value != ''`).Scan(&atCount)
@@ -401,6 +420,36 @@ func (s *Store) DeleteInstance(id int64) error {
 	return err
 }
 
+// GetMachineProxyMode returns the persisted routing policy for one machine.
+func (s *Store) ListMachineProxyModes() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT machine_code,routing_mode FROM machine_proxy_settings ORDER BY machine_code`)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() { var code, mode string; if err := rows.Scan(&code, &mode); err != nil { return nil, err }; out[code] = mode }
+	if err := rows.Err(); err != nil { return nil, err }
+	return out, nil
+}
+
+func (s *Store) GetMachineProxyMode(machineCode string) (string, error) {
+	var mode string
+	err := s.db.QueryRow(`SELECT routing_mode FROM machine_proxy_settings WHERE machine_code=?`, strings.TrimSpace(machineCode)).Scan(&mode)
+	if err == sql.ErrNoRows { return "rule", nil }
+	if err != nil { return "", err }
+	return mode, nil
+}
+
+// SetMachineProxyMode atomically changes only the selected machine's routing policy.
+func (s *Store) SetMachineProxyMode(machineCode, mode string) error {
+	machineCode = strings.TrimSpace(machineCode)
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if machineCode == "" || machineCode == "__GLOBAL__" { return fmt.Errorf("机器码无效") }
+	switch mode { case "global", "split", "rule", "return", "game": default: return fmt.Errorf("代理模式无效") }
+	_, err := s.db.Exec(`INSERT INTO machine_proxy_settings(machine_code,routing_mode,updated_at) VALUES(?,?,?)
+		ON CONFLICT(machine_code) DO UPDATE SET routing_mode=excluded.routing_mode,updated_at=excluded.updated_at`, machineCode, mode, time.Now().Format(time.RFC3339))
+	return err
+}
+
 func (s *Store) ListProxies() ([]Proxy, error) {
 	rows, err := s.db.Query(`SELECT id,name,mode,type,server,port,source_cidr,machine_code,config_json,enabled FROM proxies ORDER BY id`)
 	if err != nil {
@@ -439,9 +488,8 @@ func (s *Store) GetProxy(id int64) (*Proxy, error) {
 }
 
 func (s *Store) CreateProxy(p *Proxy) error {
-	if strings.TrimSpace(p.Mode) == "" {
-		p.Mode = "rule"
-	}
+	// Legacy mode is retained in the DB only for one-time migration compatibility.
+	p.Mode = "rule"
 	extra, _ := json.Marshal(p.Extra)
 	res, err := s.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,source_cidr,machine_code,config_json,enabled) VALUES(?,?,?,?,?,?,?,?,?)`, p.Name, p.Mode, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled))
 	if err != nil {
@@ -453,7 +501,7 @@ func (s *Store) CreateProxy(p *Proxy) error {
 
 func (s *Store) UpdateProxy(p *Proxy) error {
 	extra, _ := json.Marshal(p.Extra)
-	_, err := s.db.Exec(`UPDATE proxies SET name=?,mode=?,type=?,server=?,port=?,source_cidr=?,machine_code=?,config_json=?,enabled=? WHERE id=?`, p.Name, p.Mode, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled), p.ID)
+	_, err := s.db.Exec(`UPDATE proxies SET name=?,type=?,server=?,port=?,source_cidr=?,machine_code=?,config_json=?,enabled=? WHERE id=?`, p.Name, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled), p.ID)
 	return err
 }
 

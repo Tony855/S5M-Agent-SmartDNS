@@ -12,8 +12,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestNormalizeAgentProxyConfigRemovesExplicitProxyListeners(t *testing.T) {
-	input := `mixed-port: 7890
+func TestNormalizeAgentProxyConfigKeepsOnlyMixedProxyListenerOn7890(t *testing.T) {
+	input := `secret: test-secret
+mixed-port: 7890
 port: 8080
 socks-port: 8081
 redir-port: 8082
@@ -46,13 +47,19 @@ proxies:
 	if err := yaml.Unmarshal([]byte(got), &config); err != nil {
 		t.Fatalf("decode normalized YAML: %v", err)
 	}
-	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
+	if config["mixed-port"] != 7890 {
+		t.Errorf("mixed-port = %#v, want 7890: %s", config["mixed-port"], got)
+	}
+	for _, key := range []string{"port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
 		if _, exists := config[key]; exists {
-			t.Errorf("explicit proxy listener %q must be removed: %s", key, got)
+			t.Errorf("additional proxy listener %q must be removed: %s", key, got)
 		}
 	}
-	if config["allow-lan"] != false {
-		t.Fatalf("allow-lan = %#v, want false", config["allow-lan"])
+	if config["allow-lan"] != true {
+		t.Fatalf("allow-lan = %#v, want true", config["allow-lan"])
+	}
+	if _, exists := config["authentication"]; exists {
+		t.Fatalf("proxy authentication must be opt-in, got %#v", config["authentication"])
 	}
 	if config["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("external-controller = %#v", config["external-controller"])
@@ -103,8 +110,24 @@ proxies:
 	}
 }
 
+func TestNormalizeAgentProxyConfigPreservesExplicitProxyAuthentication(t *testing.T) {
+	input := `secret: api-secret
+allow-lan: false
+authentication:
+  - "operator:custom-password"
+`
+	got, err := normalizeAgentProxyConfig(input)
+	if err != nil { t.Fatalf("normalizeAgentProxyConfig: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode YAML: %v", err) }
+	auth, ok := config["authentication"].([]any)
+	if !ok || len(auth) != 1 || auth[0] != "operator:custom-password" { t.Fatalf("explicit operator authentication was not preserved: %#v", config["authentication"]) }
+	if config["allow-lan"] != true { t.Fatalf("allow-lan = %#v, want true", config["allow-lan"]) }
+}
+
 func TestNormalizeAgentProxyConfigKeepsBootstrapIndependentFromSmartDNSAndTUN(t *testing.T) {
-	input := `dns:
+	input := `secret: test-secret
+dns:
   default-nameserver:
     - 127.0.0.1:6053
     - bootstrap.example.com
@@ -166,7 +189,7 @@ dns:
 	}
 }
 
-func TestBuildConfigForMachineDoesNotExposeExplicitProxyListener(t *testing.T) {
+func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "config-ports.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
@@ -180,12 +203,18 @@ func TestBuildConfigForMachineDoesNotExposeExplicitProxyListener(t *testing.T) {
 
 	agentYAML, err := app.BuildConfigForMachine("node-a")
 	if err != nil { t.Fatalf("BuildConfigForMachine(agent): %v", err) }
-	for _, forbidden := range []string{"mixed-port:", "port:", "socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
+	if !strings.Contains(agentYAML, "mixed-port: 7890") {
+		t.Errorf("Agent config missing mixed-port 7890:\\n%s", agentYAML)
+	}
+	if !strings.Contains(agentYAML, "tun:\n  enable: true") {
+		t.Errorf("new Agent config should enable TUN by default:\\n%s", agentYAML)
+	}
+	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
 		if strings.Contains(agentYAML, forbidden) {
-			t.Errorf("Agent config must not expose explicit proxy listener %q:\\n%s", forbidden, agentYAML)
+			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
 	}
-	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: false"} {
+	for _, want := range []string{"allow-lan: true", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
 		if !strings.Contains(agentYAML, want) {
 			t.Errorf("Agent initial config missing %q:\\n%s", want, agentYAML)
 		}
@@ -334,7 +363,7 @@ rules:
 		}
 		for _, want := range []string{
 			"mode: rule",
-			"allow-lan: false",
+			"allow-lan: true",
 			"secret: keep-this-secret",
 			"enable: false",
 			"listen: 127.0.0.1:5353",
@@ -346,7 +375,7 @@ rules:
 				t.Errorf("attempt %d: synced YAML lost or omitted %q:\n%s", attempt, want, got.YAML)
 			}
 		}
-		if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") || strings.Contains(got.YAML, "MATCH,DIRECT") {
+		if !strings.Contains(got.YAML, "mixed-port: 7890") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") || strings.Contains(got.YAML, "MATCH,DIRECT") {
 			t.Errorf("attempt %d: managed proxy/rule sections were not refreshed:\n%s", attempt, got.YAML)
 		}
 	}
@@ -385,8 +414,8 @@ func TestSyncAuthorizedNodeConfigsSkipsUnauthorizedNodeConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read authorized config: %v", err)
 	}
-	if authorized == nil || !strings.Contains(authorized.YAML, "preserve-authorized-secret") || strings.Contains(authorized.YAML, "mixed-port:") {
-		t.Fatalf("authorized node's custom settings should be preserved while removing explicit proxy listeners: %+v", authorized)
+	if authorized == nil || !strings.Contains(authorized.YAML, "preserve-authorized-secret") || !strings.Contains(authorized.YAML, "mixed-port: 7890") {
+		t.Fatalf("authorized node's custom settings should be preserved while adding the managed 7890 listener: %+v", authorized)
 	}
 
 	revoked, err := store.GetNodeConfig("revoked")
@@ -560,7 +589,6 @@ func TestBuildConfigRejectsInvalidPersistedProxy(t *testing.T) {
 	}{
 		{name: "empty name", proxy: Proxy{Mode: "proxy", Type: "socks5", Server: "proxy.example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "unsupported type", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "vmess+ws", Server: "proxy.example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
-		{name: "invalid mode", proxy: Proxy{Name: "proxy-a", Mode: "unknown", Type: "socks5", Server: "proxy.example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "empty server", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "server contains whitespace", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Server: "proxy example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "invalid port", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Server: "proxy.example", Port: 65536, MachineCode: "__GLOBAL__", Enabled: true}},
@@ -771,8 +799,8 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 		{mode: "global", want: []string{"MATCH,proxy-a", "DOMAIN,controller.example.com,DIRECT"}},
 		{mode: "split", want: []string{"MATCH,proxy-a"}},
 		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
-		{mode: "return", want: []string{"GEOIP,CN,proxy-a", "MATCH,DIRECT"}},
-		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,game-a", "MATCH,DIRECT"}},
+		{mode: "return", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "GEOIP,CN,DIRECT", "MATCH,proxy-a"}},
+		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,proxy-a", "MATCH,DIRECT"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
@@ -810,6 +838,27 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}
 }
 
+func TestReturnModeWithoutProxyRejectsNonMainlandTraffic(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-a", "test-secret", "return", "")
+	if err != nil { t.Fatalf("build return config: %v", err) }
+	if !strings.Contains(got, "GEOIP,CN,DIRECT") || !strings.Contains(got, "MATCH,REJECT") || strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("return mode without an outbound must not leak non-mainland traffic direct:\n%s", got)
+	}
+}
+
+func TestProxyLegacyModeFieldDoesNotAffectOutboundGeneration(t *testing.T) {
+	proxies := []Proxy{
+		{Name:"legacy-direct", Mode:"direct", Type:"socks5", Server:"192.0.2.31", Port:1080, MachineCode:"node-a", Enabled:true},
+		{Name:"legacy-reject", Mode:"reject", Type:"socks5", Server:"192.0.2.32", Port:1081, MachineCode:"node-a", Enabled:true},
+		{Name:"legacy-unknown", Mode:"obsolete", Type:"socks5", Server:"192.0.2.33", Port:1082, MachineCode:"node-a", Enabled:true},
+	}
+	got, err := buildConfigFromProxiesWithMode(proxies, "node-a", "test-secret", "rule", "")
+	if err != nil { t.Fatalf("legacy mode values must not invalidate outbound records: %v", err) }
+	for _, name := range []string{"legacy-direct", "legacy-reject", "legacy-unknown"} {
+		if !strings.Contains(got, name) { t.Errorf("proxy outbound %q omitted because of legacy mode field", name) }
+	}
+}
+
 func TestLegacySplitModeKeepsHistoricalFallback(t *testing.T) {
 	got, err := buildConfigFromProxiesWithMode(nil, "node-legacy", "test-secret", "split", "")
 	if err != nil {
@@ -830,9 +879,6 @@ func TestStrictRuleModeIsDefault(t *testing.T) {
 	if got := normalizeProxyRoutingMode("unknown"); got != "rule" {
 		t.Fatalf("unknown routing mode = %q, want rule", got)
 	}
-	if got := routingModeForMachine(nil, "node-without-proxy"); got != "rule" {
-		t.Fatalf("routing mode without a matching proxy = %q, want rule", got)
-	}
 	generated, err := buildConfigFromProxies(nil, "node-without-proxy", "test-secret")
 	if err != nil {
 		t.Fatalf("build default config: %v", err)
@@ -840,6 +886,65 @@ func TestStrictRuleModeIsDefault(t *testing.T) {
 	if !strings.Contains(generated, "MATCH,REJECT") || strings.Contains(generated, "MATCH,DIRECT") {
 		t.Fatalf("default config must reject unmatched traffic:\\n%s", generated)
 	}
+}
+
+func TestMachineRoutingModeIsIndependentFromProxyCRUDAndMigratesLegacyMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machine-routing.db")
+	store, err := OpenStore(path)
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	// Simulate a pre-migration database containing an old per-proxy mode.
+	_, err = store.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,machine_code,enabled) VALUES(?,?,?,?,?,?,1)`, "legacy-first", "split", "socks5", "192.0.2.1", 1080, "node-a")
+	if err != nil { t.Fatalf("insert legacy proxy: %v", err) }
+	if err := store.db.Close(); err != nil { t.Fatalf("close store: %v", err) }
+
+	store, err = OpenStore(path)
+	if err != nil { t.Fatalf("reopen/migrate store: %v", err) }
+	defer store.db.Close()
+	mode, err := store.GetMachineProxyMode("node-a")
+	if err != nil || mode != "split" { t.Fatalf("migrated mode = %q, err=%v; want split", mode, err) }
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatalf("SetMachineProxyMode: %v", err) }
+
+	proxy := &Proxy{Name: "new-proxy", Mode: "global", Type: "socks5", Server: "192.0.2.2", Port: 1080, MachineCode: "node-a", SourceCIDR: "0.0.0.0/0", Enabled: true}
+	if err := store.CreateProxy(proxy); err != nil { t.Fatalf("CreateProxy: %v", err) }
+	proxy.Name = "renamed-proxy"
+	proxy.Server = "192.0.2.3"
+	if err := store.UpdateProxy(proxy); err != nil { t.Fatalf("UpdateProxy: %v", err) }
+	if err := store.DeleteProxy(proxy.ID); err != nil { t.Fatalf("DeleteProxy: %v", err) }
+	mode, err = store.GetMachineProxyMode("node-a")
+	if err != nil || mode != "return" { t.Fatalf("proxy CRUD changed machine mode to %q, err=%v; want return", mode, err) }
+	if err := store.SetMachineProxyMode("node-b", "game"); err != nil { t.Fatalf("set node-b mode: %v", err) }
+	modeA, _ := store.GetMachineProxyMode("node-a")
+	modeB, _ := store.GetMachineProxyMode("node-b")
+	if modeA != "return" || modeB != "game" { t.Fatalf("machine modes not isolated: node-a=%q node-b=%q", modeA, modeB) }
+}
+
+func TestMachineProxyModeMigrationIsDeterministicAndExcludesGlobalOrDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machine-routing-conflicts.db")
+	store, err := OpenStore(path)
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	_, err = store.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,machine_code,enabled) VALUES
+		('disabled-old','global','socks5','192.0.2.1',1080,'node-a',0),
+		('first-valid','split','socks5','192.0.2.2',1081,'node-a',1),
+		('second-valid','return','socks5','192.0.2.3',1082,'node-a',1),
+		('shared-global','return','socks5','192.0.2.4',1083,'__GLOBAL__',1)`)
+	if err != nil { t.Fatalf("insert legacy rows: %v", err) }
+	if err := store.db.Close(); err != nil { t.Fatalf("close store: %v", err) }
+
+	store, err = OpenStore(path)
+	if err != nil { t.Fatalf("reopen/migrate: %v", err) }
+	defer store.db.Close()
+	mode, err := store.GetMachineProxyMode("node-a")
+	if err != nil || mode != "split" { t.Fatalf("migrated conflict mode=%q err=%v, want earliest enabled split", mode, err) }
+	var globalRows int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM machine_proxy_settings WHERE machine_code='__GLOBAL__'`).Scan(&globalRows); err != nil { t.Fatal(err) }
+	if globalRows != 0 { t.Fatalf("global proxy unexpectedly created a machine routing setting") }
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	if err := store.db.Close(); err != nil { t.Fatalf("close migrated store: %v", err) }
+	store, err = OpenStore(path)
+	if err != nil { t.Fatalf("reopen after explicit mode: %v", err) }
+	defer store.db.Close()
+	mode, err = store.GetMachineProxyMode("node-a")
+	if err != nil || mode != "return" { t.Fatalf("repeat migration overwrote explicit mode: mode=%q err=%v", mode, err) }
 }
 
 func TestStoreCreateProxyDefaultsToStrictRuleMode(t *testing.T) {
@@ -861,37 +966,6 @@ func TestStoreCreateProxyDefaultsToStrictRuleMode(t *testing.T) {
 	}
 }
 
-func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
-	proxies := []Proxy{
-		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
-		{Name: "node-b-proxy", Mode: "rule", MachineCode: "node-b", Enabled: true},
-		{Name: "global-proxy", Mode: "game", MachineCode: "__GLOBAL__", Enabled: true},
-	}
-	if got := routingModeForMachine(proxies, "node-a"); got != "return" {
-		t.Fatalf("node-a routing mode = %q, want return", got)
-	}
-	if got := routingModeForMachine(proxies, "node-b"); got != "rule" {
-		t.Fatalf("node-b routing mode = %q, want rule", got)
-	}
-	if got := routingModeForMachine(proxies, ""); got != "game" {
-		t.Fatalf("global routing mode = %q, want game", got)
-	}
-}
-
-func TestRoutingModeForMachineMixedProxyModesKeepStableFirstMode(t *testing.T) {
-	proxies := []Proxy{
-		{Name: "legacy-anchor", Mode: "split", MachineCode: "node-mixed", Enabled: true},
-		{Name: "additional-rule-proxy", Mode: "rule", MachineCode: "node-mixed", Enabled: true},
-	}
-	if got := routingModeForMachine(proxies, "node-mixed"); got != "split" {
-		t.Fatalf("mixed-mode node routing mode = %q, want stable first persisted mode split", got)
-	}
-	reordered := []Proxy{proxies[1], proxies[0]}
-	if got := routingModeForMachine(reordered, "node-mixed"); got != "rule" {
-		t.Fatalf("routing mode must follow persisted proxy order; got %q, want rule", got)
-	}
-}
-
 func TestNormalizeProxyRoutingModePreservesHistoricalAliases(t *testing.T) {
 	cases := []struct {
 		input string
@@ -909,68 +983,6 @@ func TestNormalizeProxyRoutingModePreservesHistoricalAliases(t *testing.T) {
 				t.Fatalf("normalizeProxyRoutingMode(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestBuildConfigForHistoricalProxyAliasesKeepsTheirTrafficPolicy(t *testing.T) {
-	cases := []struct {
-		name string
-		mode string
-		want []string
-		avoid []string
-	}{
-		{name: "proxy alias", mode: "proxy", want: []string{"GEOIP,CN,legacy-proxy", "MATCH,DIRECT"}, avoid: []string{"MATCH,REJECT"}},
-		{name: "china alias", mode: "china", want: []string{"MATCH,legacy-proxy"}, avoid: []string{"GEOIP,CN,", "MATCH,REJECT"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			proxies := []Proxy{{
-				Name: "legacy-proxy", Mode: tc.mode, Type: "socks5",
-				Server: "192.0.2.20", Port: 1080, MachineCode: "node-legacy", Enabled: true,
-			}}
-			mode := routingModeForMachine(proxies, "node-legacy")
-			got, err := buildConfigFromProxiesWithMode(proxies, "node-legacy", "test-secret", mode, "")
-			if err != nil {
-				t.Fatalf("build config: %v", err)
-			}
-			for _, want := range tc.want {
-				if !strings.Contains(got, want) {
-					t.Errorf("historical mode %q lost expected rule %q:\\n%s", tc.mode, want, got)
-				}
-			}
-			for _, avoid := range tc.avoid {
-				if strings.Contains(got, avoid) {
-					t.Errorf("historical mode %q unexpectedly contains %q:\\n%s", tc.mode, avoid, got)
-				}
-			}
-		})
-	}
-}
-
-func TestRoutingModeForMachineUsesPersistedProxyIDOrder(t *testing.T) {
-	store, err := OpenStore(filepath.Join(t.TempDir(), "routing-mode-order.db"))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.db.Close()
-
-	for _, proxy := range []*Proxy{
-		{Name: "legacy-split-first", Mode: "split", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: "node-a", Enabled: true},
-		{Name: "new-rule-second", Mode: "rule", Type: "socks5", Server: "192.0.2.11", Port: 1081, MachineCode: "node-a", Enabled: true},
-	} {
-		if err := store.CreateProxy(proxy); err != nil {
-			t.Fatalf("CreateProxy(%s): %v", proxy.Name, err)
-		}
-	}
-	persisted, err := store.ListProxies()
-	if err != nil {
-		t.Fatalf("ListProxies: %v", err)
-	}
-	if len(persisted) != 2 || persisted[0].Name != "legacy-split-first" || persisted[1].Name != "new-rule-second" {
-		t.Fatalf("ListProxies order = %#v, want stable insertion/ID order", persisted)
-	}
-	if got := routingModeForMachine(persisted, "node-a"); got != "split" {
-		t.Fatalf("routing mode = %q, want legacy split anchor", got)
 	}
 }
 
@@ -1019,7 +1031,7 @@ func TestBuildConfigIncludesTUNDNSDefaults(t *testing.T) {
 		t.Fatalf("buildConfigFromProxies() error = %v", err)
 	}
 	for _, want := range []string{
-		"enable: false",
+		"enable: true",
 		"stack: system",
 		"auto-route: true",
 		"auto-detect-interface: true",
@@ -1155,11 +1167,11 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 	if got == nil {
 		t.Fatal("node config missing after sync")
 	}
-	if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "&s5m_shared_proxy") || strings.Contains(got.YAML, "<<:") {
+	if !strings.Contains(got.YAML, "mixed-port: 7890") || strings.Contains(got.YAML, "&s5m_shared_proxy") || strings.Contains(got.YAML, "<<:") {
 		t.Fatalf("saved per-node YAML should contain expanded proxy fields, not merge aliases:\n%s", got.YAML)
 	}
 	for _, want := range []string{
-		"allow-lan: false",
+		"allow-lan: true",
 		"secret: keep-this-secret",
 		"same-vless-443",
 		"same-vless-8443",
@@ -1209,8 +1221,8 @@ func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSetting(tun_enable): %v", err)
 	}
-	if got != "false" {
-		t.Fatalf("tun_enable default = %q, want false", got)
+	if got != "true" {
+		t.Fatalf("tun_enable default = %q, want true", got)
 	}
 }
 
@@ -1303,8 +1315,14 @@ func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply unhealthy SmartDNS fallback: %v", err)
 	}
-	if fallback != source {
-		t.Fatalf("unhealthy SmartDNS must retain original DNS upstreams\nwant:\n%s\ngot:\n%s", source, fallback)
+	if !strings.Contains(fallback, "1.1.1.1") || !strings.Contains(fallback, "8.8.8.8") {
+		t.Fatalf("unhealthy SmartDNS must preserve operator DNS upstreams:\n%s", fallback)
+	}
+	generated := "dns:\n  enable: true\n  nameserver:\n    - 127.0.0.1:6053\n  default-nameserver:\n    - 223.5.5.5\n"
+	safeFallback, err := applyAgentRuntimeDNS(generated, false)
+	if err != nil { t.Fatalf("fallback generated SmartDNS DNS: %v", err) }
+	if !strings.Contains(safeFallback, "223.5.5.5") || strings.Contains(safeFallback, "127.0.0.1:6053") {
+		t.Fatalf("unhealthy generated SmartDNS must fall back to independent resolvers:\n%s", safeFallback)
 	}
 }
 

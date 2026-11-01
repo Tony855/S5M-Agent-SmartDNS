@@ -47,8 +47,7 @@ dns:
         - 223.5.5.5
         - 119.29.29.29
     nameserver:
-        - 223.5.5.5
-        - 119.29.29.29
+        - 127.0.0.1:6053
     fallback:
         - https://dns.cloudflare.com/dns-query
         - https://dns.google/dns-query
@@ -56,7 +55,7 @@ dns:
         geoip: true
         geoip-code: CN
 tun:
-    enable: false
+    enable: true
     stack: system
     auto-route: true
     auto-detect-interface: true
@@ -132,7 +131,10 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 		}
 	}
 	root.Content = filtered
-	setScalar(root, "allow-lan", "false", "!!bool")
+	// Expose the mixed proxy listener to the LAN. Proxy authentication is
+	// intentionally opt-in; the Mihomo API secret remains independently enabled.
+	setScalar(root, "mixed-port", "7890", "!!int")
+	setScalar(root, "allow-lan", "true", "!!bool")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
 	setScalar(root, "find-process-mode", "strict", "!!str")
@@ -453,10 +455,41 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 
 // applyAgentRuntimeDNS derives the outgoing Agent config without mutating its persisted source.
 func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
-	if !smartDNSHealthy {
-		return yml, nil
+	if smartDNSHealthy {
+		return routeAgentDNSViaSmartDNS(yml)
 	}
-	return routeAgentDNSViaSmartDNS(yml)
+	// Never leave the generated SmartDNS loopback as the only resolver when
+	// SmartDNS is unhealthy. Preserve operator-selected nameservers otherwise.
+	return routeAgentDNSFallbackIfSmartDNS(yml)
+}
+
+func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 Agent DNS 回退配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 回退配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "dns" || root.Content[i+1].Kind != yaml.MappingNode { continue }
+		dns := root.Content[i+1]
+		for j := 0; j+1 < len(dns.Content); j += 2 {
+			if dns.Content[j].Value != "nameserver" { continue }
+			servers := dns.Content[j+1]
+			if servers.Kind != yaml.SequenceNode || len(servers.Content) != 1 || servers.Content[0].Value != "127.0.0.1:6053" {
+				return yml, nil
+			}
+			servers.Content = []*yaml.Node{
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+			}
+			out, err := yaml.Marshal(&doc)
+			return string(out), err
+		}
+	}
+	return yml, nil
 }
 
 // restoreAgentDNSNameserver restores only dns.nameserver from a freshly generated baseline.
@@ -498,6 +531,14 @@ func restoreAgentDNSNameserver(yml, fallbackYML string) (string, bool, error) {
 	}
 	if fallbackNameserver == nil || fallbackNameserver.Kind != yaml.SequenceNode || len(fallbackNameserver.Content) == 0 {
 		return "", false, fmt.Errorf("基准 Agent 配置缺少有效 dns.nameserver，拒绝保留失效的 SmartDNS 地址")
+	}
+	// The generated baseline now prefers SmartDNS. Legacy migration while
+	// SmartDNS is unhealthy must restore independent bootstrap resolvers instead.
+	if len(fallbackNameserver.Content) == 1 && fallbackNameserver.Content[0].Value == "127.0.0.1:6053" {
+		fallbackNameserver = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+		}}
 	}
 	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
 		if currentDNS.Content[i].Value == "nameserver" {
@@ -569,7 +610,11 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("读取 Mihomo 设置失败: %w", err)
 	}
-	mode := routingModeForMachine(proxies, machineCode)
+	mode := "rule"
+	if strings.TrimSpace(machineCode) != "" {
+		mode, err = a.store.GetMachineProxyMode(machineCode)
+		if err != nil { return "", fmt.Errorf("读取机器代理模式失败: %w", err) }
+	}
 	controllerHost := controllerHostFromSettings(settings)
 	yml, err := buildConfigFromProxiesWithMode(proxies, machineCode, secret, mode, controllerHost)
 	if err != nil {
@@ -584,9 +629,10 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	}
 	// SmartDNS is applied only to the runtime WebSocket payload. Never persist
 	// the Agent-local 127.0.0.1:6053 resolver into the operator's source YAML.
-	// TUN is opt-in for generated configs. Existing saved per-node YAML remains authoritative.
-	if strings.EqualFold(strings.TrimSpace(settings["tun_enable"]), "true") {
-		yml = strings.Replace(yml, "tun:\n    enable: false", "tun:\n    enable: true", 1)
+	// The global default is enabled for new installations. Respect an explicit
+	// controller setting for generated configs; saved per-node YAML remains authoritative.
+	if strings.EqualFold(strings.TrimSpace(settings["tun_enable"]), "false") {
+		yml = strings.Replace(yml, "tun:\n    enable: true", "tun:\n    enable: false", 1)
 	}
 	return yml, nil
 }
@@ -715,35 +761,6 @@ func normalizeProxyRoutingMode(raw string) string {
 	}
 }
 
-func routingModeForMachine(proxies []Proxy, machineCode string) string {
-	// A Mihomo config has one routing mode for the whole machine, not one mode
-	// per proxy. ListProxies is persisted in stable ID order, so the first
-	// enabled proxy assigned to this machine remains the compatibility anchor.
-	// Additional proxies contribute outbound nodes but cannot silently change
-	// an existing machine's traffic policy.
-	for _, p := range proxies {
-		if !p.Enabled || p.Mode == "direct" || p.Mode == "reject" {
-			continue
-		}
-		matches := p.MachineCode == "__GLOBAL__" && machineCode == ""
-		if machineCode != "" && strings.TrimSpace(p.MachineCode) == machineCode {
-			matches = true
-		}
-		if !matches {
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(p.Mode)) {
-		case "global", "split", "rule", "return", "game":
-			return normalizeProxyRoutingMode(p.Mode)
-		case "proxy":
-			return "return"
-		case "china":
-			return "split"
-		}
-	}
-	return "rule"
-}
-
 func controllerHostFromSettings(settings map[string]string) string {
 	candidates := []string{settings["central_url"], settings["public_url"], settings["server_url"], settings["agent_central_url"]}
 	candidates = append(candidates, os.Getenv("S5M_CENTRAL_URL"), os.Getenv("S5M_PUBLIC_URL"), os.Getenv("PUBLIC_URL"))
@@ -838,7 +855,6 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	proxies = append([]Proxy(nil), proxies...)
 	for i := range proxies {
 		proxies[i].Name = strings.TrimSpace(proxies[i].Name)
-		proxies[i].Mode = strings.TrimSpace(proxies[i].Mode)
 		proxies[i].Type = strings.ToLower(strings.TrimSpace(proxies[i].Type))
 		proxies[i].Server = strings.TrimSpace(proxies[i].Server)
 		proxies[i].MachineCode = strings.TrimSpace(proxies[i].MachineCode)
@@ -850,9 +866,9 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		}
 		return machineCode != "" && p.MachineCode == machineCode
 	}
-	eligible := func(p Proxy) bool {
-		return p.Enabled && p.Mode != "direct" && p.Mode != "reject" && matchesMachine(p)
-	}
+	// Proxy rows describe outbound nodes only. Their legacy mode column is
+	// intentionally ignored; machine_proxy_settings is the sole routing policy.
+	eligible := func(p Proxy) bool { return p.Enabled && matchesMachine(p) }
 	endpointKey := func(p Proxy) string {
 		return strings.ToLower(strings.TrimSpace(p.Type)) + "|" +
 			strings.Trim(strings.TrimSpace(p.Server), "[]") + "|" +
@@ -869,11 +885,6 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		}
 		if p.Name == "" || len(p.Name) > 100 {
 			return "", fmt.Errorf("代理名称不能为空且不能超过 100 个字符")
-		}
-		switch p.Mode {
-		case "proxy", "china", "global", "split", "rule", "return", "game":
-		default:
-			return "", fmt.Errorf("代理 %q 的运行模式无效：%q", p.Name, p.Mode)
 		}
 		switch p.Type {
 		case "socks5", "http", "ss", "vmess", "vless", "trojan":
@@ -989,17 +1000,8 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		rules = append(rules, fmt.Sprintf("SRC-IP-CIDR,%s,%s", canonical, target))
 	}
 
-	firstProxy, firstGameProxy := "", ""
-	for _, p := range outs {
-		if firstProxy == "" {
-			firstProxy = p.Name
-		}
-		for _, original := range proxies {
-			if original.Name == p.Name && original.Mode == "game" && firstGameProxy == "" {
-				firstGameProxy = p.Name
-			}
-		}
-	}
+	firstProxy := ""
+	if len(outs) > 0 { firstProxy = outs[0].Name }
 	switch routingMode {
 	case "global":
 		if firstProxy != "" {
@@ -1018,18 +1020,17 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		// Strict rule mode: only explicit rules may pass traffic; unmatched traffic is rejected.
 		rules = append(rules, "MATCH,REJECT")
 	case "return":
-		// Return-to-China mode: mainland destinations use the proxy; overseas destinations go direct.
+		// Return-to-China mode: mainland destinations stay direct; all other
+		// traffic uses the selected proxy to exit through the mainland node.
+		rules = append(rules, "GEOIP,CN,DIRECT")
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("GEOIP,CN,%s", firstProxy))
+			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
 		} else {
-			rules = append(rules, "GEOIP,CN,DIRECT")
+			// Never silently bypass the mainland-exit requirement when no proxy exists.
+			rules = append(rules, "MATCH,REJECT")
 		}
-		rules = append(rules, "MATCH,DIRECT")
 	case "game":
-		gameProxy := firstGameProxy
-		if gameProxy == "" {
-			gameProxy = firstProxy
-		}
+		gameProxy := firstProxy
 		if gameProxy != "" {
 			for _, domain := range []string{"steampowered.com", "steamcommunity.com", "steamcontent.com", "epicgames.com", "playstation.net", "playstation.com", "xboxlive.com", "xbox.com", "battle.net", "blizzard.com", "riotgames.com", "leagueoflegends.com", "valorant.com", "ea.com"} {
 				rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, gameProxy))

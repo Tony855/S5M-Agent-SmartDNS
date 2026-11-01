@@ -1023,34 +1023,7 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 			yml = latest.YAML
 		}
 	}
-	// Migrate legacy persisted configs that were previously overwritten with the
-	// SmartDNS loopback resolver. Restore only nameserver from a fresh generated
-	// baseline, using CAS so a concurrent operator edit always wins.
-	if !a.agentHasHealthySmartDNS(machineCode) {
-		baseline, baselineErr := a.BuildConfigForMachine(machineCode)
-		if baselineErr != nil {
-			return fmt.Errorf("生成 DNS 回退基准配置失败，拒绝下发可能失效的 SmartDNS 地址: %w", baselineErr)
-		}
-		restored, changed, restoreErr := restoreAgentDNSNameserver(yml, baseline)
-		if restoreErr != nil { return restoreErr }
-		if changed {
-			updated, saveErr := a.store.SaveNodeConfigIfUnchanged(machineCode, yml, restored)
-			if saveErr != nil { return fmt.Errorf("保存旧版 SmartDNS DNS 回退迁移失败: %w", saveErr) }
-			if !updated {
-				latest, readErr := a.store.GetNodeConfig(machineCode)
-				if readErr != nil { return readErr }
-				if latest == nil || strings.TrimSpace(latest.YAML) == "" { return fmt.Errorf("DNS 回退迁移发生并发冲突，且最新节点配置不存在") }
-				yml = latest.YAML
-				// Never overwrite a newer concurrent edit. If it still contains the
-				// legacy endpoint, stop and let the next request retry against it.
-				if _, stillLegacy, checkErr := restoreAgentDNSNameserver(yml, baseline); checkErr != nil { return checkErr } else if stillLegacy {
-					return fmt.Errorf("DNS 回退迁移遇到并发配置更新，未覆盖新配置；请重试配置同步")
-				}
-			} else {
-				yml = restored
-			}
-		}
-	}
+
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
 	// Apply it only to the outgoing payload so health loss immediately falls back
 	// to the original configured nameservers on the next config request.

@@ -10,4 +10,8 @@ services:
       - "80:80"
     volumes:
       - ./data:/data
-    # Default is least privilege. Add docker-compose.tun.yml only after explicitly enabling TUN.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    # TUN is enabled by default. Host must provide /dev/net/tun.

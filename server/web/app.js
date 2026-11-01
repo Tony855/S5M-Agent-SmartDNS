@@ -92,8 +92,10 @@ createApp({
     const restoringBackup = ref(false);
 
     const proxyDialog = ref(false);
-    const proxyForm = reactive({ id: 0, name: '', mode: 'rule', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
+    const proxyForm = reactive({ id: 0, name: '', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
     const savingProxy = ref(false);
+    const machineProxyModes = reactive({});
+    const savingMachineProxyMode = reactive({});
 
     const showImport = ref(false);
     const importTab = ref('text');
@@ -673,7 +675,7 @@ createApp({
     };
 
     const openCreateProxy = () => {
-      Object.assign(proxyForm, { id: 0, name: '', mode: 'rule', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
+      Object.assign(proxyForm, { id: 0, name: '', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
       // 如果当前正在看某个机器的分组，默认绑定该机器
       if (activeGroup.value !== 'ALL' && activeGroup.value !== 'UNBOUND') {
         proxyForm.machine_code = activeGroup.value;
@@ -684,7 +686,7 @@ createApp({
     const openEditProxy = (row) => {
       const extra = row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra) ? row.extra : {};
       Object.assign(proxyForm, {
-        id: row.id || 0, name: row.name || row.proxy_name || '', mode: ({ proxy: 'return', china: 'split' }[row.mode] || row.mode || 'rule'),
+        id: row.id || 0, name: row.name || row.proxy_name || '',
         type: row.type || row.proxy_type || 'socks5',
         server: row.server || '', port: row.port || 1080, machine_code: row.machine_code || '',
         source_cidr: row.source_cidr || '0.0.0.0/0',
@@ -723,7 +725,7 @@ createApp({
           type: 'proxy.save',
           proxy_id: isEdit ? String(proxyForm.id) : '',
           proxy: {
-            name: proxyForm.name, mode: proxyForm.mode || 'rule', type: proxyForm.type, server: proxyForm.server, port: proxyForm.port,
+            name: proxyForm.name, type: proxyForm.type, server: proxyForm.server, port: proxyForm.port,
             machine_code: proxyForm.machine_code, source_cidr: proxyForm.source_cidr || '0.0.0.0/0',
             enabled: Boolean(proxyForm.enabled), extra: extra
           }
@@ -968,6 +970,7 @@ createApp({
           retryAfterRevocation = true;
         } else {
           agentEntries.value = list;
+          await loadMachineProxyModes(list);
         }
       } catch (e) {
         if (!hasExistingData) {
@@ -984,6 +987,33 @@ createApp({
           Promise.resolve().then(() => loadAgentsData());
         }
       }
+    };
+
+    const loadMachineProxyModes = async (items) => {
+      try {
+        const res = await api('/api/v1/nodes/proxy-modes');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '读取机器代理模式失败');
+        (Array.isArray(items) ? items : []).forEach(item => {
+          if (item && item.code) machineProxyModes[item.code] = data[item.code] || 'rule';
+        });
+      } catch (e) { console.warn('批量读取机器代理模式失败', e); }
+    };
+
+    const saveMachineProxyMode = async (code) => {
+      const machineCode = String(code || '').trim();
+      if (!machineCode || savingMachineProxyMode[machineCode]) return;
+      const mode = String(machineProxyModes[machineCode] || 'rule');
+      savingMachineProxyMode[machineCode] = true;
+      try {
+        const res = await api('/api/v1/nodes/' + encodeURIComponent(machineCode) + '/proxy-mode', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routing_mode: mode })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.message || '保存机器代理模式失败');
+        showMsg(data.message || '机器代理模式已保存', 'success');
+      } catch (e) { showMsg(e.message || '保存机器代理模式失败', 'error'); await loadMachineProxyModes([{ code: machineCode }]); }
+      finally { savingMachineProxyMode[machineCode] = false; }
     };
 
     const generateAgentToken = async () => {
@@ -1409,6 +1439,7 @@ createApp({
       systemLogs, loadingSystemLogs, restoringBackup, loadSystemLogs, downloadBackup, restoreBackup,
       mainMihomoStatus, loadMainMihomoStatus,
       proxyDialog, proxyForm, savingProxy,
+      machineProxyModes, savingMachineProxyMode, saveMachineProxyMode,
       showImport, importTab, importText, importing, importMachineCode,
       switchPage, doLogin, logout, loadOverview,
       updateKernel, recoverMihomoUpdateTask, loadProxies, openCreateProxy, openEditProxy, saveProxy, deleteProxy, importProxies, handleFileUpload,

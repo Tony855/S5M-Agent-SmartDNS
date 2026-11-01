@@ -47,8 +47,7 @@ dns:
     - "*.lan"
     - "+.v2net.cc"
   nameserver:
-    - 223.5.5.5
-    - 119.29.29.29
+    - 127.0.0.1:6053
 
 # 代理节点与代理组
 proxies: []
@@ -61,7 +60,7 @@ rules:
 
 # TUN 设置
 tun:
-  enable: false
+  enable: true
   stack: system
   auto-route: true
   auto-detect-interface: true

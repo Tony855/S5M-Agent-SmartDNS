@@ -1,6 +1,6 @@
 # 基础设置
 # Existing /data/config.yaml is intentionally preserved by init script.
-allow-lan: false
+allow-lan: true
 mode: rule
 log-level: info
 find-process-mode: strict
@@ -34,8 +34,7 @@ dns:
     - 223.5.5.5
     - 119.29.29.29
   nameserver:
-    - 223.5.5.5
-    - 119.29.29.29
+    - 127.0.0.1:6053
   fallback:
     - https://dns.cloudflare.com/dns-query
     - https://dns.google/dns-query
@@ -54,7 +53,7 @@ rules:
 
 # TUN 设置
 tun:
-  enable: false
+  enable: true
   stack: system
   auto-route: true
   auto-detect-interface: true

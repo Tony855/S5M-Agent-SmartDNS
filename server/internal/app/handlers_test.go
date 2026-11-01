@@ -104,14 +104,12 @@ func TestValidateProxyRejectsUnknownModeAndInvalidPorts(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "unknown mode",
+			name:  "legacy unknown mode is ignored",
 			proxy: Proxy{Name: "proxy-a", Mode: "proxxy", Type: "socks5", Server: "example.com", Port: 1080},
-			want:  "运行模式无效",
 		},
 		{
-			name:  "unsupported direct mode",
-			proxy: Proxy{Name: "proxy-a", Mode: "direct"},
-			want:  "运行模式无效",
+			name:  "legacy direct mode is ignored",
+			proxy: Proxy{Name: "proxy-a", Mode: "direct", Type: "socks5", Server: "example.com", Port: 1080},
 		},
 		{
 			name:  "zero port",
@@ -1214,15 +1212,18 @@ func TestGetNodeConfigRemovesExplicitProxyListeners(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(response.YAML), &normalized); err != nil {
 		t.Fatalf("decode normalized response YAML: %v", err)
 	}
-	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
+	if normalized["mixed-port"] != 7890 {
+		t.Errorf("Agent mixed-port = %#v, want 7890: %s", normalized["mixed-port"], response.YAML)
+	}
+	for _, key := range []string{"port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
 		if _, exists := normalized[key]; exists {
-			t.Errorf("Agent config must not expose %q: %s", key, response.YAML)
+			t.Errorf("Agent config must not expose additional listener %q: %s", key, response.YAML)
 		}
 	}
-	if normalized["allow-lan"] != false || normalized["external-controller"] != "127.0.0.1:8088" {
+	if normalized["allow-lan"] != true || normalized["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("Agent listener security normalization failed: %s", response.YAML)
 	}
-	if !strings.Contains(response.YAML, "secret: keep-this-secret") ||
+	if !strings.Contains(response.YAML, "secret: keep-this-secret") || strings.Contains(response.YAML, "authentication:") ||
 		!strings.Contains(response.YAML, "enable: false") ||
 		!strings.Contains(response.YAML, "enable: true") {
 		t.Fatalf("normalization did not preserve node-specific settings: %s", response.YAML)
@@ -1320,10 +1321,35 @@ func TestSaveNodeConfigRemovesUnpublishedProxyPort(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("normalized node config was not persisted")
 	}
-	if strings.Contains(cfg.YAML, "mixed-port:") || strings.Contains(cfg.YAML, "port: 7899") {
-		t.Fatalf("explicit proxy listener was not removed before persistence: %s", cfg.YAML)
+	if !strings.Contains(cfg.YAML, "mixed-port: 7890") || strings.Contains(cfg.YAML, "port: 7899") {
+		t.Fatalf("Agent mixed listener was not normalized to 7890 before persistence: %s", cfg.YAML)
 	}
 	if !strings.Contains(cfg.YAML, "secret: node-secret") {
 		t.Fatalf("unrelated node settings were not preserved: %s", cfg.YAML)
 	}
+}
+
+func TestMachineProxyModeAPIStoresModeIndependently(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "machine-proxy-mode-api.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/nodes/node-a/proxy-mode", strings.NewReader(`{"routing_mode":"return"}`))
+	put.SetPathValue("code", "node-a")
+	putRec := httptest.NewRecorder()
+	app.handleSetMachineProxyMode(putRec, put)
+	if putRec.Code != http.StatusOK { t.Fatalf("PUT status=%d body=%s", putRec.Code, putRec.Body.String()) }
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-a/proxy-mode", nil)
+	get.SetPathValue("code", "node-a")
+	getRec := httptest.NewRecorder()
+	app.handleGetMachineProxyMode(getRec, get)
+	if getRec.Code != http.StatusOK || !strings.Contains(getRec.Body.String(), `"routing_mode":"return"`) { t.Fatalf("GET status=%d body=%s", getRec.Code, getRec.Body.String()) }
+
+	bad := httptest.NewRequest(http.MethodPut, "/api/v1/nodes/node-a/proxy-mode", strings.NewReader(`{"routing_mode":"unknown"}`))
+	bad.SetPathValue("code", "node-a")
+	badRec := httptest.NewRecorder()
+	app.handleSetMachineProxyMode(badRec, bad)
+	if badRec.Code != http.StatusBadRequest { t.Fatalf("invalid mode status=%d body=%s", badRec.Code, badRec.Body.String()) }
 }
