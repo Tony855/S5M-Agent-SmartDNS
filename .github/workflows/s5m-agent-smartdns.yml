@@ -94,6 +94,9 @@ jobs:
           grep -q 'NEW_STARTED=1' scripts/s5m-deploy.sh
           grep -q 'DEPLOY_OK=1' scripts/s5m-deploy.sh
           grep -q '等待 Agent 容器启动检查' scripts/s5m-deploy.sh
+      - name: Test deployment rollback fault injection
+        run: bash scripts/tests/deploy-rollback-faults.sh
+
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh
 
