@@ -59,6 +59,26 @@ env:
   SMARTDNS_REF: Release48.4
 
 jobs:
+  test-server:
+    name: Server tests and vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+          cache-dependency-path: server/go.sum
+      - name: Run server tests
+        working-directory: server
+        run: go test ./...
+      - name: Run server vet
+        working-directory: server
+        run: go vet ./...
+
   test-amd64:
     name: Build and runtime smoke test (linux/amd64)
     runs-on: ubuntu-latest
@@ -351,7 +371,7 @@ jobs:
   publish:
     name: Publish multi-arch image to GHCR
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test-amd64, build-arm64]
+    needs: [test-server, test-amd64, build-arm64]
     concurrency:
       group: s5m-agent-smartdns-publish-${{ github.ref }}
       queue: max
