@@ -265,10 +265,18 @@ func TestRestoreSmartDNSConfigVerifiedRejectsUnrestoredContent(t *testing.T) {
 	}
 }
 
-func TestValidateSmartDNSConfigAllowsSafeUpstreamHostname(t *testing.T) {
-	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver include.example\n")
-	if err := validateSmartDNSConfig(config); err != nil {
-		t.Fatalf("valid upstream hostname rejected: %v", err)
+func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
+	secure := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	if err := validateSmartDNSConfig(secure); err != nil {
+		t.Fatalf("valid encrypted upstream rejected: %v", err)
+	}
+	plain := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 223.5.5.5\n")
+	if err := validateSmartDNSConfig(plain); err == nil {
+		t.Fatal("plaintext DNS upstream must be rejected")
+	}
+	missing := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n")
+	if err := validateSmartDNSConfig(missing); err == nil {
+		t.Fatal("config without encrypted upstream must be rejected")
 	}
 }
 
@@ -548,7 +556,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := []byte("bind 127.0.0.1:6053\n")
+	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
 	configHash := sha256.Sum256(bytes.TrimSpace(config))
 	good := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
