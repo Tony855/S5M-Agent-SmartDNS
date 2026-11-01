@@ -22,6 +22,7 @@ const baseTemplate = `mode: rule
 mixed-port: 8080
 allow-lan: false
 log-level: info
+find-process-mode: strict
 ipv6: false
 external-controller: 127.0.0.1:8088
 secret: "__S5M_MIHOMO_SECRET__"
