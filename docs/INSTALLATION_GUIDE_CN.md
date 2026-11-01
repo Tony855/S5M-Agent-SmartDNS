@@ -6,14 +6,13 @@
 
 - **主控（S5M-Server）**：Web/API、节点管理、Agent 注册与授权、配置下发。原生安装到 `/opt/S5M-Server`，systemd 服务名 `s5m-server`。
 - **主控 Mihomo**：运行在主控机上，服务名 `mihomo`；安装脚本不会覆盖一个已存在且能正常运行的 `/opt/mihomo/mihomo`。
-- **Agent**：运行在每个受管节点上；提供绑定页面/API（容器内 81），运行 Mihomo（混合代理端口 7890，控制 API 8088）。`/data` 必须使用持久化卷，里面有 `config.yaml` 和绑定凭据 `agent.json`。
+- **Agent**：运行在每个受管节点上；提供绑定页面/API（容器内 81），运行 Mihomo 透明代理核心（TUN 按节点配置启用；不开放 HTTP/SOCKS 7890，控制 API 8088 仅监听回环地址）。`/data` 必须使用持久化卷，里面有 `config.yaml` 和绑定凭据 `agent.json`。
 - **网络方向**：Agent 必须能访问主控 HTTP(S) 地址；主控不应直接暴露 Agent 的 Mihomo 控制端口 8088。8088 默认只供容器内部本机使用。
 
 | 组件 | 默认端口 | 说明 |
 | --- | ---: | --- |
 | 主控 Web/API | 80/tcp | 可在 `/etc/s5m-server.env` 的 `S5M_ADDR` 中修改 |
 | Agent 绑定页面 | 81/tcp | 建议只向管理网开放；首次绑定后仍需保护 |
-| Agent Mihomo 代理 | 7890/tcp | 按节点代理用途和防火墙策略开放 |
 | Agent Mihomo API | 8088/tcp | 仅容器内部使用，不要发布到公网 |
 
 ## 2. 主控端：Debian/Ubuntu 原生安装
