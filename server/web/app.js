@@ -908,7 +908,7 @@ createApp({
                   net: String(item.network || item.net || item.headerType || 'tcp'),
                   tls: tls ? 'tls' : '',
                   sni: String(item.servername || item.sni || ''),
-                  host: String(headers.Host || headers.host || item.host || ''),
+                  host: String(headers.Host || headers.host || item.host || item.requestHost || ''),
                   path: String(ws.path || item.path || '')
                 };
                 const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(vmess))));
@@ -926,12 +926,18 @@ createApp({
               if (tls) query.set('security', item.security || item.streamSecurity || 'tls');
               const sni = String(item.servername || item.sni || '');
               if (sni) query.set('sni', sni);
+              const publicKey = String(item.publicKey || item.public_key || item.pbk || '');
+              const shortId = String(item.shortId || item.short_id || item.sid || '');
+              const fingerprint = String(item.fingerprint || item.fp || '');
+              if (publicKey) query.set('pbk', publicKey);
+              if (shortId) query.set('sid', shortId);
+              if (fingerprint) query.set('fp', fingerprint);
               const flow = String(item.flow || '');
               if (flow) query.set('flow', flow);
               const ws = item['ws-opts'] || item.wsOpts || {};
               const headers = ws.headers || {};
               if (network === 'ws') {
-                if (headers.Host || headers.host) query.set('host', headers.Host || headers.host);
+                if (headers.Host || headers.host || item.requestHost) query.set('host', headers.Host || headers.host || item.requestHost);
                 if (ws.path || item.path) query.set('path', ws.path || item.path);
               }
               const auth = type === 'vless'
