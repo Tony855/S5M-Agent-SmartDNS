@@ -571,7 +571,14 @@ func refreshCentralRouteExclusions(centralURL string) (bool, error) {
 	return true, nil
 }
 
+// mihomoConfigApplyMu serializes controller YAML updates and dynamic route
+// exclusion refreshes. The latter now runs asynchronously beside the WebSocket
+// session and must never race a controller config apply or rollback.
+var mihomoConfigApplyMu sync.Mutex
+
 func refreshAndApplyCentralRouteExclusions(centralURL string) error {
+	mihomoConfigApplyMu.Lock()
+	defer mihomoConfigApplyMu.Unlock()
 	oldManaged := readManagedRouteCIDRs()
 	oldManagedValues := make([]string, 0, len(oldManaged))
 	for cidr := range oldManaged {
@@ -623,6 +630,8 @@ func mergeConfig(agentYml []byte) (bool, error) {
 }
 
 func mergeConfigWithCentralURL(agentYml []byte, centralURL string) (bool, error) {
+	mihomoConfigApplyMu.Lock()
+	defer mihomoConfigApplyMu.Unlock()
 	mainPath := mihomoConfigPath()
 	previousPath := mainPath + ".previous"
 	nextCfg, err := validateMihomoConfigYAML(agentYml)
