@@ -663,6 +663,12 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			if err := yaml.Unmarshal([]byte(generated), &generatedDoc); err != nil {
 				return fmt.Errorf("机器 %s 的生成 YAML 无效: %w", machineCode, err)
 			}
+			// Mihomo must stay in rule mode for managed routing rules to take
+			// effect. A stale/custom "mode: global" would bypass MATCH,REJECT and
+			// silently defeat the node's selected routing policy.
+			if value, ok := generatedDoc["mode"]; ok {
+				currentDoc["mode"] = value
+			}
 			if value, ok := generatedDoc["proxies"]; ok {
 				currentDoc["proxies"] = value
 			}
@@ -1133,6 +1139,11 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	var generatedDoc map[string]any
 	if err := yaml.Unmarshal([]byte(generatedYAML), &generatedDoc); err != nil {
 		return "", fmt.Errorf("生成的 YAML 无效: %w", err)
+	}
+	// The top-level Mihomo mode is managed: generated rules (including the
+	// terminal MATCH policy) are only authoritative when Mihomo evaluates rules.
+	if value, ok := generatedDoc["mode"]; ok {
+		customDoc["mode"] = value
 	}
 	if value, ok := generatedDoc["proxies"]; ok {
 		customDoc["proxies"] = value
