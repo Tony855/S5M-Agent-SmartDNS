@@ -12,7 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestNormalizeAgentProxyConfigRemovesExplicitProxyListeners(t *testing.T) {
+func TestNormalizeAgentProxyConfigKeepsOnlyMixedProxyListenerOn7890(t *testing.T) {
 	input := `mixed-port: 7890
 port: 8080
 socks-port: 8081
@@ -46,9 +46,12 @@ proxies:
 	if err := yaml.Unmarshal([]byte(got), &config); err != nil {
 		t.Fatalf("decode normalized YAML: %v", err)
 	}
-	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
+	if config["mixed-port"] != 7890 {
+		t.Errorf("mixed-port = %#v, want 7890: %s", config["mixed-port"], got)
+	}
+	for _, key := range []string{"port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
 		if _, exists := config[key]; exists {
-			t.Errorf("explicit proxy listener %q must be removed: %s", key, got)
+			t.Errorf("additional proxy listener %q must be removed: %s", key, got)
 		}
 	}
 	if config["allow-lan"] != false {
@@ -166,7 +169,7 @@ dns:
 	}
 }
 
-func TestBuildConfigForMachineDoesNotExposeExplicitProxyListener(t *testing.T) {
+func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "config-ports.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
@@ -174,7 +177,7 @@ func TestBuildConfigForMachineDoesNotExposeExplicitProxyListener(t *testing.T) {
 	app := &App{store: store}
 	controllerYAML, err := app.BuildConfigForMachine("")
 	if err != nil { t.Fatalf("BuildConfigForMachine(controller): %v", err) }
-	if !strings.Contains(controllerYAML, "mixed-port: 8080") {
+	if !strings.Contains(controllerYAML, "mixed-port: 7890") {
 		t.Fatalf("controller config should retain its separate local listener:\n%s", controllerYAML)
 	}
 
@@ -346,7 +349,7 @@ rules:
 				t.Errorf("attempt %d: synced YAML lost or omitted %q:\n%s", attempt, want, got.YAML)
 			}
 		}
-		if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") || strings.Contains(got.YAML, "MATCH,DIRECT") {
+		if !strings.Contains(got.YAML, "mixed-port: 7890") || strings.Contains(got.YAML, "port: 7899") || strings.Contains(got.YAML, "stale-proxy") || strings.Contains(got.YAML, "MATCH,OLD-DIRECT") || strings.Contains(got.YAML, "MATCH,DIRECT") {
 			t.Errorf("attempt %d: managed proxy/rule sections were not refreshed:\n%s", attempt, got.YAML)
 		}
 	}
@@ -385,8 +388,8 @@ func TestSyncAuthorizedNodeConfigsSkipsUnauthorizedNodeConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read authorized config: %v", err)
 	}
-	if authorized == nil || !strings.Contains(authorized.YAML, "preserve-authorized-secret") || strings.Contains(authorized.YAML, "mixed-port:") {
-		t.Fatalf("authorized node's custom settings should be preserved while removing explicit proxy listeners: %+v", authorized)
+	if authorized == nil || !strings.Contains(authorized.YAML, "preserve-authorized-secret") || !strings.Contains(authorized.YAML, "mixed-port: 7890") {
+		t.Fatalf("authorized node's custom settings should be preserved while adding the managed 7890 listener: %+v", authorized)
 	}
 
 	revoked, err := store.GetNodeConfig("revoked")
@@ -1155,7 +1158,7 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 	if got == nil {
 		t.Fatal("node config missing after sync")
 	}
-	if strings.Contains(got.YAML, "mixed-port:") || strings.Contains(got.YAML, "&s5m_shared_proxy") || strings.Contains(got.YAML, "<<:") {
+	if !strings.Contains(got.YAML, "mixed-port: 7890") || strings.Contains(got.YAML, "&s5m_shared_proxy") || strings.Contains(got.YAML, "<<:") {
 		t.Fatalf("saved per-node YAML should contain expanded proxy fields, not merge aliases:\n%s", got.YAML)
 	}
 	for _, want := range []string{
