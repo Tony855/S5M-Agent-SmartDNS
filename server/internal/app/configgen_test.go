@@ -1422,3 +1422,62 @@ func TestRestoreAgentDNSNameserverIsIdempotentAndRejectsMalformedYAML(t *testing
 	if _, _, err := restoreAgentDNSNameserver("dns: [unterminated", baseline); err == nil { t.Fatal("malformed current YAML must fail") }
 	if _, _, err := restoreAgentDNSNameserver(legacy, "dns: [unterminated"); err == nil { t.Fatal("malformed baseline YAML must fail") }
 }
+
+func TestSmartDNSProcessRoutingRulePrecedesAllTerminalPolicies(t *testing.T) {
+	proxies := []Proxy{{
+		Name: "dns-egress", Type: "socks5", Server: "192.0.2.53",
+		Port: 1080, MachineCode: "__GLOBAL__", Enabled: true,
+	}}
+	for _, mode := range []string{"global", "split", "rule", "return", "game"} {
+		t.Run(mode, func(t *testing.T) {
+			got, err := buildConfigFromProxiesWithMode(proxies, "", "test-secret", mode, "")
+			if err != nil {
+				t.Fatalf("build config: %v", err)
+			}
+			var config map[string]any
+			if err := yaml.Unmarshal([]byte(got), &config); err != nil {
+				t.Fatalf("decode generated config: %v", err)
+			}
+			rules, ok := config["rules"].([]any)
+			if !ok {
+				t.Fatalf("rules is not a sequence: %#v", config["rules"])
+			}
+			processIndex, terminalIndex := -1, -1
+			processCount, terminalCount := 0, 0
+			for i, raw := range rules {
+				rule, ok := raw.(string)
+				if !ok {
+					t.Fatalf("rule %d is not a string: %#v", i, raw)
+				}
+				if strings.HasPrefix(rule, "PROCESS-NAME,smartdns,") {
+					processCount++
+					processIndex = i
+					if rule != "PROCESS-NAME,smartdns,dns-egress" {
+						t.Errorf("unexpected SmartDNS route target %q", rule)
+					}
+				}
+				if strings.HasPrefix(rule, "MATCH,") {
+					terminalCount++
+					terminalIndex = i
+				}
+			}
+			if processCount != 1 {
+				t.Fatalf("expected exactly one SmartDNS process route, got %d: %#v", processCount, rules)
+			}
+			if terminalCount != 1 || terminalIndex <= processIndex {
+				t.Fatalf("SmartDNS process route must precede the sole terminal MATCH: process=%d terminal=%d rules=%#v", processIndex, terminalIndex, rules)
+			}
+		})
+	}
+}
+
+func TestSmartDNSProcessRoutingRuleOmittedWithoutUsableProxy(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-without-proxy", "test-secret", "rule", "")
+	if err != nil {
+		t.Fatalf("build config without proxy: %v", err)
+	}
+	if strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("must not generate SmartDNS process rule with no usable proxy:\n%s", got)
+	}
+}
+
