@@ -422,6 +422,59 @@ func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
 	return routeAgentDNSViaSmartDNS(yml)
 }
 
+// restoreAgentDNSNameserver restores only dns.nameserver from a freshly generated baseline.
+// It is intentionally limited to the legacy SmartDNS-only value so operator DNS
+// settings are never overwritten during ordinary config delivery.
+func restoreAgentDNSNameserver(yml, fallbackYML string) (string, bool, error) {
+	var currentDoc, fallbackDoc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &currentDoc); err != nil {
+		return "", false, fmt.Errorf("解析现有 Agent DNS 配置失败: %w", err)
+	}
+	if err := yaml.Unmarshal([]byte(fallbackYML), &fallbackDoc); err != nil {
+		return "", false, fmt.Errorf("解析基准 Agent DNS 配置失败: %w", err)
+	}
+	findMappingValue := func(root *yaml.Node, key string) *yaml.Node {
+		if root == nil || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode { return nil }
+		mapping := root.Content[0]
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			if mapping.Content[i].Value == key { return mapping.Content[i+1] }
+		}
+		return nil
+	}
+	currentDNS := findMappingValue(&currentDoc, "dns")
+	fallbackDNS := findMappingValue(&fallbackDoc, "dns")
+	if currentDNS == nil || currentDNS.Kind != yaml.MappingNode { return yml, false, nil }
+	var currentNameserver *yaml.Node
+	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
+		if currentDNS.Content[i].Value == "nameserver" { currentNameserver = currentDNS.Content[i+1]; break }
+	}
+	if currentNameserver == nil || currentNameserver.Kind != yaml.SequenceNode || len(currentNameserver.Content) != 1 ||
+		currentNameserver.Content[0].Value != "127.0.0.1:6053" {
+		return yml, false, nil
+	}
+	if fallbackDNS == nil || fallbackDNS.Kind != yaml.MappingNode {
+		return "", false, fmt.Errorf("基准 Agent 配置缺少 dns 对象，拒绝保留失效的 SmartDNS 地址")
+	}
+	var fallbackNameserver *yaml.Node
+	for i := 0; i+1 < len(fallbackDNS.Content); i += 2 {
+		if fallbackDNS.Content[i].Value == "nameserver" { fallbackNameserver = fallbackDNS.Content[i+1]; break }
+	}
+	if fallbackNameserver == nil || fallbackNameserver.Kind != yaml.SequenceNode || len(fallbackNameserver.Content) == 0 {
+		return "", false, fmt.Errorf("基准 Agent 配置缺少有效 dns.nameserver，拒绝保留失效的 SmartDNS 地址")
+	}
+	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
+		if currentDNS.Content[i].Value == "nameserver" {
+			copyNode := *fallbackNameserver
+			copyNode.Content = append([]*yaml.Node(nil), fallbackNameserver.Content...)
+			currentDNS.Content[i+1] = &copyNode
+			out, err := yaml.Marshal(&currentDoc)
+			if err != nil { return "", false, fmt.Errorf("序列化恢复后的 Agent DNS 配置失败: %w", err) }
+			return string(out), true, nil
+		}
+	}
+	return yml, false, nil
+}
+
 // routeAgentDNSViaSmartDNS changes only the ordinary nameserver list. Bootstrap
 // and proxy-server DNS stay on literal IP resolvers to avoid resolver loops.
 func routeAgentDNSViaSmartDNS(yml string) (string, error) {
