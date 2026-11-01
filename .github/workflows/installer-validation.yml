@@ -108,6 +108,9 @@ jobs:
               'BIND_ADDR="[$BIND_IP]"',
               'chmod 600 "$EXTRA_ENV_FILE"',
               'install -d -m 0700 "$DATA_DIR"',
+              'PROXY_BIND_IP="127.0.0.1"',
+              'PROXY_BIND_IP="${PROXY_BIND_IP:-$BIND_IP}"',
+              'PROXY_BIND_ADDR:$PROXY_PORT:7890/tcp',
           ):
               assert required in agent, f"Missing Agent deployment safeguard: {required}"
           print("Agent deployment security and rollback contract verified.")
