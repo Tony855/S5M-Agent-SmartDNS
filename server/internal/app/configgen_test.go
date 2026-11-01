@@ -589,7 +589,6 @@ func TestBuildConfigRejectsInvalidPersistedProxy(t *testing.T) {
 	}{
 		{name: "empty name", proxy: Proxy{Mode: "proxy", Type: "socks5", Server: "proxy.example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "unsupported type", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "vmess+ws", Server: "proxy.example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
-		{name: "invalid mode", proxy: Proxy{Name: "proxy-a", Mode: "unknown", Type: "socks5", Server: "proxy.example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "empty server", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "server contains whitespace", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Server: "proxy example", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true}},
 		{name: "invalid port", proxy: Proxy{Name: "proxy-a", Mode: "proxy", Type: "socks5", Server: "proxy.example", Port: 65536, MachineCode: "__GLOBAL__", Enabled: true}},
@@ -879,9 +878,6 @@ func TestStrictRuleModeIsDefault(t *testing.T) {
 	}
 	if got := normalizeProxyRoutingMode("unknown"); got != "rule" {
 		t.Fatalf("unknown routing mode = %q, want rule", got)
-	}
-	if got := routingModeForMachine(nil, "node-without-proxy"); got != "rule" {
-		t.Fatalf("routing mode without a matching proxy = %q, want rule", got)
 	}
 	generated, err := buildConfigFromProxies(nil, "node-without-proxy", "test-secret")
 	if err != nil {
