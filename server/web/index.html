@@ -215,9 +215,9 @@
             <el-form-item label="名称"><el-input v-model="proxyForm.name"></el-input></el-form-item>
             <el-form-item label="运行模式">
               <el-select v-model="proxyForm.mode" style="width:100%">
+                <el-option label="规则模式（默认：按规则匹配；未命中 REJECT）" value="rule"></el-option>
+                <el-option label="分流模式（规则匹配走代理；未匹配流量直连）" value="split"></el-option>
                 <el-option label="全局模式（全部走代理）" value="global"></el-option>
-                <el-option label="规则模式（主控直连；自定义规则优先；未命中 REJECT）" value="rule"></el-option>
-                <el-option label="旧版分流模式（兼容历史配置）" value="split" disabled></el-option>
                 <el-option label="回国模式（大陆走代理，境外直连）" value="return"></el-option>
                 <el-option label="游戏模式（游戏域名走代理，其余直连）" value="game"></el-option>
               </el-select>
