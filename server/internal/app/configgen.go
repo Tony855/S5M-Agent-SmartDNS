@@ -512,7 +512,8 @@ func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.cloudflare.com/dns-query"},
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.google/dns-query"},
 			}
-			return marshal()
+			out, err := yaml.Marshal(&doc)
+			return string(out), err
 		}
 	}
 	return yml, nil
@@ -615,7 +616,8 @@ func routeAgentDNSViaSmartDNS(yml string) (string, error) {
 			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
 		}},
 	)
-	return marshal()
+	out, err := yaml.Marshal(&doc)
+	return string(out), err
 }
 
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
@@ -693,15 +695,13 @@ func setAgentTUNEnabled(yml string, enabled bool) (string, error) {
 	for i := 0; i+1 < len(tun.Content); i += 2 {
 		if tun.Content[i].Value == "enable" {
 			tun.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprint(enabled)}
-			out, err := yaml.Marshal(&doc)
-			return string(out), err
+			return marshal()
 		}
 	}
 	tun.Content = append(tun.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enable"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprint(enabled)})
-	out, err := yaml.Marshal(&doc)
-	return string(out), err
+	return marshal()
 }
 
 // getOrCreateMihomoSecret creates a cryptographically random API secret once per controller/Agent.
