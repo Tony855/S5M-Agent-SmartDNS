@@ -220,8 +220,12 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	if !strings.Contains(agentYAML, "mixed-port: 7890") {
 		t.Errorf("Agent config missing mixed-port 7890:\\n%s", agentYAML)
 	}
-	if !strings.Contains(agentYAML, "tun:\n  enable: false") {
-		t.Errorf("new Agent config must keep TUN disabled by default:\\n%s", agentYAML)
+	var agentConfig map[string]any
+	if err := yaml.Unmarshal([]byte(agentYAML), &agentConfig); err != nil {
+		t.Fatalf("decode generated Agent config: %v", err)
+	}
+	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != false {
+		t.Errorf("new Agent config must keep TUN disabled by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
 	}
 	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
 		if strings.Contains(agentYAML, forbidden) {
@@ -1276,8 +1280,10 @@ func TestBuildConfigForMachineHonorsExplicitTUNOptIn(t *testing.T) {
 	}
 	got, err := (&App{store: store}).BuildConfigForMachine("node-opt-in")
 	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
-	if !strings.Contains(got, "tun:\n  enable: true") {
-		t.Fatalf("explicit TUN opt-in was not applied to generated config:\\n%s", got)
+	var generated map[string]any
+	if err := yaml.Unmarshal([]byte(got), &generated); err != nil { t.Fatalf("decode generated config: %v", err) }
+	if tun, ok := generated["tun"].(map[string]any); !ok || tun["enable"] != true {
+		t.Fatalf("explicit TUN opt-in was not applied to generated config, got %#v:\\n%s", generated["tun"], got)
 	}
 }
 
