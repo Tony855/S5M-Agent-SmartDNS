@@ -59,10 +59,14 @@ func mihomoControllerSecret() (string, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return "", fmt.Errorf("解析 Mihomo 配置失败: %w", err)
 	}
+	return mihomoAPISecretFromConfig(cfg)
+}
+
+func mihomoAPISecretFromConfig(cfg map[string]any) (string, error) {
 	secret, _ := cfg["secret"].(string)
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
-		return "", fmt.Errorf("Mihomo 配置缺少 API secret，拒绝发起未鉴权统计请求")
+		return "", fmt.Errorf("Mihomo 配置缺少 API secret，拒绝发起未鉴权 API 请求")
 	}
 	return secret, nil
 }
