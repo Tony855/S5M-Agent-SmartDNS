@@ -55,7 +55,7 @@ dns:
         geoip: true
         geoip-code: CN
 tun:
-    enable: true
+    enable: false
     stack: system
     auto-route: true
     auto-detect-interface: true
@@ -656,10 +656,10 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	}
 	// SmartDNS is applied only to the runtime WebSocket payload. Never persist
 	// the Agent-local 127.0.0.1:6053 resolver into the operator's source YAML.
-	// The global default is enabled for new installations. Respect an explicit
-	// controller setting for generated configs; saved per-node YAML remains authoritative.
-	if strings.EqualFold(strings.TrimSpace(settings["tun_enable"]), "false") {
-		yml = strings.Replace(yml, "tun:\n    enable: true", "tun:\n    enable: false", 1)
+	// TUN is opt-in for new installations. An explicit controller setting can
+	// enable it for newly generated configs; saved per-node YAML remains authoritative.
+	if strings.EqualFold(strings.TrimSpace(settings["tun_enable"]), "true") {
+		yml = strings.Replace(yml, "tun:\n    enable: false", "tun:\n    enable: true", 1)
 	}
 	return yml, nil
 }
