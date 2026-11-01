@@ -47,8 +47,7 @@ dns:
         - 223.5.5.5
         - 119.29.29.29
     nameserver:
-        - 223.5.5.5
-        - 119.29.29.29
+        - 127.0.0.1:6053
     fallback:
         - https://dns.cloudflare.com/dns-query
         - https://dns.google/dns-query
@@ -456,10 +455,41 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 
 // applyAgentRuntimeDNS derives the outgoing Agent config without mutating its persisted source.
 func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
-	if !smartDNSHealthy {
-		return yml, nil
+	if smartDNSHealthy {
+		return routeAgentDNSViaSmartDNS(yml)
 	}
-	return routeAgentDNSViaSmartDNS(yml)
+	// Never leave the generated SmartDNS loopback as the only resolver when
+	// SmartDNS is unhealthy. Preserve operator-selected nameservers otherwise.
+	return routeAgentDNSFallbackIfSmartDNS(yml)
+}
+
+func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 Agent DNS 回退配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 回退配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "dns" || root.Content[i+1].Kind != yaml.MappingNode { continue }
+		dns := root.Content[i+1]
+		for j := 0; j+1 < len(dns.Content); j += 2 {
+			if dns.Content[j].Value != "nameserver" { continue }
+			servers := dns.Content[j+1]
+			if servers.Kind != yaml.SequenceNode || len(servers.Content) != 1 || servers.Content[0].Value != "127.0.0.1:6053" {
+				return yml, nil
+			}
+			servers.Content = []*yaml.Node{
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+			}
+			out, err := yaml.Marshal(&doc)
+			return string(out), err
+		}
+	}
+	return yml, nil
 }
 
 // restoreAgentDNSNameserver restores only dns.nameserver from a freshly generated baseline.
@@ -501,6 +531,14 @@ func restoreAgentDNSNameserver(yml, fallbackYML string) (string, bool, error) {
 	}
 	if fallbackNameserver == nil || fallbackNameserver.Kind != yaml.SequenceNode || len(fallbackNameserver.Content) == 0 {
 		return "", false, fmt.Errorf("基准 Agent 配置缺少有效 dns.nameserver，拒绝保留失效的 SmartDNS 地址")
+	}
+	// The generated baseline now prefers SmartDNS. Legacy migration while
+	// SmartDNS is unhealthy must restore independent bootstrap resolvers instead.
+	if len(fallbackNameserver.Content) == 1 && fallbackNameserver.Content[0].Value == "127.0.0.1:6053" {
+		fallbackNameserver = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+		}}
 	}
 	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
 		if currentDNS.Content[i].Value == "nameserver" {
