@@ -293,7 +293,8 @@ func TestSyncAuthorizedNodeConfigsPreservesNodeSettingsAndCanRetry(t *testing.T)
 	}); err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
-	customYAML := `mixed-port: 7899
+	customYAML := `mode: global
+mixed-port: 7899
 secret: keep-this-secret
 tun:
   enable: false
@@ -332,6 +333,7 @@ rules:
 			t.Fatalf("node config missing after attempt %d", attempt)
 		}
 		for _, want := range []string{
+			"mode: rule",
 			"allow-lan: false",
 			"secret: keep-this-secret",
 			"enable: false",
@@ -663,7 +665,7 @@ rules:
 	if err != nil {
 		t.Fatalf("合并全局配置失败: %v", err)
 	}
-	for _, want := range []string{"mode: global", "mixed-port: 7890", "enable: true", "managed-proxy", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "DOMAIN-SUFFIX,custom.example,DIRECT", "MATCH,REJECT"} {
+	for _, want := range []string{"mode: rule", "mixed-port: 7890", "enable: true", "managed-proxy", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "DOMAIN-SUFFIX,custom.example,DIRECT", "MATCH,REJECT"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("合并配置缺少 %q:\n%s", want, got)
 		}
