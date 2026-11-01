@@ -130,8 +130,8 @@ if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
     HAD_OLD=0
     die "暂存旧容器失败，已取消部署。"
   fi
-  ROLLBACK_ARMED=1
 fi
+ROLLBACK_ARMED=1
 
 # 不要添加 --init：镜像使用 s6-overlay 的 /init 作为 PID 1。
 args+=("$IMAGE")
