@@ -11,9 +11,9 @@ PORT_WEB=80
 PORT_PROXY=7890
 ENABLE_TUN="${ENABLE_TUN:-0}"
 
-log()  { echo -e "\\033[32m[+]\\033[0m $*"; }
-warn() { echo -e "\\033[33m[!]\\033[0m $*"; }
-die()  { echo -e "\\033[31m[x]\\033[0m $*"; exit 1; }
+log()  { echo -e "\033[32m[+]\033[0m $*"; }
+warn() { echo -e "\033[33m[!]\033[0m $*"; }
+die()  { echo -e "\033[31m[x]\033[0m $*"; exit 1; }
 
 http_get() {
   local url="$1"
@@ -151,7 +151,7 @@ log "网络隔离检查通过：Agent 使用 bridge 网络；容器 TUN 路由�
 sleep 3
 echo
 log "===== 部署结果 ====="
-docker ps --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'
+docker ps --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 echo
 log "容器日志（末 20 行）："
 docker logs --tail 20 "$CONTAINER" 2>&1 || true
