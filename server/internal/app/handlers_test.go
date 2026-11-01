@@ -1214,9 +1214,12 @@ func TestGetNodeConfigRemovesExplicitProxyListeners(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(response.YAML), &normalized); err != nil {
 		t.Fatalf("decode normalized response YAML: %v", err)
 	}
-	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
+	if normalized["mixed-port"] != 7890 {
+		t.Errorf("Agent mixed-port = %#v, want 7890: %s", normalized["mixed-port"], response.YAML)
+	}
+	for _, key := range []string{"port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
 		if _, exists := normalized[key]; exists {
-			t.Errorf("Agent config must not expose %q: %s", key, response.YAML)
+			t.Errorf("Agent config must not expose additional listener %q: %s", key, response.YAML)
 		}
 	}
 	if normalized["allow-lan"] != false || normalized["external-controller"] != "127.0.0.1:8088" {
