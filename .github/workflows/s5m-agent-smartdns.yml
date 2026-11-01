@@ -7,6 +7,7 @@ on:
       - "s5m-agent/Dockerfile.smartdns"
       - "s5m-agent/docker-compose.yml"
       - "s5m-agent/Dockerfile"
+      - "scripts/s5m-deploy.sh"
       - "s5m-agent/Dockerfile.routeros"
       - "s5m-agent/smartdns/**"
       - "s5m-agent/main.go"
@@ -88,6 +89,10 @@ jobs:
           grep -q "image: ghcr.io/tony855/s5m-agent-smartdns:dev" s5m-agent/docker-compose.yml
           ! grep -q "6053:6053" s5m-agent/docker-compose.yml
           ! grep -q '7890:7890' s5m-agent/docker-compose.yml
+          ! grep -q 'EXPOSE.*7890' s5m-agent/Dockerfile
+          ! grep -q 'EXPOSE.*7890' s5m-agent/Dockerfile.smartdns
+          ! grep -q 'PORT_PROXY.*7890' scripts/s5m-deploy.sh
+          ! grep -q -- '-p .*7890' scripts/s5m-deploy.sh
           ! grep -q '^mixed-port:' s5m-agent/default-config.yaml
           ! grep -q '^mixed-port:' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '^allow-lan: false' s5m-agent/default-config.yaml
