@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,29 @@ import (
 
 const smartDNSConfigPath = "/data/smartdns.conf"
 const smartDNSPreflightOutputLimit = 8 << 10
+const smartDNSRestartCooldown = 30 * time.Second
+
+var errSmartDNSRestartCooldown = errors.New("SmartDNS restart is cooling down")
+
+type smartDNSRestartGate struct {
+	mu          sync.Mutex
+	lastAttempt time.Time
+}
+
+func (g *smartDNSRestartGate) TryAcquire(now time.Time, cooldown time.Duration) (bool, time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.lastAttempt.IsZero() {
+		remaining := cooldown - now.Sub(g.lastAttempt)
+		if remaining > 0 {
+			return false, remaining
+		}
+	}
+	g.lastAttempt = now
+	return true, 0
+}
+
+var smartDNSRestartLimiter smartDNSRestartGate
 
 type boundedDiagnosticBuffer struct {
 	mu        sync.Mutex
