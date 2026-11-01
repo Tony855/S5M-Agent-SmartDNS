@@ -85,6 +85,10 @@ func calculateCounterRate(current, previous uint64, elapsed time.Duration) float
 	return float64(current-previous) / elapsed.Seconds()
 }
 
+func mihomoTelemetryIsStale(sampledAt, now time.Time) bool {
+	return sampledAt.IsZero() || now.Sub(sampledAt) > 3*defaultConnectionsInterval
+}
+
 func recordMihomoTelemetryError(state *mihomoTelemetryState, message string) {
 	message = safeMihomoValidationDiagnostic([]byte(message))
 	state.update(func(v *mihomoTelemetrySnapshot) {
@@ -213,7 +217,7 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 					"connections_error": snapshot.ConnectionsError,
 					"telemetry_at_ms":        now.UnixMilli(),
 					"telemetry_sampled_at_ms": snapshot.SampledAt.UnixMilli(),
-					"telemetry_stale":         snapshot.SampledAt.IsZero() || now.Sub(snapshot.SampledAt) > 3*defaultConnectionsInterval,
+					"telemetry_stale":         mihomoTelemetryIsStale(snapshot.SampledAt, now),
 				},
 			}
 			if err := writeAgentWSJSON(conn, payload); err != nil {
