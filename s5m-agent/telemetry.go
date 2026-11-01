@@ -37,6 +37,10 @@ type mihomoTelemetryState struct {
 	value mihomoTelemetrySnapshot
 }
 
+// Shared by the heartbeat snapshot and the high-frequency WebSocket publisher.
+// This avoids a second /connections poll on the control-plane heartbeat path.
+var agentMihomoTelemetry = &mihomoTelemetryState{}
+
 func (s *mihomoTelemetryState) update(fn func(*mihomoTelemetrySnapshot)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,6 +95,22 @@ func calculateCounterRate(current, previous uint64, elapsed time.Duration) float
 
 func mihomoTelemetryIsStale(sampledAt, now time.Time) bool {
 	return sampledAt.IsZero() || now.Sub(sampledAt) > 3*defaultConnectionsInterval
+}
+
+func applyMihomoTelemetrySnapshot(status map[string]any, snapshot mihomoTelemetrySnapshot, now time.Time) {
+	status["upload_speed"] = snapshot.UploadSpeed
+	status["download_speed"] = snapshot.DownloadSpeed
+	status["upload_total"] = snapshot.UploadTotal
+	status["download_total"] = snapshot.DownloadTotal
+	status["connections"] = snapshot.Connections
+	status["traffic_error"] = snapshot.TrafficError
+	status["connections_error"] = snapshot.ConnectionsError
+	sampledAtMS := int64(0)
+	if !snapshot.SampledAt.IsZero() {
+		sampledAtMS = snapshot.SampledAt.UnixMilli()
+	}
+	status["telemetry_sampled_at_ms"] = sampledAtMS
+	status["telemetry_stale"] = mihomoTelemetryIsStale(snapshot.SampledAt, now)
 }
 
 func recordMihomoTelemetryError(state *mihomoTelemetryState, message string) {
@@ -191,7 +211,7 @@ func forgetAgentWSWriteLock(conn *websocket.Conn) {
 
 func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 	secret, err := mihomoControllerSecret()
-	state := &mihomoTelemetryState{}
+	state := agentMihomoTelemetry
 	if err != nil {
 		diagnostic := safeMihomoValidationDiagnostic([]byte(err.Error()))
 		state.update(func(v *mihomoTelemetrySnapshot) {
