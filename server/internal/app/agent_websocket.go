@@ -818,6 +818,9 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				a.agentTelemetryPersistAt = make(map[string]time.Time)
 			}
 			if receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second {
+				// Throttle failed persistence attempts too; a database outage must
+				// not turn every 200ms frame into another database read/write.
+				a.agentTelemetryPersistAt[machineCode] = receivedAt
 				settings, settingsErr := a.store.GetSettings()
 				if settingsErr == nil {
 					var saved map[string]any
@@ -825,9 +828,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 					if saved == nil { saved = make(map[string]any) }
 					for key, value := range telemetry { saved[key] = value }
 					if payload, marshalErr := json.Marshal(saved); marshalErr == nil {
-						if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr == nil {
-							a.agentTelemetryPersistAt[machineCode] = receivedAt
-						} else {
+						if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr != nil {
 							fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
 						}
 					}
