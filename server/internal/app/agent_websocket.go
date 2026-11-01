@@ -938,6 +938,15 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 			if latest == nil || strings.TrimSpace(latest.YAML) == "" {
 				return fmt.Errorf("并发更新后节点配置不存在")
 			}
+			// A concurrent operator edit may itself reintroduce an unpublished
+			// proxy listener. Never send that snapshot without re-validating it.
+			latestNormalized, latestNormalizeErr := normalizeAgentProxyConfig(latest.YAML)
+			if latestNormalizeErr != nil {
+				return fmt.Errorf("并发更新后的节点配置规范化失败: %w", latestNormalizeErr)
+			}
+			if latestNormalized != latest.YAML {
+				return fmt.Errorf("节点配置在规范化期间发生并发更新；为避免下发未规范化配置，请重试同步")
+			}
 			yml = latest.YAML
 		}
 	}
