@@ -186,6 +186,9 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	if !strings.Contains(agentYAML, "mixed-port: 7890") {
 		t.Errorf("Agent config missing mixed-port 7890:\\n%s", agentYAML)
 	}
+	if !strings.Contains(agentYAML, "tun:\n  enable: true") {
+		t.Errorf("new Agent config should enable TUN by default:\\n%s", agentYAML)
+	}
 	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
 		if strings.Contains(agentYAML, forbidden) {
 			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
