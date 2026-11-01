@@ -439,6 +439,9 @@ func (s *Store) GetProxy(id int64) (*Proxy, error) {
 }
 
 func (s *Store) CreateProxy(p *Proxy) error {
+	if strings.TrimSpace(p.Mode) == "" {
+		p.Mode = "rule"
+	}
 	extra, _ := json.Marshal(p.Extra)
 	res, err := s.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,source_cidr,machine_code,config_json,enabled) VALUES(?,?,?,?,?,?,?,?,?)`, p.Name, p.Mode, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled))
 	if err != nil {
