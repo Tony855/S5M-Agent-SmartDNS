@@ -75,6 +75,10 @@ jobs:
           test "$rule_line" -lt "$split_line"
           grep -q 'return "rule"' server/internal/app/configgen.go
           grep -q 'MATCH,REJECT' server/internal/app/configgen.go
+          grep -q "mode: proxyForm.mode || 'rule'" server/web/app.js
+          grep -q "china: 'split'" server/web/app.js
+          grep -q 'case "proxy", "china", "global", "split", "rule", "return", "game"' server/internal/app/handlers.go
+          grep -q 'label="代理模式"' server/web/index.html
 
       - name: Validate default and opt-in TUN deployment permissions
         run: |
