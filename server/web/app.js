@@ -644,7 +644,7 @@ createApp({
     };
 
     const openCreateProxy = () => {
-      Object.assign(proxyForm, { id: 0, name: '', mode: 'proxy', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
+      Object.assign(proxyForm, { id: 0, name: '', mode: 'rule', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
       // 如果当前正在看某个机器的分组，默认绑定该机器
       if (activeGroup.value !== 'ALL' && activeGroup.value !== 'UNBOUND') {
         proxyForm.machine_code = activeGroup.value;
