@@ -10,7 +10,7 @@ const start = source.indexOf('const v2rayNOutboundLinks = (root) => {');
 const end = source.indexOf('const handleFileUpload = (e) => {', start);
 assert(start >= 0 && end > start, 'V2RayN import converter must exist');
 const converterSource = source.slice(start, end);
-const convert = vm.runInNewContext(converterSource + '\\nv2rayNOutboundLinks;', {
+const convert = vm.runInNewContext(converterSource + String.fromCharCode(10) + 'v2rayNOutboundLinks;', {
   URLSearchParams,
   btoa: globalThis.btoa,
   unescape,
@@ -45,16 +45,16 @@ const config = {
 
 const links = convert(config);
 assert.equal(links.length, 3, 'all supported outbound protocols should be converted');
-assert.match(links[0], /^vless:\\/\\/vless-uuid@edge\\.example\\.test:443\\?/);
+assert.ok(links[0].startsWith('vless://vless-uuid@edge.example.test:443?'));
 assert.match(links[0], /security=reality/);
 assert.match(links[0], /pbk=public-key/);
 assert.match(links[0], /sid=abcd/);
-assert.match(links[1], /^vmess:\\/\\//);
+assert.ok(links[1].startsWith('vmess://'));
 const vmess = JSON.parse(Buffer.from(links[1].slice('vmess://'.length), 'base64').toString('utf8'));
 assert.equal(vmess.id, 'vmess-uuid');
 assert.equal(vmess.net, 'ws');
 assert.equal(vmess.host, 'cdn.example.test');
 assert.equal(vmess.path, '/ws');
 assert.equal(vmess.tls, 'tls');
-assert.match(links[2], /^ss:\\/\\//);
+assert.ok(links[2].startsWith('ss://'));
 console.log('V2RayN outbound JSON import conversion tests passed.');
