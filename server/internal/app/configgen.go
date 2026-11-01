@@ -665,7 +665,7 @@ func normalizeProxyRoutingMode(raw string) string {
 	case "china":
 		return "split"
 	default:
-		return "return"
+		return "rule"
 	}
 }
 
