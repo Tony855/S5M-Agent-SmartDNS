@@ -87,6 +87,11 @@ jobs:
           set -eux
           grep -q "image: ghcr.io/tony855/s5m-agent-smartdns:dev" s5m-agent/docker-compose.yml
           ! grep -q "6053:6053" s5m-agent/docker-compose.yml
+          ! grep -q '7890:7890' s5m-agent/docker-compose.yml
+          ! grep -q '^mixed-port:' s5m-agent/default-config.yaml
+          ! grep -q '^mixed-port:' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '^allow-lan: false' s5m-agent/default-config.yaml
+          grep -q '^allow-lan: false' s5m-agent/smartdns/default-config-smartdns.yaml
           docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
             test -x /app/s5m-agent
             test -x /usr/local/bin/mihomo
@@ -148,11 +153,13 @@ jobs:
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
           agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
-          proxy_port="$(docker port "$container" 7890/tcp | awk -F: 'NR==1 {print $NF}')"
-          [[ -n "$agent_port" && -n "$proxy_port" ]]
+          [[ -n "$agent_port" ]]
+          if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
+            echo "Explicit proxy port 7890 must not be published" >&2
+            exit 1
+          fi
 
           curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
-          nc -z -w 2 127.0.0.1 "$proxy_port"
 
           # Test the loopback-only resolver from a helper sharing the Agent network namespace.
           docker run --rm --network "container:$container" alpine:3.24 sh -ec '
@@ -237,10 +244,12 @@ jobs:
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
           agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
-          proxy_port="$(docker port "$container" 7890/tcp | awk -F: 'NR==1 {print $NF}')"
-          [[ -n "$agent_port" && -n "$proxy_port" ]]
+          [[ -n "$agent_port" ]]
+          if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
+            echo "Explicit proxy port 7890 must not be published" >&2
+            exit 1
+          fi
           curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
-          nc -z -w 2 127.0.0.1 "$proxy_port"
 
           # Exercise real UDP and TCP DNS queries through SmartDNS in ARM64 too.
           docker run --rm --network "container:$container" alpine:3.24 sh -ec '
