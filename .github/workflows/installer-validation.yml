@@ -2,16 +2,18 @@ name: Installer Validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
     paths:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
+      - "scripts/deploy-agent.sh"
       - "server/**"
       - ".github/workflows/installer-validation.yml"
   pull_request:
     paths:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
+      - "scripts/deploy-agent.sh"
       - "server/**"
       - ".github/workflows/installer-validation.yml"
   workflow_dispatch:
@@ -31,6 +33,7 @@ jobs:
         run: |
           bash -n scripts/install.sh
           bash -n scripts/install-server.sh
+          bash -n scripts/deploy-agent.sh
 
       - name: Verify self-contained server installer contract
         run: |
@@ -86,6 +89,26 @@ jobs:
           assert 'ROLLBACK_READY=0' in installer
           assert 'trap - ERR' in installer
           print("Native S5M-Server installer and rollback contract verified.")
+          agent = Path("scripts/deploy-agent.sh").read_text(encoding="utf-8")
+          for required in (
+              'chmod 600 "$CONFIG_FILE"',
+              '[[ -L "$CONFIG_FILE" ]]',
+              '[[ "$CONTAINER_NAME" =~',
+              '[[ "$ENABLE_TUN" == "1" && ! -c /dev/net/tun ]]',
+              'BACKUP_NAME=',
+              'restore_previous()',
+              'ROLLBACK_ARMED=1',
+              'ROLLBACK_ARMED=0',
+              'docker container inspect "$BACKUP_NAME"',
+              'docker rename "$BACKUP_NAME" "$CONTAINER_NAME"',
+              'docker start "$CONTAINER_NAME"',
+              'BIND_ADDR="[$BIND_IP]"',
+              'chmod 600 "$EXTRA_ENV_FILE"',
+              'install -d -m 0700 "$DATA_DIR"',
+          ):
+              assert required in agent, f"Missing Agent deployment safeguard: {required}"
+          print("Agent deployment security and rollback contract verified.")
+
           PY
 
       - name: Install ShellCheck
@@ -94,7 +117,7 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck errors
-        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh
 
       - name: Check embedded web JavaScript syntax
         run: node --check server/web/app.js
