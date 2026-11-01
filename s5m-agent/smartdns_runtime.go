@@ -52,7 +52,7 @@ func restartSmartDNSService() error {
 	if !allowed {
 		return errSmartDNSRestartCooldown
 	}
-	return exec.Command("s6-svc", "-r", "/run/service/smartdns").Run()
+	return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
 }
 
 type boundedDiagnosticBuffer struct {
@@ -507,7 +507,7 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 		if restoreErr != nil && !smartDNSConfigMatches(livePath, oldData, hadOldConfig) {
 			return "", fmt.Errorf("提交配置目录失败，且旧配置恢复失败: %v (原始错误: %w)", restoreErr, err)
 		}
-		if restartErr := exec.Command("s6-svc", "-r", "/run/service/smartdns").Run(); restartErr != nil {
+		if restartErr := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run(); restartErr != nil {
 			return "", fmt.Errorf("提交配置目录失败；配置已恢复，但重启旧服务失败: %w", restartErr)
 		}
 		if !waitForSmartDNSHealthy(5 * time.Second) {
@@ -517,12 +517,12 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	}
 	oldPID, _ := exec.Command("pidof", "smartdns").Output()
 	oldPID = bytes.TrimSpace(oldPID)
-	if err := exec.Command("s6-svc", "-r", "/run/service/smartdns").Run(); err != nil {
+	if err := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run(); err != nil {
 		restored, restoreErr := restoreSmartDNSConfigVerified(livePath, oldData, hadOldConfig)
 		if !restored {
 			return "", fmt.Errorf("重启 SmartDNS 失败且恢复旧配置失败: %w", restoreErr)
 		}
-		restartErr := exec.Command("s6-svc", "-r", "/run/service/smartdns").Run()
+		restartErr := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
 		if restartErr != nil {
 			return "", fmt.Errorf("重启 SmartDNS 失败；旧配置文件已恢复，但再次启动服务失败: %w", restartErr)
 		}
@@ -557,7 +557,7 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 	if !restored {
 		return "", fmt.Errorf("SmartDNS 重载后未恢复运行，且回滚失败: %w", restoreErr)
 	}
-	if restartErr := exec.Command("s6-svc", "-r", "/run/service/smartdns").Run(); restartErr != nil {
+	if restartErr := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run(); restartErr != nil {
 		return "", fmt.Errorf("SmartDNS 重载后 DNS 健康检查失败；旧配置内容已恢复，但再次启动服务失败: %w", restartErr)
 	}
 	if !waitForSmartDNSHealthy(5 * time.Second) {
