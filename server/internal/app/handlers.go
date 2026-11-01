@@ -290,6 +290,12 @@ func (a *App) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "已删除"})
 }
 
+func (a *App) handleListMachineProxyModes(w http.ResponseWriter, r *http.Request) {
+	modes, err := a.store.ListMachineProxyModes()
+	if err != nil { writeErr(w, http.StatusInternalServerError, "读取机器代理模式列表失败"); return }
+	writeJSON(w, http.StatusOK, modes)
+}
+
 func (a *App) handleGetMachineProxyMode(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.PathValue("code"))
 	if code == "" || code == "__GLOBAL__" { writeErr(w, http.StatusBadRequest, "机器码无效"); return }
