@@ -1579,4 +1579,21 @@ func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDN
 	stored, err = app.store.GetNodeConfig(code)
 	if err != nil { t.Fatal(err) }
 	if stored == nil || stored.YAML != persisted { t.Fatalf("fallback sync mutated persisted node config: %#v", stored) }
+
+	// When SmartDNS recovers, the next regular config request must switch the
+	// runtime DNS back to localhost without persisting that runtime overlay.
+	fallbackHash, ok := fallback["sha256"].(string)
+	if !ok || fallbackHash == "" { t.Fatalf("missing fallback config hash: %#v", fallback) }
+	setHealth(true)
+	if err := conn.WriteJSON(map[string]any{"type":"config.request", "id":"smartdns-recovered", "config_sha256":fallbackHash}); err != nil { t.Fatal(err) }
+	var recovered map[string]any
+	if err := conn.ReadJSON(&recovered); err != nil { t.Fatalf("read recovered config: %v", err) }
+	recoveredYAML, _ := recovered["yaml"].(string)
+	if recovered["type"] != "config.sync" || !strings.Contains(recoveredYAML, "127.0.0.1:6053") {
+		t.Fatalf("SmartDNS recovery did not restore local DNS routing: %#v", recovered)
+	}
+	if recovered["sha256"] == fallbackHash { t.Fatal("SmartDNS recovery did not change config hash") }
+	stored, err = app.store.GetNodeConfig(code)
+	if err != nil { t.Fatal(err) }
+	if stored == nil || stored.YAML != persisted { t.Fatalf("recovery sync mutated persisted node config: %#v", stored) }
 }
