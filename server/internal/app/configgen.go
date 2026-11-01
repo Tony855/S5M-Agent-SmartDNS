@@ -658,7 +658,7 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 
 func normalizeProxyRoutingMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "global", "split", "return", "game", "legacy":
+	case "global", "split", "rule", "return", "game", "legacy":
 		return strings.ToLower(strings.TrimSpace(raw))
 	case "proxy":
 		return "return"
@@ -682,7 +682,7 @@ func routingModeForMachine(proxies []Proxy, machineCode string) string {
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(p.Mode)) {
-		case "global", "split", "return", "game":
+		case "global", "split", "rule", "return", "game":
 			return strings.ToLower(strings.TrimSpace(p.Mode))
 		case "proxy":
 			return "return"
@@ -820,7 +820,7 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 			return "", fmt.Errorf("代理名称不能为空且不能超过 100 个字符")
 		}
 		switch p.Mode {
-		case "proxy", "china", "global", "split", "return", "game":
+		case "proxy", "china", "global", "split", "rule", "return", "game":
 		default:
 			return "", fmt.Errorf("代理 %q 的运行模式无效：%q", p.Name, p.Mode)
 		}
@@ -951,13 +951,15 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 			rules = append(rules, "MATCH,DIRECT")
 		}
 	case "split":
-		// Split mode is rule-driven: do not force mainland IP ranges to DIRECT.
-		// Unmatched traffic follows the configured default proxy rule below.
+		// Legacy split mode keeps its historical proxy fallback for existing records.
 		if firstProxy != "" {
 			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
 		} else {
 			rules = append(rules, "MATCH,DIRECT")
 		}
+	case "rule":
+		// Strict rule mode: only explicit rules may pass traffic; unmatched traffic is rejected.
+		rules = append(rules, "MATCH,REJECT")
 	case "return":
 		// Return-to-China mode: mainland destinations use the proxy; overseas destinations go direct.
 		if firstProxy != "" {
