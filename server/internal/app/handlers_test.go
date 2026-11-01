@@ -469,6 +469,25 @@ func TestDecodeLimitedRejectsTrailingJSONAndOversizedBody(t *testing.T) {
 	})
 }
 
+func TestFilterDuplicateProxyImportsIsIdempotent(t *testing.T) {
+	existing := []Proxy{{
+		Type: "socks5", Server: "EXAMPLE.com", Port: 1080,
+		Extra: map[string]any{"username": "user", "password": "secret"},
+	}}
+	incoming := []*Proxy{
+		{Type: "socks5", Server: "example.com", Port: 1080, Extra: map[string]any{"username": "user", "password": "secret"}},
+		{Type: "socks5", Server: "example.com", Port: 1080, Extra: map[string]any{"username": "other", "password": "secret"}},
+		{Type: "vless", Server: "example.com", Port: 443, Extra: map[string]any{"uuid": "uuid"}},
+	}
+	unique, skipped := filterDuplicateProxyImports(existing, incoming)
+	if skipped != 1 { t.Fatalf("skipped = %d, want 1", skipped) }
+	if len(unique) != 2 { t.Fatalf("unique count = %d, want 2", len(unique)) }
+	again, skippedAgain := filterDuplicateProxyImports(append(existing, *unique...), unique)
+	if skippedAgain != len(unique) || len(again) != 0 {
+		t.Fatalf("second import was not idempotent: unique=%d skipped=%d", len(again), skippedAgain)
+	}
+}
+
 func TestImportProxiesRejectsOversizedBodyWith413(t *testing.T) {
 	app := &App{}
 	body := `{"content":"` + strings.Repeat("x", (1<<20)+1) + `"}`
