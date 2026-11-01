@@ -519,6 +519,13 @@ rules:
 MIHOMO_CONFIG_EOF
 fi
 
+# Mihomo 的 mixed-port 仅供主控本机使用；禁止作为 LAN/公网代理入口。
+if grep -qE '^allow-lan[[:space:]]*:' "$DB_DIR/config.yaml"; then
+  sed -i -E 's/^allow-lan[[:space:]]*:.*/allow-lan: false/' "$DB_DIR/config.yaml"
+else
+  printf '\nallow-lan: false\n' >> "$DB_DIR/config.yaml"
+fi
+
 # 给旧 config 补 external-controller / secret，绑定到回环地址
 if ! grep -qE '^external-controller[[:space:]]*:' "$DB_DIR/config.yaml"; then
   printf '\nexternal-controller: "127.0.0.1:%s"\n' "$MIHOMO_PORT" >> "$DB_DIR/config.yaml"
