@@ -941,9 +941,27 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	// integration is a runtime capability: once healthy, point its resolver to
 	// the Agent-local SmartDNS listener before hashing and delivering the config.
 	if a.agentHasHealthySmartDNS(machineCode) {
-		yml, normalizeErr = routeAgentDNSViaSmartDNS(yml)
-		if normalizeErr != nil {
-			return normalizeErr
+		smartDNSYAML, smartDNSErr := routeAgentDNSViaSmartDNS(yml)
+		if smartDNSErr != nil {
+			return smartDNSErr
+		}
+		if smartDNSYAML != yml {
+			updated, saveErr := a.store.SaveNodeConfigIfUnchanged(machineCode, yml, smartDNSYAML)
+			if saveErr != nil {
+				return fmt.Errorf("保存 SmartDNS DNS 路由配置失败: %w", saveErr)
+			}
+			if updated {
+				yml = smartDNSYAML
+			} else {
+				latest, readErr := a.store.GetNodeConfig(machineCode)
+				if readErr != nil || latest == nil {
+					return fmt.Errorf("重新读取并发更新后的 SmartDNS 节点配置失败")
+				}
+				yml, smartDNSErr = routeAgentDNSViaSmartDNS(latest.YAML)
+				if smartDNSErr != nil {
+					return smartDNSErr
+				}
+			}
 		}
 	}
 	sum := sha256.Sum256([]byte(yml))
