@@ -403,7 +403,12 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	}
 	filteredRouteExcludes := routeExclude.Content[:0]
 	for _, item := range routeExclude.Content {
-		if item == nil || !legacyDNSBypasses[item.Value] {
+		// Drop malformed nil YAML nodes instead of carrying them into the
+		// subsequent CIDR merge loop, which expects every entry to be non-nil.
+		if item == nil {
+			continue
+		}
+		if !legacyDNSBypasses[item.Value] {
 			filteredRouteExcludes = append(filteredRouteExcludes, item)
 		}
 	}
