@@ -31,3 +31,19 @@ func TestTelemetryIntervalsStayWithinInteractiveDefaults(t *testing.T) {
 		t.Fatalf("connections interval = %v, want 500ms", defaultConnectionsInterval)
 	}
 }
+
+func TestCalculateCounterRateUsesElapsedSampleInterval(t *testing.T) {
+	got := calculateCounterRate(6000, 1000, 500*time.Millisecond)
+	if got != 10000 {
+		t.Fatalf("counter rate = %v, want 10000 B/s", got)
+	}
+}
+
+func TestCalculateCounterRateHandlesResetAndInvalidIntervals(t *testing.T) {
+	if got := calculateCounterRate(100, 200, 500*time.Millisecond); got != 0 {
+		t.Fatalf("counter reset rate = %v, want 0", got)
+	}
+	if got := calculateCounterRate(200, 100, 0); got != 0 {
+		t.Fatalf("zero interval rate = %v, want 0", got)
+	}
+}
