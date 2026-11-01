@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const source = fs.readFileSync('server/web/app.js', 'utf8');
-assert.match(source, /v2rayLinks\\.join\\('\\\\n'\\)/, 'V2RayN links must be joined with actual newline characters, not literal backslash-n text');
+assert.ok(source.includes("v2rayLinks.join('\\n')"), 'V2RayN links must be joined with actual newline characters, not literal backslash-n text');
 const start = source.indexOf('const v2rayNOutboundLinks = (root) => {');
 const end = source.indexOf('const handleFileUpload = (e) => {', start);
 assert(start >= 0 && end > start, 'V2RayN import converter must exist');
