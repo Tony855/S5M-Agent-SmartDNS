@@ -45,12 +45,12 @@ dns:
 3. **加密不等于经过代理。** SmartDNS 进程通常会自行建立上游连接；Mihomo 的 `respect-rules` 不会自动把 SmartDNS 进程发出的连接转入代理。因此，必须通过主机策略路由/防火墙/受控网络命名空间，验证上游连接确实按预期出口发送。
 4. 禁止客户端绕过 Mihomo 直接访问外部 TCP/UDP 53；按实际平台测试 TCP DNS、IPv6 DNS 和应用内置 DoH 的绕过情况。
 5. 不要把 `MATCH,DIRECT` 误认为全局代理。SmartDNS 的 DoT/DoH 连接只有在进程规则命中且代理可用时才会经代理；没有可用代理时，加密 DNS 仍可能直连 DNS 服务商。
-6. `default-nameserver` / `proxy-server-nameserver` 是 Mihomo 启动和解析代理节点域名所需的 bootstrap。当前使用字面 IP 避免循环，但它们本身仍是明文 DNS bootstrap，不能宣称“零 DNS 泄露”。若要求连 bootstrap 查询也不允许明文直连，必须另外提供启动前可用、无需域名解析的受控引导通道（例如外部网络策略或预置可验证的解析端点）；不能简单把 bootstrap 指向 SmartDNS，否则会形成启动循环。
+6. `default-nameserver` / `proxy-server-nameserver` 是 Mihomo 启动和解析代理节点域名所需的 bootstrap。当前 `default-nameserver` 与 `proxy-server-nameserver` 使用 `tls://` 加密 DNS，并以字面 IP 作为 DoT 端点，避免明文 bootstrap 和域名解析循环。Mihomo 文档明确支持 `default-nameserver` 使用加密 DNS，示例包含 `tls://`；仍需在目标 Mihomo 版本验证证书/SNI 与连接行为。不能简单把 bootstrap 指向 SmartDNS，否则会形成启动循环。
 6. 先在测试节点运行 DNS 泄漏测试、抓包并检查上游连接出口，再逐步推广。仅靠 YAML 无法保证零泄露。
 
 ## SmartDNS 故障回退与 Bootstrap 边界
 
-当 SmartDNS 健康检查失败，主控运行时配置会把普通 `dns.nameserver` 切换到 Cloudflare/Google DoH；这能避免自动回退到普通 UDP DNS，但 DoH 域名的初始解析仍依赖 bootstrap resolver。bootstrap resolver 的查询可能被本地网络观察到，因此这是明确的启动引导边界，不应描述成绝对零泄露。
+当 SmartDNS 健康检查失败，主控运行时配置会把普通 `dns.nameserver` 切换到 Cloudflare/Google DoH；这能避免自动回退到普通 UDP DNS，但 DoH 域名的初始解析仍依赖 bootstrap resolver。bootstrap resolver 现在使用 DoT 字面 IP 端点，不再发送普通明文 DNS 查询；但仍会暴露与 DoT 服务端的连接元数据，且是否成功连接取决于网络可达性和 TLS 验证。不要将此描述成绝对零泄露。
 
 ## 为什么 SmartDNS 不是防泄露的唯一措施？
 
