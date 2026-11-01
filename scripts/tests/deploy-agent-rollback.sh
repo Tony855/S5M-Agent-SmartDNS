@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(git rev-parse --show-toplevel)"
 DEPLOY="$ROOT/scripts/deploy-agent.sh"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
