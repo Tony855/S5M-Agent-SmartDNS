@@ -355,6 +355,26 @@ createApp({
             } else {
               loadAgentsData();
             }
+          } else if (message.type === 'agent.telemetry.updated' && message.machine_code) {
+            const code = String(message.machine_code);
+            const status = message.status && typeof message.status === 'object' ? message.status : {};
+            const receivedAt = Number(message.received_at_ms) || Date.now();
+            const index = agentEntries.value.findIndex(item => item.code === code);
+            if (index >= 0) {
+              const previous = agentEntries.value[index];
+              agentEntries.value.splice(index, 1, {
+                ...previous,
+                connections: Math.max(0, Number(status.connections) || 0),
+                uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
+                downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
+                uploadTotal: Math.max(0, Number(status.upload_total) || 0),
+                downloadTotal: Math.max(0, Number(status.download_total) || 0),
+                telemetryError: [status.traffic_error, status.connections_error].filter(Boolean).join('；'),
+                telemetryUpdatedAt: receivedAt
+              });
+            } else {
+              loadAgentsData();
+            }
           } else if ((message.type === 'agent.command.updated' || message.type === 'agent.command.queued') && message.machine_code) {
             const code = String(message.machine_code);
             const index = agentEntries.value.findIndex(item => item.code === code);
