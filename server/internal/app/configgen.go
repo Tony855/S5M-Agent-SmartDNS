@@ -41,11 +41,11 @@ dns:
         - '+.v2net.cc'
         - 'geosite:private'
     default-nameserver:
-        - 223.5.5.5
-        - 119.29.29.29
+        - tls://223.5.5.5
+        - tls://223.6.6.6
     proxy-server-nameserver:
-        - 223.5.5.5
-        - 119.29.29.29
+        - tls://223.5.5.5
+        - tls://223.6.6.6
     nameserver:
         - 127.0.0.1:6053
     fallback:
@@ -193,22 +193,29 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "default-nameserver"}, defaultDNS)
 		}
 	}
-	// Bootstrap resolvers must be literal IP addresses, never hostnames or the
-	// SmartDNS loopback endpoint. This keeps proxy endpoint resolution independent
-	// from SmartDNS and from a proxy connection that has not been established yet.
+	// Bootstrap resolvers must use encrypted DNS with literal IP endpoints.
+	// This avoids plaintext bootstrap queries and hostname-resolution loops.
 	filterLiteralBootstrap := func(sequence *yaml.Node) {
 		kept := make([]*yaml.Node, 0, len(sequence.Content))
 		for _, item := range sequence.Content {
-			if item.Kind != yaml.ScalarNode || net.ParseIP(strings.Trim(item.Value, "[]")) == nil ||
-				item.Value == "127.0.0.1" || item.Value == "127.0.0.1:6053" {
+			if item.Kind != yaml.ScalarNode { continue }
+			value := strings.TrimSpace(item.Value)
+			if strings.HasPrefix(value, "tls://") {
+				value = strings.TrimPrefix(value, "tls://")
+			} else if strings.Contains(value, "://") {
 				continue
 			}
+			if net.ParseIP(strings.Trim(value, "[]")) == nil ||
+				value == "127.0.0.1" || value == "127.0.0.1:6053" {
+				continue
+			}
+			item.Value = "tls://" + value
 			kept = append(kept, item)
 		}
 		sequence.Content = kept
 	}
 	filterLiteralBootstrap(defaultDNS)
-	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
+	for _, server := range []string{"tls://223.5.5.5", "tls://223.6.6.6"} {
 		found := false
 		for _, item := range defaultDNS.Content {
 			if item.Value == server { found = true; break }
@@ -236,7 +243,7 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	}
 	// Proxy endpoint bootstrap follows the same literal-IP-only policy.
 	filterLiteralBootstrap(proxyDNS)
-	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
+	for _, server := range []string{"tls://223.5.5.5", "tls://223.6.6.6"} {
 		found := false
 		for _, item := range proxyDNS.Content {
 			if item.Value == server { found = true; break }
