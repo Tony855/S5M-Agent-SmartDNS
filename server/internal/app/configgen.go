@@ -663,11 +663,14 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			if err := yaml.Unmarshal([]byte(generated), &generatedDoc); err != nil {
 				return fmt.Errorf("机器 %s 的生成 YAML 无效: %w", machineCode, err)
 			}
-			for _, section := range []string{"proxies", "rules"} {
-				if value, ok := generatedDoc[section]; ok {
-					currentDoc[section] = value
-				}
+			if value, ok := generatedDoc["proxies"]; ok {
+				currentDoc["proxies"] = value
 			}
+			mergedRules, mergeErr := mergeManagedRuleValues(currentDoc["rules"], generatedDoc["rules"])
+			if mergeErr != nil {
+				return fmt.Errorf("合并机器 %s 的自定义规则失败: %w", machineCode, mergeErr)
+			}
+			currentDoc["rules"] = mergedRules
 			marshaled, marshalErr := yaml.Marshal(currentDoc)
 			if marshalErr != nil {
 				return fmt.Errorf("序列化机器 %s 的独立配置失败: %w", machineCode, marshalErr)
@@ -1061,6 +1064,57 @@ func (a *App) BuildConfig() (string, error) {
 
 // mergeManagedProxySections keeps the admin's global YAML settings but refreshes
 // proxies/rules from the authoritative proxy database before preview or publish.
+// mergeManagedRuleValues keeps operator rules ahead of the generated terminal MATCH.
+// System bypasses (v2net.cc/controller) and generated safety rules remain first.
+// Operator-provided MATCH rules are ignored so they cannot shadow the final policy.
+func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
+	generated, ok := generatedValue.([]any)
+	if !ok {
+		return nil, fmt.Errorf("生成的 rules 必须是数组")
+	}
+	var custom []any
+	if customValue != nil {
+		var valid bool
+		custom, valid = customValue.([]any)
+		if !valid {
+			return nil, fmt.Errorf("自定义 rules 必须是数组")
+		}
+	}
+	merged := make([]any, 0, len(generated)+len(custom))
+	var terminal any
+	for _, raw := range generated {
+		rule, valid := raw.(string)
+		if !valid || strings.TrimSpace(rule) == "" {
+			return nil, fmt.Errorf("生成的规则必须是非空字符串")
+		}
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rule)), "MATCH,") {
+			terminal = rule
+			continue
+		}
+		merged = append(merged, rule)
+	}
+	seen := make(map[string]bool, len(merged)+len(custom))
+	for _, raw := range merged {
+		seen[strings.TrimSpace(raw.(string))] = true
+	}
+	for _, raw := range custom {
+		rule, valid := raw.(string)
+		if !valid || strings.TrimSpace(rule) == "" {
+			return nil, fmt.Errorf("自定义规则必须是非空字符串")
+		}
+		rule = strings.TrimSpace(rule)
+		if strings.HasPrefix(strings.ToUpper(rule), "MATCH,") || seen[rule] {
+			continue
+		}
+		merged = append(merged, rule)
+		seen[rule] = true
+	}
+	if terminal != nil {
+		merged = append(merged, terminal)
+	}
+	return merged, nil
+}
+
 func mergeManagedProxySections(customYAML, generatedYAML string) (string, error) {
 	var customDoc map[string]any
 	if err := yaml.Unmarshal([]byte(customYAML), &customDoc); err != nil {
@@ -1074,11 +1128,14 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	if err := yaml.Unmarshal([]byte(generatedYAML), &generatedDoc); err != nil {
 		return "", fmt.Errorf("生成的 YAML 无效: %w", err)
 	}
-	for _, section := range []string{"proxies", "rules"} {
-		if value, ok := generatedDoc[section]; ok {
-			customDoc[section] = value
-		}
+	if value, ok := generatedDoc["proxies"]; ok {
+		customDoc["proxies"] = value
 	}
+	mergedRules, err := mergeManagedRuleValues(customDoc["rules"], generatedDoc["rules"])
+	if err != nil {
+		return "", fmt.Errorf("合并自定义规则失败: %w", err)
+	}
+	customDoc["rules"] = mergedRules
 	merged, err := yaml.Marshal(customDoc)
 	if err != nil {
 		return "", fmt.Errorf("序列化全局 YAML 失败: %w", err)
