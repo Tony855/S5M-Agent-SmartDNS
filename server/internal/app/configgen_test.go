@@ -1059,8 +1059,8 @@ func TestBuildConfigIncludesTUNDNSDefaults(t *testing.T) {
 		"https://dns.google/dns-query",
 		"fallback-filter:",
 		"geoip-code: CN",
-		"223.5.5.5",
-		"119.29.29.29",
+		"tls://223.5.5.5",
+		"tls://223.6.6.6",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated TUN/DNS config missing %q:\n%s", want, got)
