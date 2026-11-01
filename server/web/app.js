@@ -91,7 +91,7 @@ createApp({
     const restoringBackup = ref(false);
 
     const proxyDialog = ref(false);
-    const proxyForm = reactive({ id: 0, name: '', mode: 'return', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
+    const proxyForm = reactive({ id: 0, name: '', mode: 'rule', type: 'socks5', server: '', port: 1080, machine_code: '', source_cidr: '0.0.0.0/0', enabled: true, username: '', password: '', extra_json: '{}' });
     const savingProxy = ref(false);
 
     const showImport = ref(false);
@@ -655,7 +655,7 @@ createApp({
     const openEditProxy = (row) => {
       const extra = row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra) ? row.extra : {};
       Object.assign(proxyForm, {
-        id: row.id || 0, name: row.name || row.proxy_name || '', mode: ({ proxy: 'return', china: 'split' }[row.mode] || row.mode || 'return'),
+        id: row.id || 0, name: row.name || row.proxy_name || '', mode: ({ proxy: 'return', china: 'split' }[row.mode] || row.mode || 'rule'),
         type: row.type || row.proxy_type || 'socks5',
         server: row.server || '', port: row.port || 1080, machine_code: row.machine_code || '',
         source_cidr: row.source_cidr || '0.0.0.0/0',
@@ -694,7 +694,7 @@ createApp({
           type: 'proxy.save',
           proxy_id: isEdit ? String(proxyForm.id) : '',
           proxy: {
-            name: proxyForm.name, mode: proxyForm.mode || 'return', type: proxyForm.type, server: proxyForm.server, port: proxyForm.port,
+            name: proxyForm.name, mode: proxyForm.mode || 'rule', type: proxyForm.type, server: proxyForm.server, port: proxyForm.port,
             machine_code: proxyForm.machine_code, source_cidr: proxyForm.source_cidr || '0.0.0.0/0',
             enabled: Boolean(proxyForm.enabled), extra: extra
           }
