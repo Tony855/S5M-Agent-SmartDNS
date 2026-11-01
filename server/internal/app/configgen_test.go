@@ -450,8 +450,11 @@ func TestBuildConfigMapsDisabledCIDRToEnabledEndpoint(t *testing.T) {
 	if strings.Contains(got, "NETWORK,UDP,DIRECT") {
 		t.Fatal("不应生成全局 UDP 直连规则")
 	}
-	if !strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatal("缺少默认 MATCH,DIRECT 规则")
+	if !strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("严格规则模式必须以 MATCH,REJECT 收尾")
+	}
+	if strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatal("严格规则模式不能将未命中流量回退为 DIRECT")
 	}
 	for _, unwanted := range []string{"221111cdn", "^abc.*2222com"} {
 		if strings.Contains(got, unwanted) {
