@@ -1065,9 +1065,7 @@ func collectMihomoStatus() map[string]any {
 		if err != nil {
 			return nil, err
 		}
-		if secret != "" {
-			req.Header.Set("Authorization", "Bearer "+secret)
-		}
+		req.Header.Set("Authorization", "Bearer "+secret)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
