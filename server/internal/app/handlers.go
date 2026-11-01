@@ -314,7 +314,7 @@ func (a *App) validateProxy(p *Proxy) string {
 		p.Mode = "proxy"
 	}
 	switch p.Mode {
-	case "proxy", "china", "global", "split", "return", "game":
+	case "proxy", "china", "global", "split", "rule", "return", "game":
 		p.Type = strings.ToLower(strings.TrimSpace(p.Type))
 		p.Server = strings.TrimSpace(p.Server)
 		switch p.Type {
@@ -329,7 +329,7 @@ func (a *App) validateProxy(p *Proxy) string {
 			return "代理端口必须在 1-65535 之间"
 		}
 	default:
-		return "运行模式无效，必须是 proxy、china 或 game"
+		return "运行模式无效，必须是 global、rule、return 或 game"
 	}
 	p.SourceCIDR = strings.TrimSpace(p.SourceCIDR)
 	if p.SourceCIDR == "" {
