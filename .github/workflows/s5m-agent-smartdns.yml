@@ -164,6 +164,10 @@ jobs:
           ! grep -q '^mixed-port:' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '^allow-lan: false' s5m-agent/default-config.yaml
           grep -q '^allow-lan: false' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '127.0.0.1:6053' s5m-agent/default-config.yaml
+          grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q 'enable: true' s5m-agent/default-config.yaml
+          grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
             test -x /app/s5m-agent
             test -x /usr/local/bin/mihomo
