@@ -941,31 +941,13 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 			yml = latest.YAML
 		}
 	}
-	// Saved per-node YAML is authoritative for routing policy, but SmartDNS
-	// integration is a runtime capability: once healthy, point its resolver to
-	// the Agent-local SmartDNS listener before hashing and delivering the config.
+	// SmartDNS is a runtime capability, not part of the saved node configuration.
+	// Apply it only to the outgoing payload so health loss immediately falls back
+	// to the original configured nameservers on the next config request.
 	if a.agentHasHealthySmartDNS(machineCode) {
-		smartDNSYAML, smartDNSErr := routeAgentDNSViaSmartDNS(yml)
-		if smartDNSErr != nil {
-			return smartDNSErr
-		}
-		if smartDNSYAML != yml {
-			updated, saveErr := a.store.SaveNodeConfigIfUnchanged(machineCode, yml, smartDNSYAML)
-			if saveErr != nil {
-				return fmt.Errorf("保存 SmartDNS DNS 路由配置失败: %w", saveErr)
-			}
-			if updated {
-				yml = smartDNSYAML
-			} else {
-				latest, readErr := a.store.GetNodeConfig(machineCode)
-				if readErr != nil || latest == nil {
-					return fmt.Errorf("重新读取并发更新后的 SmartDNS 节点配置失败")
-				}
-				yml, smartDNSErr = routeAgentDNSViaSmartDNS(latest.YAML)
-				if smartDNSErr != nil {
-					return smartDNSErr
-				}
-			}
+		yml, err = routeAgentDNSViaSmartDNS(yml)
+		if err != nil {
+			return err
 		}
 	}
 	sum := sha256.Sum256([]byte(yml))
