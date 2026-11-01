@@ -181,6 +181,28 @@ jobs:
           done
           docker exec "$container" /healthcheck.sh
 
+          # Inject a live-but-unresponsive resolver failure. SIGSTOP keeps the
+          # process present (so pid checks alone would pass); s6 must replace it.
+          smartdns_pid="$(docker exec "$container" pidof smartdns | awk '{print $1}')"
+          [[ -n "$smartdns_pid" ]]
+          docker exec "$container" kill -STOP "$smartdns_pid"
+          if docker run --rm --network "container:$container" alpine:3.24 sh -ec '
+            apk add --no-cache bind-tools >/dev/null
+            ! dig +time=1 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          '; then
+            :
+          else
+            echo "DNS unexpectedly answered while SmartDNS was SIGSTOPed" >&2
+            exit 1
+          fi
+          docker exec "$container" /command/s6-svc -r /run/service/smartdns
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" /healthcheck.sh; then break; fi
+            sleep 1
+          done
+          docker exec "$container" /healthcheck.sh
+          docker exec "$container" pidof smartdns >/dev/null
+
           # The private Mihomo controller API must remain unpublished.
           if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
             echo "Mihomo controller API 8088 must not be published" >&2
