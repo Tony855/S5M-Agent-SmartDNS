@@ -83,6 +83,9 @@ proxies:
 	foundDNSHijack := false
 	for _, item := range dnsHijack { if item == "any:53" { foundDNSHijack = true; break } }
 	if !foundDNSHijack { t.Errorf("tun dns-hijack missing any:53: %#v", dnsHijack) }
+	foundTCPDNSHijack := false
+	for _, item := range dnsHijack { if item == "tcp://any:53" { foundTCPDNSHijack = true; break } }
+	if !foundTCPDNSHijack { t.Errorf("tun dns-hijack missing tcp://any:53: %#v", dnsHijack) }
 	addresses, ok := tun["route-exclude-address"].([]any)
 	if !ok { t.Fatalf("route-exclude-address is not a sequence: %#v", tun["route-exclude-address"]) }
 	for _, want := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.10/32", "10.1.2.0/24"} {
@@ -661,7 +664,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}{
 		{mode: "global", want: []string{"MATCH,proxy-a", "DOMAIN,controller.example.com,DIRECT"}},
 		{mode: "split", want: []string{"MATCH,proxy-a"}},
-		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "MATCH,REJECT"}},
+		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
 		{mode: "return", want: []string{"GEOIP,CN,proxy-a", "MATCH,DIRECT"}},
 		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,game-a", "MATCH,DIRECT"}},
 	}
@@ -685,6 +688,9 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 				}
 				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,REJECT") {
 					t.Errorf("controller bypass must appear before terminal reject rule:\\n%s", got)
+				}
+				if strings.Index(got, "PROCESS-NAME,smartdns,proxy-a") > strings.Index(got, "MATCH,REJECT") {
+					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal reject:\\n%s", got)
 				}
 			}
 		})
