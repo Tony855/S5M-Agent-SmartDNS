@@ -434,6 +434,18 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	if err := json.Unmarshal([]byte(value), &status); err != nil {
 		return false
 	}
+	// A stale healthy heartbeat must never keep the local SmartDNS endpoint
+	// selected after an Agent disconnects or stops reporting health. Use the
+	// server-stamped received_at field, not agent_lastseen (config requests also
+	// update agent_lastseen and therefore cannot prove a fresh health report).
+	receivedAt, ok := status["received_at"].(float64)
+	if !ok || receivedAt <= 0 || receivedAt > 9.0e15 {
+		return false
+	}
+	age := time.Since(time.Unix(int64(receivedAt), 0))
+	if age > agentWSHeartbeatTTL || age < -30*time.Second {
+		return false
+	}
 	return status["smartdns_available"] == true &&
 		status["smartdns_running"] == true &&
 		status["smartdns_dns_healthy"] == true
