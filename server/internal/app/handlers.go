@@ -1527,7 +1527,7 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 					continue
 				}
 				p = parsed
-				p.Mode = "proxy"
+				p.Mode = "rule"
 				p.SourceCIDR = "0.0.0.0/0"
 				p.Enabled = true
 				if name := strings.TrimSpace(server.Name); name != "" {
