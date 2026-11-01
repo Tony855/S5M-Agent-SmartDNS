@@ -1132,6 +1132,37 @@ func TestBuildConfigUsesSharedYAMLAnchorForSameProtocolAndServer(t *testing.T) {
 	}
 }
 
+func TestBuildConfigPreservesVMessTransportOptions(t *testing.T) {
+	proxies := []Proxy{{
+		Name: "vmess-http", Type: "vmess", Server: "vmess.example.test", Port: 443,
+		Enabled: true, MachineCode: "__GLOBAL__",
+		Extra: map[string]any{
+			"uuid": "vmess-uuid", "network": "tcp", "tls": true,
+			"servername": "sni.example.test", "client-fingerprint": "chrome",
+			"alpn": []string{"h2", "http/1.1"},
+			"http-opts": map[string]any{
+				"method": "GET", "path": []string{"/edge"},
+				"headers": map[string]any{"Host": []string{"cdn.example.test"}},
+			},
+		},
+	}}
+	got, err := buildConfigFromProxiesWithMode(proxies, "", "test-secret", "global", "")
+	if err != nil { t.Fatalf("build config: %v", err) }
+	var decoded map[string]any
+	if err := yaml.Unmarshal([]byte(got), &decoded); err != nil { t.Fatalf("decode config: %v", err) }
+	outbounds, ok := decoded["proxies"].([]any)
+	if !ok || len(outbounds) != 1 { t.Fatalf("unexpected proxies section: %#v", decoded["proxies"]) }
+	outbound, ok := outbounds[0].(map[string]any)
+	if !ok { t.Fatalf("unexpected proxy entry: %#v", outbounds[0]) }
+	httpOpts, ok := outbound["http-opts"].(map[string]any)
+	if !ok || httpOpts["method"] != "GET" { t.Fatalf("VMess HTTP options missing from generated YAML: %#v", outbound) }
+	if outbound["client-fingerprint"] != "chrome" || outbound["servername"] != "sni.example.test" {
+		t.Fatalf("VMess TLS metadata missing from generated YAML: %#v", outbound)
+	}
+	alpn, ok := outbound["alpn"].([]any)
+	if !ok || len(alpn) != 2 || alpn[0] != "h2" { t.Fatalf("VMess ALPN missing from generated YAML: %#v", outbound["alpn"]) }
+}
+
 func TestMarshalProxiesWithSharedAnchorFallsBackForDifferentProtocolOptions(t *testing.T) {
 	proxies := []proxyOut{
 		{Name: "vless-a", Type: "vless", Server: "1.2.3.4", Port: 443, Extra: map[string]any{"uuid": "uuid-a"}},

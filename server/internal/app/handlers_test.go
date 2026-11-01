@@ -570,6 +570,44 @@ func TestParseProxyImportContentSOCKS5JSONIPv4IPv6(t *testing.T) {
 	}
 }
 
+func TestParseProxyLinePreservesVMessTCPHTTPAndTLSOptions(t *testing.T) {
+	vmessJSON := `{"v":"2","ps":"vmess-http","add":"vmess.example.test","port":"443","id":"vmess-http-uuid","aid":"0","scy":"auto","net":"tcp","type":"http","host":"cdn.example.test","path":"/edge","tls":"tls","sni":"sni.example.test","alpn":"h2,http/1.1","fp":"chrome"}`
+	link := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+	proxy, err := parseProxyLine(link)
+	if err != nil { t.Fatalf("parseProxyLine: %v", err) }
+	if proxy.Extra["network"] != "tcp" || proxy.Extra["tls"] != true ||
+		proxy.Extra["servername"] != "sni.example.test" || proxy.Extra["client-fingerprint"] != "chrome" {
+		t.Fatalf("VMess TLS/transport fields lost: %#v", proxy.Extra)
+	}
+	alpn, ok := proxy.Extra["alpn"].([]string)
+	if !ok || len(alpn) != 2 || alpn[0] != "h2" || alpn[1] != "http/1.1" {
+		t.Fatalf("VMess ALPN lost: %#v", proxy.Extra["alpn"])
+	}
+	httpOpts, ok := proxy.Extra["http-opts"].(map[string]any)
+	if !ok || httpOpts["method"] != "GET" {
+		t.Fatalf("VMess TCP HTTP header type lost: %#v", proxy.Extra["http-opts"])
+	}
+	paths, ok := httpOpts["path"].([]string)
+	if !ok || len(paths) != 1 || paths[0] != "/edge" {
+		t.Fatalf("VMess TCP HTTP path lost: %#v", httpOpts["path"])
+	}
+	headers, ok := httpOpts["headers"].(map[string]any)
+	if !ok || headers["Host"] == nil {
+		t.Fatalf("VMess TCP HTTP Host lost: %#v", httpOpts["headers"])
+	}
+}
+
+func TestParseProxyLinePreservesVMessGRPCServiceName(t *testing.T) {
+	vmessJSON := `{"v":"2","ps":"vmess-grpc","add":"grpc.example.test","port":"443","id":"grpc-uuid","aid":"0","scy":"auto","net":"grpc","path":"grpc-service"}`
+	link := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+	proxy, err := parseProxyLine(link)
+	if err != nil { t.Fatalf("parseProxyLine: %v", err) }
+	grpcOpts, ok := proxy.Extra["grpc-opts"].(map[string]any)
+	if !ok || grpcOpts["grpc-service-name"] != "grpc-service" {
+		t.Fatalf("VMess gRPC service name lost: %#v", proxy.Extra["grpc-opts"])
+	}
+}
+
 func TestParseProxyImportContentPreservesVLESSRealityOptions(t *testing.T) {
 	content := "vless://test-uuid@example.com:443?type=tcp&security=reality&sni=www.example.com&pbk=public-key-value&sid=short-id&fp=chrome&flow=xtls-rprx-vision#reality-node"
 	proxies, failures := parseProxyImportContent(content)
