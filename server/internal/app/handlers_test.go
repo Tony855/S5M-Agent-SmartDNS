@@ -1328,3 +1328,28 @@ func TestSaveNodeConfigRemovesUnpublishedProxyPort(t *testing.T) {
 		t.Fatalf("unrelated node settings were not preserved: %s", cfg.YAML)
 	}
 }
+
+func TestMachineProxyModeAPIStoresModeIndependently(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "machine-proxy-mode-api.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/nodes/node-a/proxy-mode", strings.NewReader(`{"routing_mode":"return"}`))
+	put.SetPathValue("code", "node-a")
+	putRec := httptest.NewRecorder()
+	app.handleSetMachineProxyMode(putRec, put)
+	if putRec.Code != http.StatusOK { t.Fatalf("PUT status=%d body=%s", putRec.Code, putRec.Body.String()) }
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-a/proxy-mode", nil)
+	get.SetPathValue("code", "node-a")
+	getRec := httptest.NewRecorder()
+	app.handleGetMachineProxyMode(getRec, get)
+	if getRec.Code != http.StatusOK || !strings.Contains(getRec.Body.String(), `"routing_mode":"return"`) { t.Fatalf("GET status=%d body=%s", getRec.Code, getRec.Body.String()) }
+
+	bad := httptest.NewRequest(http.MethodPut, "/api/v1/nodes/node-a/proxy-mode", strings.NewReader(`{"routing_mode":"unknown"}`))
+	bad.SetPathValue("code", "node-a")
+	badRec := httptest.NewRecorder()
+	app.handleSetMachineProxyMode(badRec, bad)
+	if badRec.Code != http.StatusBadRequest { t.Fatalf("invalid mode status=%d body=%s", badRec.Code, badRec.Body.String()) }
+}
