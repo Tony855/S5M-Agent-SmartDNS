@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -1073,25 +1074,42 @@ tun:
 	}
 }
 
-func TestAgentHasHealthySmartDNSRequiresProcessAndDNSProbe(t *testing.T) {
+func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-capability.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 	app := &App{store: store}
+	now := time.Now().Unix()
+	healthy := map[string]any{
+		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_dns_healthy": true, "received_at": now,
+	}
+	stale := map[string]any{
+		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_dns_healthy": true, "received_at": now - int64(agentWSHeartbeatTTL.Seconds()) - 1,
+	}
+	future := map[string]any{
+		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_dns_healthy": true, "received_at": now + 120,
+	}
 	cases := []struct{name string; status map[string]any; want bool}{
 		{"missing", nil, false},
-		{"binary only", map[string]any{"smartdns_available": true}, false},
-		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true}, false},
-		{"healthy", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, true},
+		{"binary only", map[string]any{"smartdns_available": true, "received_at": now}, false},
+		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true, "received_at": now}, false},
+		{"healthy and fresh", healthy, true},
+		{"healthy but stale", stale, false},
+		{"future timestamp", future, false},
+		{"missing heartbeat timestamp", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.status == nil {
-				_ = store.UpdateSettings(map[string]string{"agent_status_node-a": ""})
-			} else {
-				data, _ := json.Marshal(tc.status)
-				if err := store.UpdateSettings(map[string]string{"agent_status_node-a": string(data)}); err != nil { t.Fatal(err) }
+			raw := ""
+			if tc.status != nil {
+				data, marshalErr := json.Marshal(tc.status)
+				if marshalErr != nil { t.Fatal(marshalErr) }
+				raw = string(data)
 			}
+			if err := store.UpdateSettings(map[string]string{"agent_status_node-a": raw}); err != nil { t.Fatal(err) }
 			if got := app.agentHasHealthySmartDNS("node-a"); got != tc.want {
 				t.Fatalf("agentHasHealthySmartDNS() = %v, want %v", got, tc.want)
 			}
