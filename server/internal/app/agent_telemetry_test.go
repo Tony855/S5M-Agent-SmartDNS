@@ -36,6 +36,8 @@ func TestValidateAgentWSTelemetryRejectsMalformedMetrics(t *testing.T) {
 		{"string counter", func(v map[string]any) { v["download_total"] = "200" }},
 		{"oversized diagnostic", func(v map[string]any) { v["traffic_error"] = strings.Repeat("x", 513) }},
 		{"missing field", func(v map[string]any) { delete(v, "connections") }},
+		{"invalid stale flag", func(v map[string]any) { v["telemetry_stale"] = "true" }},
+		{"fractional sample timestamp", func(v map[string]any) { v["telemetry_sampled_at_ms"] = float64(1.5) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,7 +64,10 @@ func TestAgentWebSocketPersistsThrottledTelemetrySnapshot(t *testing.T) {
 	var welcome map[string]any
 	if err := conn.ReadJSON(&welcome); err != nil { t.Fatalf("read welcome: %v", err) }
 
-	if err := conn.WriteJSON(map[string]any{"type": "telemetry", "status": validAgentTelemetry()}); err != nil {
+	telemetry := validAgentTelemetry()
+	telemetry["telemetry_stale"] = true
+	telemetry["telemetry_sampled_at_ms"] = float64(1793520000000)
+	if err := conn.WriteJSON(map[string]any{"type": "telemetry", "status": telemetry}); err != nil {
 		t.Fatalf("send telemetry: %v", err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -73,6 +78,8 @@ func TestAgentWebSocketPersistsThrottledTelemetrySnapshot(t *testing.T) {
 		_ = json.Unmarshal([]byte(settings["agent_status_"+code]), &saved)
 		if saved["upload_speed"] == float64(1024) && saved["connections"] == float64(7) {
 			if saved["telemetry_received_at_ms"] == nil { t.Fatal("telemetry timestamp was not persisted") }
+			if saved["telemetry_stale"] != true { t.Fatalf("stale flag was not forwarded: %#v", saved["telemetry_stale"]) }
+			if saved["telemetry_sampled_at_ms"] != float64(1793520000000) { t.Fatalf("sample timestamp was not forwarded: %#v", saved["telemetry_sampled_at_ms"]) }
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
