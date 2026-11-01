@@ -787,14 +787,93 @@ createApp({
       return null;
     };
 
+    const v2rayNOutboundLinks = (root) => {
+      const candidates = [];
+      const walk = (value) => {
+        if (!value || typeof value !== 'object') return;
+        if (Array.isArray(value)) { value.forEach(walk); return; }
+        if (Array.isArray(value.outbounds)) candidates.push(...value.outbounds);
+        for (const child of Object.values(value)) if (child && typeof child === 'object') walk(child);
+      };
+      walk(root);
+      const links = [];
+      for (const [index, outbound] of candidates.entries()) {
+        const protocol = String(outbound.protocol || outbound.type || '').toLowerCase();
+        if (!['vmess', 'vless', 'trojan', 'shadowsocks', 'socks', 'http'].includes(protocol)) continue;
+        const settings = outbound.settings || {};
+        const endpoint = (settings.vnext || [])[0] || (settings.servers || [])[0] || {};
+        const user = (endpoint.users || [])[0] || {};
+        const server = String(endpoint.address || endpoint.server || '').trim();
+        const port = Number(endpoint.port || 0);
+        if (!server || !Number.isInteger(port) || port < 1 || port > 65535) continue;
+        const name = String(outbound.tag || outbound.name || `节点-${index + 1}`).replace(/[\\r\\n#]/g, ' ');
+        const stream = outbound.streamSettings || {};
+        const network = String(stream.network || 'tcp').toLowerCase();
+        const security = String(stream.security || '').toLowerCase();
+        const tls = stream.tlsSettings || {};
+        const reality = stream.realitySettings || {};
+        const sni = String(tls.serverName || reality.serverName || '');
+        const query = new URLSearchParams();
+        if (network) query.set('type', network);
+        if (security === 'tls' || security === 'reality') query.set('security', security);
+        if (sni) query.set('sni', sni);
+        if (tls.fingerprint || reality.fingerprint) query.set('fp', tls.fingerprint || reality.fingerprint);
+        if (user.flow) query.set('flow', user.flow);
+        if (network === 'ws') {
+          const ws = stream.wsSettings || {};
+          if (ws.path) query.set('path', ws.path);
+          const host = ws.headers && (ws.headers.Host || ws.headers.host);
+          if (host) query.set('host', host);
+        } else if (network === 'grpc') {
+          const grpc = stream.grpcSettings || {};
+          if (grpc.serviceName) query.set('serviceName', grpc.serviceName);
+        }
+        const fragment = encodeURIComponent(name);
+        if (protocol === 'vmess') {
+          const vmess = { v: '2', ps: name, add: server, port: String(port), id: String(user.id || ''), aid: String(user.alterId ?? 0), scy: String(user.security || 'auto'), net: network, tls: security === 'tls' ? 'tls' : '', sni, host: String((stream.wsSettings || {}).headers?.Host || ''), path: String((stream.wsSettings || {}).path || '') };
+          if (!vmess.id) continue;
+          links.push('vmess://' + btoa(unescape(encodeURIComponent(JSON.stringify(vmess)))));
+        } else if (protocol === 'vless') {
+          const id = String(user.id || '');
+          if (!id) continue;
+          if (security === 'reality') {
+            if (reality.publicKey) query.set('pbk', reality.publicKey);
+            if (reality.shortId) query.set('sid', reality.shortId);
+          }
+          links.push('vless://' + encodeURIComponent(id) + '@' + server + ':' + port + '?' + query.toString() + '#' + fragment);
+        } else if (protocol === 'trojan') {
+          const password = String(endpoint.password || '');
+          if (!password) continue;
+          links.push('trojan://' + encodeURIComponent(password) + '@' + server + ':' + port + '?' + query.toString() + '#' + fragment);
+        } else if (protocol === 'shadowsocks') {
+          const method = String(endpoint.method || '');
+          const password = String(endpoint.password || '');
+          if (!method || !password) continue;
+          const auth = btoa(unescape(encodeURIComponent(method + ':' + password)));
+          links.push('ss://' + auth + '@' + server + ':' + port + '#' + fragment);
+        } else {
+          const users = endpoint.users || [];
+          const auth = users[0] ? encodeURIComponent(String(users[0].user || '')) + ':' + encodeURIComponent(String(users[0].pass || '')) + '@' : '';
+          links.push((protocol === 'socks' ? 'socks5' : 'http') + '://' + auth + server + ':' + port + '#' + fragment);
+        }
+      }
+      return links;
+    };
+
     const handleFileUpload = (e) => {
       const file = e.target.files[0]; if (!file) return;
       const reader = new FileReader();
       reader.onload = (evt) => {
         const content = evt.target.result;
-        if (file.name.endsWith('.json')) {
+        if (file.name.toLowerCase().endsWith('.json')) {
           try {
             const parsedJSON = JSON.parse(content);
+            const v2rayLinks = v2rayNOutboundLinks(parsedJSON);
+            if (v2rayLinks.length) {
+              importText.value = v2rayLinks.join('\\n');
+              showMsg(`识别到 V2RayN/V2Ray 配置，成功解析 ${v2rayLinks.length} 个出站节点`, 'success');
+              return;
+            }
             const arr = findProxyArray(parsedJSON);
             if (!arr || !arr.length) throw new Error('找不到包含 server/address 的节点数组');
             const inheritedProtocol = String(parsedJSON && !Array.isArray(parsedJSON) ? (parsedJSON.protocol || parsedJSON.type || parsedJSON.scheme || '') : '').trim().toLowerCase();
@@ -878,10 +957,16 @@ createApp({
       if (importing.value) return;
       importing.value = true;
       try {
-        // Import is text/JSON content rather than a binary upload, so it uses the
-        // authenticated WebSocket control channel like other proxy mutations.
-        const result = await sendBrowserWSControl({ type: 'proxies.import', content });
-        const data = result.data || result;
+        // Large imports use authenticated HTTP rather than the realtime WebSocket.
+        // This keeps the browser event loop free while the server validates and syncs
+        // a large batch, and avoids the short WebSocket RPC timeout.
+        const response = await api('/api/v1/proxies/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+        if (!response.ok) throw new Error(await parseErr(response));
+        const data = await response.json();
         const success = Number(data.success) || 0;
         const fail = Number(data.fail) || 0;
         if (data.sync_failed) {
@@ -896,7 +981,7 @@ createApp({
         await loadProxies();
         if (success > 0) showImport.value = false;
       } catch (e) {
-        showMsg(e.message || '导入失败', 'error');
+        showMsg((e && e.name === 'TypeError') ? '导入请求连接中断，结果暂时无法确认。请先刷新代理列表；再次导入时系统会跳过已存在的相同节点。' : (e.message || '导入失败'), 'error');
       } finally {
         importing.value = false;
       }
