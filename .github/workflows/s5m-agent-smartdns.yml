@@ -6,6 +6,7 @@ on:
     paths:
       - "s5m-agent/Dockerfile.smartdns"
       - "s5m-agent/docker-compose.yml"
+      - "s5m-agent/docker-compose.tun.yml"
       - "s5m-agent/Dockerfile"
       - "scripts/s5m-deploy.sh"
       - "s5m-agent/Dockerfile.routeros"
@@ -21,6 +22,8 @@ on:
       - "s5m-agent/services/**"
       - "server/internal/app/configgen.go"
       - "server/internal/app/configgen_test.go"
+      - "server/web/index.html"
+      - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
       - ".github/workflows/release.yml"
   push:
@@ -60,6 +63,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate routing mode selector defaults and availability
+        run: |
+          grep -q "mode: 'rule'" server/web/app.js
+          grep -q 'value="rule"' server/web/index.html
+          grep -q 'value="split"' server/web/index.html
+          ! grep -Eq 'el-option[^>]*value="split"[^>]*disabled|el-option[^>]*disabled[^>]*value="split"' server/web/index.html
+          rule_line="$(grep -n 'value="rule"' server/web/index.html | head -n1 | cut -d: -f1)"
+          split_line="$(grep -n 'value="split"' server/web/index.html | head -n1 | cut -d: -f1)"
+          test "$rule_line" -lt "$split_line"
+          grep -q 'return "rule"' server/internal/app/configgen.go
+          grep -q 'MATCH,REJECT' server/internal/app/configgen.go
+          grep -q "mode: proxyForm.mode || 'rule'" server/web/app.js
+          grep -q "china: 'split'" server/web/app.js
+          grep -q 'case "proxy", "china", "global", "split", "rule", "return", "game"' server/internal/app/handlers.go
+          grep -q 'label="代理模式"' server/web/index.html
+
+      - name: Validate default and opt-in TUN deployment permissions
+        run: |
+          docker compose -f s5m-agent/docker-compose.yml config --quiet
+          docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config --quiet
+          ! grep -Eq '^[[:space:]]*(cap_add|devices):' s5m-agent/docker-compose.yml
+          grep -q 'NET_ADMIN' s5m-agent/docker-compose.tun.yml
+          grep -q '/dev/net/tun:/dev/net/tun' s5m-agent/docker-compose.tun.yml
+          bash -n scripts/s5m-deploy.sh
+          grep -q 'ENABLE_TUN=.*:-0' scripts/s5m-deploy.sh
+          grep -q 'TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)' scripts/s5m-deploy.sh
+          grep -q 'ENABLE_TUN=1.*缺少字符设备' scripts/s5m-deploy.sh
+          ! grep -q -- '--cap-add=NET_ADMIN' <(sed -n '/docker run -d/,/\$IMAGE_LOCAL/p' scripts/s5m-deploy.sh | grep -v 'TUN_ARGS')
+          grep -q 'BACKUP_NAME=.*rollback' scripts/s5m-deploy.sh
+          grep -q 'docker rename "$CONTAINER" "$BACKUP_NAME"' scripts/s5m-deploy.sh
+          grep -q 'restore_previous()' scripts/s5m-deploy.sh
+          grep -q 'NEW_STARTED=1' scripts/s5m-deploy.sh
+          grep -q 'DEPLOY_OK=1' scripts/s5m-deploy.sh
+          grep -q '等待 Agent 容器启动检查' scripts/s5m-deploy.sh
+      - name: Test deployment rollback fault injection
+        run: bash scripts/tests/deploy-rollback-faults.sh
 
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh

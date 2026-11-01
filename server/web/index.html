@@ -153,7 +153,7 @@
           <el-table class="desktop-table" :data="filteredProxies" style="width: 100%" stripe v-loading="loadingProxies">
             <el-table-column prop="id" label="ID" width="70"></el-table-column>
             <el-table-column prop="name" label="名称" min-width="140"></el-table-column>
-            <el-table-column prop="type" label="类型/模式" width="90"></el-table-column>
+            <el-table-column prop="type" label="类型" width="90"></el-table-column>
             <el-table-column label="服务器" min-width="180"><template #default="scope">{{ scope.row.server }}:{{ scope.row.port }}</template></el-table-column>
             <el-table-column prop="source_cidr" label="源 IP (CIDR)" min-width="170"></el-table-column>
             <el-table-column label="关联节点实例" min-width="190">
@@ -215,9 +215,9 @@
             <el-form-item label="名称"><el-input v-model="proxyForm.name"></el-input></el-form-item>
             <el-form-item label="代理模式">
               <el-select v-model="proxyForm.mode" style="width:100%">
+                <el-option label="规则模式（默认：按规则匹配；未命中 REJECT）" value="rule"></el-option>
+                <el-option label="分流模式（规则匹配走代理；未匹配流量直连）" value="split"></el-option>
                 <el-option label="全局模式（全部走代理）" value="global"></el-option>
-                <el-option label="规则模式（流量按规则匹配，自定义规则优先；未命中的丢弃）" value="rule"></el-option>
-                <el-option label="分流模式（规则匹配的走代理，否则直连）" value="split" disabled></el-option>
                 <el-option label="回国模式（大陆走代理，境外直连）" value="return"></el-option>
                 <el-option label="游戏模式（游戏域名走代理，其余直连）" value="game"></el-option>
               </el-select>
