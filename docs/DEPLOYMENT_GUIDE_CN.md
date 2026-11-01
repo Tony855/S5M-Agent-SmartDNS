@@ -127,6 +127,15 @@ cd s5m-agent
 docker compose up -d
 ```
 
+默认 Compose 配置不授予 `NET_ADMIN`，也不挂载 `/dev/net/tun`；默认 Mihomo 配置的 TUN 为关闭状态。只有确实需要启用 TUN 时，先在持久化的 `data/config.yaml` 中配置并验证 TUN，再显式叠加权限文件：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tun.yml config
+docker compose -f docker-compose.yml -f docker-compose.tun.yml up -d
+```
+
+TUN 模式需要宿主机存在 `/dev/net/tun`。不要使用 `network_mode: host`；容器应继续使用 bridge 网络，避免把 Mihomo 路由修改带到宿主机网络命名空间。关闭 TUN 后可恢复普通启动：`docker compose up -d`。
+
 如果用 systemd、面板或其他自动化工具启动 Compose，请在其环境配置中显式设置 `S5M_HOSTNAME` 为宿主机的真实 hostname。
 
 注意：
