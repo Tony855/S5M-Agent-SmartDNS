@@ -618,16 +618,34 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_last_error", "SmartDNS 二进制不存在、不可执行或文件类型无效")
 	})
 
-	t.Run("config read failure still collects runtime state", func(t *testing.T) {
+	t.Run("config read failure forces DNS fallback", func(t *testing.T) {
 		deps := good
 		deps.readConfig = func(string) ([]byte, error) { return nil, os.ErrPermission }
+		restartCalls := 0
+		deps.restart = func() error { restartCalls++; return nil }
 		status := map[string]any{}
 		collectSmartDNSStatusWithDependencies(status, deps)
 		assert(t, status, "smartdns_available", true)
 		assert(t, status, "smartdns_running", true)
-		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if restartCalls != 0 { t.Fatalf("invalid config must not be restarted, calls=%d", restartCalls) }
 		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "读取 SmartDNS 配置失败") {
 			t.Fatalf("config diagnostic missing: %q", got)
+		}
+	})
+
+	t.Run("plaintext upstream config forces DNS fallback", func(t *testing.T) {
+		deps := good
+		deps.readConfig = func(string) ([]byte, error) {
+			return []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver 223.5.5.5\\n"), nil
+		}
+		deps.restart = func() error { t.Fatal("policy-invalid config must not be restarted"); return nil }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "加密上游策略校验") {
+			t.Fatalf("policy diagnostic missing: %q", got)
 		}
 	})
 
