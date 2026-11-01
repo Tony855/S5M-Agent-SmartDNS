@@ -1515,7 +1515,7 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 		proxies := make([]*Proxy, 0, len(input.Servers))
 		var failures []string
 		for i, server := range input.Servers {
-			p := &Proxy{Mode: "proxy", Type: protocol, Server: strings.TrimSpace(server.Server), Port: server.Port, SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
+			p := &Proxy{Mode: "rule", Type: protocol, Server: strings.TrimSpace(server.Server), Port: server.Port, SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
 			p.Name = strings.TrimSpace(server.Name)
 			// Some provider JSON formats include a complete vmess:// URI per server.
 			// Parse that URI through the same tested path used by text imports so UUID,
