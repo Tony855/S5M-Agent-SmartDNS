@@ -478,9 +478,12 @@ func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 			if servers.Kind != yaml.SequenceNode || len(servers.Content) != 1 || servers.Content[0].Value != "127.0.0.1:6053" {
 				return yml, nil
 			}
+			// SmartDNS failure must not silently downgrade ordinary DNS queries
+			// to plaintext UDP/TCP. Use encrypted DoH endpoints; bootstrap resolvers
+			// remain separate and are used only to resolve endpoint/proxy hostnames.
 			servers.Content = []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.cloudflare.com/dns-query"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.google/dns-query"},
 			}
 			out, err := yaml.Marshal(&doc)
 			return string(out), err
@@ -533,8 +536,8 @@ func restoreAgentDNSNameserver(yml, fallbackYML string) (string, bool, error) {
 	// SmartDNS is unhealthy must restore independent bootstrap resolvers instead.
 	if len(fallbackNameserver.Content) == 1 && fallbackNameserver.Content[0].Value == "127.0.0.1:6053" {
 		fallbackNameserver = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.cloudflare.com/dns-query"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.google/dns-query"},
 		}}
 	}
 	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
