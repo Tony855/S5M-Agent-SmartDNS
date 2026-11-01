@@ -349,7 +349,7 @@
                   <el-option label="规则模式（未命中规则拒绝）" value="rule"></el-option>
                   <el-option label="分流模式（未匹配流量直连）" value="split"></el-option>
                   <el-option label="全局模式（全部走代理）" value="global"></el-option>
-                  <el-option label="回国模式（大陆直连，其余流量走代理回国）" value="return"></el-option>
+                  <el-option label="回国模式（大陆流量走代理回国，境外流量直连）" value="return"></el-option>
                   <el-option label="游戏模式（游戏域名走代理）" value="game"></el-option>
                 </el-select>
                 <el-button size="small" type="primary" :loading="savingMachineProxyMode[item.code]" @click="saveMachineProxyMode(item.code)">保存模式</el-button>

@@ -102,10 +102,14 @@ jobs:
           grep -q 'GetMachineProxyMode(machineCode)' server/internal/app/configgen.go
           grep -q 'CREATE TABLE IF NOT EXISTS machine_proxy_settings' server/internal/app/store.go
           grep -q 'DOMAIN-SUFFIX,v2net.cc,DIRECT' server/internal/app/configgen.go
-          grep -q 'GEOIP,CN,DIRECT' server/internal/app/configgen.go
-          grep -q 'MATCH,REJECT' server/internal/app/configgen.go
-          grep -q '回国模式（大陆直连，其余流量走代理回国）' server/web/index.html
-          ! grep -q '大陆走代理，境外直连' server/web/index.html
+          grep -q 'fmt.Sprintf("GEOIP,CN,%s", firstProxy)' server/internal/app/configgen.go
+          grep -q 'GEOIP,CN,REJECT' server/internal/app/configgen.go
+          grep -q 'rules = append(rules, "MATCH,DIRECT")' server/internal/app/configgen.go
+          ! grep -q 'GEOIP,CN,DIRECT' server/internal/app/configgen.go
+          grep -q 'routingMode != "return"' server/internal/app/configgen.go
+          grep -q 'routingMode != "global" && routingMode != "return"' server/internal/app/configgen.go
+          grep -q '回国模式（大陆流量走代理回国，境外流量直连）' server/web/index.html
+          ! grep -q '回国模式（大陆直连' server/web/index.html
 
       - name: Validate default and opt-in TUN deployment permissions
         run: |

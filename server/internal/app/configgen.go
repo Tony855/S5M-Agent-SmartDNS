@@ -968,13 +968,16 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		}
 	}
 	// SmartDNS uses literal-IP DoT upstreams, so it does not need DNS bootstrap
-	// through Mihomo. Route its encrypted upstream sockets through the selected
-	// proxy explicitly; this rule must precede source-CIDR and terminal MATCH rules.
-	if len(outs) > 0 {
+	// through Mihomo. For non-return modes, pin its encrypted upstream sockets
+	// to the selected proxy; return mode instead applies the same CN/overseas
+	// destination policy to DNS upstreams as it does to ordinary traffic.
+	if len(outs) > 0 && routingMode != "return" {
+		// Return mode routes DNS egress by destination geography too:
+		// mainland DNS upstreams use the mainland proxy, overseas upstreams go direct.
 		rules = append(rules, fmt.Sprintf("PROCESS-NAME,smartdns,%s", outs[0].Name))
 	}
 	// Mihomo's own DoH bootstrap stays independent from SmartDNS and uses literal-IP DNS.
-	if len(outs) > 0 && routingMode != "global" {
+	if len(outs) > 0 && routingMode != "global" && routingMode != "return" {
 		for _, domain := range []string{"dns.alidns.com", "doh.pub", "dns.cloudflare.com", "dns.google"} {
 			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, outs[0].Name))
 		}
@@ -1047,15 +1050,16 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		// Strict rule mode: only explicit rules may pass traffic; unmatched traffic is rejected.
 		rules = append(rules, "MATCH,REJECT")
 	case "return":
-		// Return-to-China mode: mainland destinations stay direct; all other
-		// traffic uses the selected proxy to exit through the mainland node.
-		rules = append(rules, "GEOIP,CN,DIRECT")
+		// Return-to-China mode: mainland destinations must use the selected
+		// mainland egress proxy; destinations outside CN go direct.
+		// Explicit controller and v2net.cc bypasses above remain higher priority.
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
+			rules = append(rules, fmt.Sprintf("GEOIP,CN,%s", firstProxy))
 		} else {
-			// Never silently bypass the mainland-exit requirement when no proxy exists.
-			rules = append(rules, "MATCH,REJECT")
+			// Without a mainland egress, reject CN traffic rather than leak it direct.
+			rules = append(rules, "GEOIP,CN,REJECT")
 		}
+		rules = append(rules, "MATCH,DIRECT")
 	case "game":
 		gameProxy := firstProxy
 		if gameProxy != "" {
