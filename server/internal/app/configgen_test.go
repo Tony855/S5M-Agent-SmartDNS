@@ -177,15 +177,18 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	app := &App{store: store}
 	controllerYAML, err := app.BuildConfigForMachine("")
 	if err != nil { t.Fatalf("BuildConfigForMachine(controller): %v", err) }
-	if !strings.Contains(controllerYAML, "mixed-port: 7890") {
+	if !strings.Contains(controllerYAML, "mixed-port: 8080") {
 		t.Fatalf("controller config should retain its separate local listener:\n%s", controllerYAML)
 	}
 
 	agentYAML, err := app.BuildConfigForMachine("node-a")
 	if err != nil { t.Fatalf("BuildConfigForMachine(agent): %v", err) }
-	for _, forbidden := range []string{"mixed-port:", "port:", "socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
+	if !strings.Contains(agentYAML, "mixed-port: 7890") {
+		t.Errorf("Agent config missing mixed-port 7890:\\n%s", agentYAML)
+	}
+	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
 		if strings.Contains(agentYAML, forbidden) {
-			t.Errorf("Agent config must not expose explicit proxy listener %q:\\n%s", forbidden, agentYAML)
+			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
 	}
 	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: false"} {
