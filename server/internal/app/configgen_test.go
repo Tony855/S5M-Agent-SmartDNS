@@ -813,7 +813,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 		{mode: "global", want: []string{"MATCH,proxy-a", "DOMAIN,controller.example.com,DIRECT"}},
 		{mode: "split", want: []string{"MATCH,proxy-a"}},
 		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
-		{mode: "return", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "GEOIP,CN,DIRECT", "MATCH,proxy-a"}},
+		{mode: "return", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "GEOIP,CN,proxy-a", "MATCH,DIRECT"}},
 		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,proxy-a", "MATCH,DIRECT"}},
 	}
 	for _, tt := range tests {
@@ -827,8 +827,17 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 					t.Errorf("mode %s missing %q:\\n%s", tt.mode, want, got)
 				}
 			}
-			if tt.mode == "split" && strings.Contains(got, "GEOIP,CN,DIRECT") {
-				t.Errorf("split mode must not force mainland destinations direct:\\n%s", got)
+			if tt.mode == "split" && strings.Contains(got, "GEOIP,CN,") {
+				t.Errorf("split mode must not add a forced mainland route:\\n%s", got)
+			}
+			if tt.mode == "return" {
+				if strings.Contains(got, "GEOIP,CN,DIRECT") || strings.Contains(got, "MATCH,proxy-a") {
+					t.Errorf("return mode must proxy CN and send non-CN traffic direct:\\n%s", got)
+				}
+				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "GEOIP,CN,proxy-a") ||
+					strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "GEOIP,CN,proxy-a") {
+					t.Errorf("controller/domain bypasses must precede the CN proxy rule:\\n%s", got)
+				}
 			}
 			if tt.mode == "rule" {
 				if strings.Contains(got, "MATCH,proxy-a") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "GEOIP,CN,DIRECT") {
@@ -852,11 +861,12 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}
 }
 
-func TestReturnModeWithoutProxyRejectsNonMainlandTraffic(t *testing.T) {
+func TestReturnModeWithoutProxyRejectsMainlandAndKeepsOverseasDirect(t *testing.T) {
 	got, err := buildConfigFromProxiesWithMode(nil, "node-a", "test-secret", "return", "")
 	if err != nil { t.Fatalf("build return config: %v", err) }
-	if !strings.Contains(got, "GEOIP,CN,DIRECT") || !strings.Contains(got, "MATCH,REJECT") || strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatalf("return mode without an outbound must not leak non-mainland traffic direct:\n%s", got)
+	if !strings.Contains(got, "GEOIP,CN,REJECT") || !strings.Contains(got, "MATCH,DIRECT") ||
+		strings.Contains(got, "GEOIP,CN,DIRECT") || strings.Contains(got, "GEOIP,CN,proxy") {
+		t.Fatalf("without a mainland egress, CN traffic must fail closed while overseas traffic stays direct:\\n%s", got)
 	}
 }
 
