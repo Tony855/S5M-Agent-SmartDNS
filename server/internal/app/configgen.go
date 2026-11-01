@@ -345,6 +345,18 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	if !foundDNSHijack {
 		dnsHijack.Content = append(dnsHijack.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "any:53"})
 	}
+	// TCP DNS must be intercepted as well as UDP; otherwise clients can bypass
+	// the local resolver by switching transports while TUN is enabled.
+	foundTCPDNSHijack := false
+	for _, item := range dnsHijack.Content {
+		if item.Value == "tcp://any:53" {
+			foundTCPDNSHijack = true
+			break
+		}
+	}
+	if !foundTCPDNSHijack {
+		dnsHijack.Content = append(dnsHijack.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tcp://any:53"})
+	}
 
 	routeExclude := mappingValue(tun, "route-exclude-address")
 	if routeExclude == nil || routeExclude.Kind != yaml.SequenceNode {
@@ -878,7 +890,13 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 			rules = append(rules, fmt.Sprintf("DOMAIN,%s,DIRECT", controllerHost))
 		}
 	}
-	// DNS bootstrap remains direct to avoid a DNS/proxy dependency loop.
+	// SmartDNS uses literal-IP DoT upstreams, so it does not need DNS bootstrap
+	// through Mihomo. Route its encrypted upstream sockets through the selected
+	// proxy explicitly; this rule must precede source-CIDR and terminal MATCH rules.
+	if len(outs) > 0 {
+		rules = append(rules, fmt.Sprintf("PROCESS-NAME,smartdns,%s", outs[0].Name))
+	}
+	// Mihomo's own DoH bootstrap stays independent from SmartDNS and uses literal-IP DNS.
 	if len(outs) > 0 && routingMode != "global" {
 		for _, domain := range []string{"dns.alidns.com", "doh.pub", "dns.cloudflare.com", "dns.google"} {
 			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, outs[0].Name))
