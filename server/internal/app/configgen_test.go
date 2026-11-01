@@ -150,11 +150,15 @@ tun:
 		seen := map[string]bool{}
 		for _, raw := range servers {
 			server, ok := raw.(string)
-			if !ok || net.ParseIP(server) == nil { t.Errorf("%s contains non-literal bootstrap %v", key, raw); continue }
-			if server == "127.0.0.1" || server == "127.0.0.1:6053" { t.Errorf("%s must not point to SmartDNS: %q", key, server) }
+			if !ok || !strings.HasPrefix(server, "tls://") || net.ParseIP(strings.TrimPrefix(server, "tls://")) == nil {
+				t.Errorf("%s contains non-encrypted or non-literal bootstrap %v", key, raw); continue
+			}
+			if strings.TrimPrefix(server, "tls://") == "127.0.0.1" || strings.TrimPrefix(server, "tls://") == "127.0.0.1:6053" {
+				t.Errorf("%s must not point to SmartDNS: %q", key, server)
+			}
 			seen[server] = true
 		}
-		for _, required := range []string{"223.5.5.5", "119.29.29.29"} {
+		for _, required := range []string{"tls://223.5.5.5", "tls://223.6.6.6"} {
 			if !seen[required] { t.Errorf("%s missing independent bootstrap %s: %#v", key, required, servers) }
 		}
 	}
