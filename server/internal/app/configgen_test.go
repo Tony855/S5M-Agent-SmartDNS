@@ -658,6 +658,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}{
 		{mode: "global", want: []string{"MATCH,proxy-a", "DOMAIN,controller.example.com,DIRECT"}},
 		{mode: "split", want: []string{"MATCH,proxy-a"}},
+		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "MATCH,REJECT"}},
 		{mode: "return", want: []string{"GEOIP,CN,proxy-a", "MATCH,DIRECT"}},
 		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,game-a", "MATCH,DIRECT"}},
 	}
@@ -674,6 +675,14 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 			}
 			if tt.mode == "split" && strings.Contains(got, "GEOIP,CN,DIRECT") {
 				t.Errorf("split mode must not force mainland destinations direct:\\n%s", got)
+			}
+			if tt.mode == "rule" {
+				if strings.Contains(got, "MATCH,proxy-a") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "GEOIP,CN,DIRECT") {
+					t.Errorf("rule mode must reject unmatched traffic and must not add implicit proxy/direct fallback:\\n%s", got)
+				}
+				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,REJECT") {
+					t.Errorf("controller bypass must appear before terminal reject rule:\\n%s", got)
+				}
 			}
 		})
 	}
