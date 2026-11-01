@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,47 @@ proxies:
 	}
 	for _, item := range addresses {
 		if item == "198.18.0.0/16" { t.Fatalf("fake-IP range must remain routed through TUN: %#v", addresses) }
+	}
+}
+
+func TestNormalizeAgentProxyConfigKeepsBootstrapIndependentFromSmartDNSAndTUN(t *testing.T) {
+	input := `dns:
+  default-nameserver:
+    - 127.0.0.1:6053
+    - bootstrap.example.com
+    - 9.9.9.9
+  proxy-server-nameserver:
+    - 127.0.0.1:6053
+    - resolver.example.com
+    - 8.8.4.4
+tun:
+  enable: true
+`
+	got, err := normalizeAgentProxyConfig(input)
+	if err != nil { t.Fatalf("normalize config: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode config: %v", err) }
+	dns := config["dns"].(map[string]any)
+	for _, key := range []string{"default-nameserver", "proxy-server-nameserver"} {
+		servers, ok := dns[key].([]any)
+		if !ok { t.Fatalf("%s is not a sequence: %#v", key, dns[key]) }
+		seen := map[string]bool{}
+		for _, raw := range servers {
+			server, ok := raw.(string)
+			if !ok || net.ParseIP(server) == nil { t.Errorf("%s contains non-literal bootstrap %v", key, raw); continue }
+			if server == "127.0.0.1" || server == "127.0.0.1:6053" { t.Errorf("%s must not point to SmartDNS: %q", key, server) }
+			seen[server] = true
+		}
+		for _, required := range []string{"223.5.5.5", "119.29.29.29"} {
+			if !seen[required] { t.Errorf("%s missing independent bootstrap %s: %#v", key, required, servers) }
+		}
+	}
+	tun := config["tun"].(map[string]any)
+	excluded := tun["route-exclude-address"].([]any)
+	for _, required := range []string{"223.5.5.5/32", "119.29.29.29/32", "::1/128", "fc00::/7", "fe80::/10"} {
+		found := false
+		for _, raw := range excluded { if raw == required { found = true; break } }
+		if !found { t.Errorf("TUN route exclusions missing %s: %#v", required, excluded) }
 	}
 }
 
