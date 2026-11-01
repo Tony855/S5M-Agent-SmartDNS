@@ -88,6 +88,22 @@ jobs:
           assert 'ROLLBACK_READY=0' in installer
           assert 'trap - ERR' in installer
           print("Native S5M-Server installer and rollback contract verified.")
+
+          agent = Path("scripts/deploy-agent.sh").read_text(encoding="utf-8")
+          for required in (
+              'chmod 600 "$CONFIG_FILE"',
+              '[[ -L "$CONFIG_FILE" ]]',
+              '[[ "$CONTAINER_NAME" =~',
+              '[[ "$ENABLE_TUN" == "1" && ! -c /dev/net/tun ]]',
+              'BACKUP_NAME=',
+              'docker rename "$CONTAINER_NAME" "$BACKUP_NAME"',
+              'restore_previous()',
+              'deployment_failed "新容器创建失败',
+              '等待新容器启动超时',
+              'docker start "$CONTAINER_NAME"',
+          ):
+              assert required in agent, f"Missing Agent deployment safeguard: {required}"
+          print("Agent deployment safety and rollback contract verified.")
           PY
 
       - name: Install ShellCheck
