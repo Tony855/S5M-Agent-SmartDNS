@@ -631,6 +631,10 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 		return "", fmt.Errorf("读取 Mihomo 设置失败: %w", err)
 	}
 	mode := routingModeForMachine(proxies, machineCode)
+	if strings.TrimSpace(machineCode) != "" {
+		mode, err = a.store.GetMachineProxyMode(machineCode)
+		if err != nil { return "", fmt.Errorf("读取机器代理模式失败: %w", err) }
+	}
 	controllerHost := controllerHostFromSettings(settings)
 	yml, err := buildConfigFromProxiesWithMode(proxies, machineCode, secret, mode, controllerHost)
 	if err != nil {
