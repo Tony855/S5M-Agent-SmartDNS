@@ -33,6 +33,8 @@ tun:
   enable: true
   route-exclude-address:
     - 10.1.2.0/24
+    - 223.5.5.5/32
+    - 119.29.29.29/32
 proxies:
   - name: upstream
     type: socks5
@@ -107,6 +109,9 @@ proxies:
 	}
 	for _, item := range addresses {
 		if item == "198.18.0.0/16" { t.Fatalf("fake-IP range must remain routed through TUN: %#v", addresses) }
+		if item == "223.5.5.5/32" || item == "119.29.29.29/32" {
+			t.Fatalf("legacy public DNS bypass %v must be removed from persisted TUN exclusions: %#v", item, addresses)
+		}
 	}
 }
 
