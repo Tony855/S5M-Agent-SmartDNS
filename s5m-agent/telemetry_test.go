@@ -101,3 +101,31 @@ func TestMihomoAPISecretValidationFailsClosed(t *testing.T) {
 		t.Fatalf("secret was not normalized: got %q", secret)
 	}
 }
+
+func TestApplyMihomoTelemetrySnapshotKeepsCachedValuesAndFreshness(t *testing.T) {
+	now := time.Now()
+	sampledAt := now.Add(-time.Second)
+	status := map[string]any{}
+	snapshot := mihomoTelemetrySnapshot{
+		UploadSpeed: 100,
+		DownloadSpeed: 200,
+		Connections: 3,
+		UploadTotal: 400,
+		DownloadTotal: 500,
+		SampledAt: sampledAt,
+	}
+	applyMihomoTelemetrySnapshot(status, snapshot, now)
+	if status["upload_speed"] != float64(100) || status["connections"] != 3 {
+		t.Fatalf("cached metrics were not copied to heartbeat status: %#v", status)
+	}
+	if status["telemetry_stale"] != false {
+		t.Fatalf("recent sample marked stale: %#v", status["telemetry_stale"])
+	}
+	if status["telemetry_sampled_at_ms"] != sampledAt.UnixMilli() {
+		t.Fatalf("sample timestamp mismatch: %#v", status["telemetry_sampled_at_ms"])
+	}
+	applyMihomoTelemetrySnapshot(status, snapshot, now.Add(2*time.Second))
+	if status["telemetry_stale"] != true {
+		t.Fatalf("expired sample not marked stale: %#v", status["telemetry_stale"])
+	}
+}
