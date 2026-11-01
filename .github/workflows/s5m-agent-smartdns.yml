@@ -6,6 +6,7 @@ on:
     paths:
       - "s5m-agent/Dockerfile.smartdns"
       - "s5m-agent/docker-compose.yml"
+      - "s5m-agent/docker-compose.tun.yml"
       - "s5m-agent/Dockerfile"
       - "scripts/s5m-deploy.sh"
       - "s5m-agent/Dockerfile.routeros"
@@ -61,6 +62,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate default and opt-in TUN deployment permissions
+        run: |
+          docker compose -f s5m-agent/docker-compose.yml config --quiet
+          docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config --quiet
+          ! grep -Eq '^[[:space:]]*(cap_add|devices):' s5m-agent/docker-compose.yml
+          grep -q 'NET_ADMIN' s5m-agent/docker-compose.tun.yml
+          grep -q '/dev/net/tun:/dev/net/tun' s5m-agent/docker-compose.tun.yml
+          bash -n scripts/s5m-deploy.sh
+          grep -q 'ENABLE_TUN=.*:-0' scripts/s5m-deploy.sh
+          grep -q 'TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)' scripts/s5m-deploy.sh
+          grep -q 'ENABLE_TUN=1.*缺少字符设备' scripts/s5m-deploy.sh
+          ! grep -q -- '--cap-add=NET_ADMIN' <(sed -n '/docker run -d/,/\$IMAGE_LOCAL/p' scripts/s5m-deploy.sh | grep -v 'TUN_ARGS')
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh
 
