@@ -74,6 +74,7 @@ jobs:
           assert 'rollback_install "Go 单元测试失败"' in installer
           assert 'rollback_install "S5M-Server 编译失败"' in installer
           assert 'rollback_install "现有 HTTPS 端点健康检查失败"' in installer
+          assert 'allow-lan: false' in installer
           assert 'systemctl enable mihomo' in installer
           assert 'systemctl enable "$UNIT"' in installer
           assert '"$BACKUP/mihomo-active"' in installer
