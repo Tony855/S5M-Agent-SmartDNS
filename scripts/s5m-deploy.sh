@@ -8,7 +8,6 @@ IMAGE_LOCAL="s5m-agent:local"
 CONTAINER="s5m-agent"
 DATA_DIR="/opt/s5m-agent/data"
 PORT_WEB=80
-PORT_PROXY=7890
 
 log()  { echo -e "\033[32m[+]\033[0m $*"; }
 warn() { echo -e "\033[33m[!]\033[0m $*"; }
@@ -148,6 +147,6 @@ log "Web 探活："
 http_head "http://127.0.0.1:${PORT_WEB}" || warn "80 端口未响应"
 echo
 log "部署脚本执行完毕。浏览器访问：http://<服务器公网IP>"
-warn "请按需确认安全组/防火墙放行 ${PORT_WEB} 和 ${PORT_PROXY}"
+warn "仅需按管理网策略放行 Agent 管理端口 ${PORT_WEB}；不要开放 7890 显式代理端口"
 echo
 log "查看实时日志：docker logs -f $CONTAINER（Ctrl+C 只退出日志查看）"
