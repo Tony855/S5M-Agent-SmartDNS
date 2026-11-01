@@ -55,6 +55,9 @@ proxies:
 	if config["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("external-controller = %#v", config["external-controller"])
 	}
+	if config["find-process-mode"] != "strict" {
+		t.Fatalf("find-process-mode = %#v, want strict", config["find-process-mode"])
+	}
 	dns, ok := config["dns"].(map[string]any)
 	if !ok {
 		t.Fatalf("dns is not a mapping: %#v", config["dns"])
