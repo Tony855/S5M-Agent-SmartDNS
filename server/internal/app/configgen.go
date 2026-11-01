@@ -1064,13 +1064,14 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		// Strict rule mode: only explicit rules may pass traffic; unmatched traffic is rejected.
 		rules = append(rules, "MATCH,REJECT")
 	case "return":
-		// Return-to-China mode: mainland destinations use the proxy; overseas destinations go direct.
+		// Return-to-China mode: mainland destinations stay direct; all other
+		// traffic uses the selected proxy to exit through the mainland node.
+		rules = append(rules, "GEOIP,CN,DIRECT")
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("GEOIP,CN,%s", firstProxy))
+			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
 		} else {
-			rules = append(rules, "GEOIP,CN,DIRECT")
+			rules = append(rules, "MATCH,DIRECT")
 		}
-		rules = append(rules, "MATCH,DIRECT")
 	case "game":
 		gameProxy := firstGameProxy
 		if gameProxy == "" {
