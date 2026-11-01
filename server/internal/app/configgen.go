@@ -191,17 +191,27 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "default-nameserver"}, defaultDNS)
 		}
 	}
+	// Bootstrap resolvers must be literal IP addresses, never hostnames or the
+	// SmartDNS loopback endpoint. This keeps proxy endpoint resolution independent
+	// from SmartDNS and from a proxy connection that has not been established yet.
+	filterLiteralBootstrap := func(sequence *yaml.Node) {
+		kept := make([]*yaml.Node, 0, len(sequence.Content))
+		for _, item := range sequence.Content {
+			if item.Kind != yaml.ScalarNode || net.ParseIP(strings.Trim(item.Value, "[]")) == nil ||
+				item.Value == "127.0.0.1" || item.Value == "127.0.0.1:6053" {
+				continue
+			}
+			kept = append(kept, item)
+		}
+		sequence.Content = kept
+	}
+	filterLiteralBootstrap(defaultDNS)
 	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
 		found := false
 		for _, item := range defaultDNS.Content {
-			if item.Value == server {
-				found = true
-				break
-			}
+			if item.Value == server { found = true; break }
 		}
-		if !found {
-			defaultDNS.Content = append(defaultDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server})
-		}
+		if !found { defaultDNS.Content = append(defaultDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server}) }
 	}
 
 	// Resolve proxy endpoint hostnames through explicit bootstrap DNS servers rather
@@ -222,17 +232,14 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "proxy-server-nameserver"}, proxyDNS)
 		}
 	}
+	// Proxy endpoint bootstrap follows the same literal-IP-only policy.
+	filterLiteralBootstrap(proxyDNS)
 	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
 		found := false
 		for _, item := range proxyDNS.Content {
-			if item.Value == server {
-				found = true
-				break
-			}
+			if item.Value == server { found = true; break }
 		}
-		if !found {
-			proxyDNS.Content = append(proxyDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server})
-		}
+		if !found { proxyDNS.Content = append(proxyDNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: server}) }
 	}
 
 	// Use independent international DoH resolvers as fallback. Preserve any
@@ -286,7 +293,10 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	// proxy endpoint IPs so TUN cannot recursively route its own upstream transport.
 	excluded := []string{
 		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
-		"192.168.0.0/16",
+		"192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+		// Keep bootstrap DNS outside the TUN so resolver bootstrap never
+		// loops back through the local DNS listener or SmartDNS.
+		"223.5.5.5/32", "119.29.29.29/32",
 	}
 	seen := make(map[string]bool, len(excluded))
 	for _, cidr := range excluded {
