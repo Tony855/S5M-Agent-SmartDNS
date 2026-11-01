@@ -104,14 +104,12 @@ func TestValidateProxyRejectsUnknownModeAndInvalidPorts(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "unknown mode",
+			name:  "legacy unknown mode is ignored",
 			proxy: Proxy{Name: "proxy-a", Mode: "proxxy", Type: "socks5", Server: "example.com", Port: 1080},
-			want:  "运行模式无效",
 		},
 		{
-			name:  "unsupported direct mode",
-			proxy: Proxy{Name: "proxy-a", Mode: "direct"},
-			want:  "运行模式无效",
+			name:  "legacy direct mode is ignored",
+			proxy: Proxy{Name: "proxy-a", Mode: "direct", Type: "socks5", Server: "example.com", Port: 1080},
 		},
 		{
 			name:  "zero port",
