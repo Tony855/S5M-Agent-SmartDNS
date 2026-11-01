@@ -1039,11 +1039,13 @@ func collectMihomoStatus() map[string]any {
 	status := map[string]any{
 		"arch": runtime.GOARCH, "os": runtime.GOOS,
 		"hostname": "", "mihomo_version": "", "mihomo_healthy": false,
+		"mihomo_process_running": false, "mihomo_api_healthy": false,
 		"upload_total": int64(0), "download_total": int64(0),
 		"upload_speed": float64(0), "download_speed": float64(0),
 		"connections": 0, "config_sha256": "", "last_error": "",
 	}
 	collectSmartDNSStatus(status)
+	status["mihomo_process_running"] = exec.Command("pidof", "mihomo").Run() == nil
 	// Preserve the last known telemetry even when the config file or Mihomo
 	// version endpoint is temporarily unavailable.
 	applyMihomoTelemetrySnapshot(status, agentMihomoTelemetry.snapshot(), time.Now())
@@ -1103,7 +1105,8 @@ func collectMihomoStatus() map[string]any {
 		return status
 	}
 	status["mihomo_version"] = versionText
-	status["mihomo_healthy"] = true
+	status["mihomo_healthy"] = true // Backward-compatible alias for API health.
+	status["mihomo_api_healthy"] = true
 	// The dedicated telemetry poller is the sole owner of /connections;
 	// the heartbeat reuses its cached sample instead of issuing a duplicate request.
 	return status
