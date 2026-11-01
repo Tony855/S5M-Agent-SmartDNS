@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -28,6 +29,7 @@ type mihomoTelemetrySnapshot struct {
 	TrafficError     string    `json:"traffic_error"`
 	ConnectionsError string    `json:"connections_error"`
 	UpdatedAt        time.Time `json:"-"`
+	SampledAt         time.Time `json:"-"`
 }
 
 type mihomoTelemetryState struct {
@@ -126,7 +128,7 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 			UploadTotal   uint64            `json:"uploadTotal"`
 			DownloadTotal uint64            `json:"downloadTotal"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 4<<20)).Decode(&payload); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, (4<<20)+1)).Decode(&payload); err != nil {
 			previousAt = time.Time{}
 			recordMihomoTelemetryError(state, "解析 Mihomo /connections 失败: "+err.Error())
 			return
@@ -149,6 +151,7 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 			v.DownloadTotal = payload.DownloadTotal
 			v.UploadSpeed = upSpeed
 			v.DownloadSpeed = downSpeed
+			v.SampledAt = now
 			v.TrafficError = ""
 			v.ConnectionsError = ""
 		})
@@ -208,7 +211,9 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 					"download_total":    snapshot.DownloadTotal,
 					"traffic_error":     snapshot.TrafficError,
 					"connections_error": snapshot.ConnectionsError,
-					"telemetry_at_ms":   now.UnixMilli(),
+					"telemetry_at_ms":        now.UnixMilli(),
+					"telemetry_sampled_at_ms": snapshot.SampledAt.UnixMilli(),
+					"telemetry_stale":         snapshot.SampledAt.IsZero() || now.Sub(snapshot.SampledAt) > 3*defaultConnectionsInterval,
 				},
 			}
 			if err := writeAgentWSJSON(conn, payload); err != nil {
