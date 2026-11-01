@@ -33,6 +33,8 @@ tun:
   enable: true
   route-exclude-address:
     - 10.1.2.0/24
+    - 223.5.5.5/32
+    - 119.29.29.29/32
 proxies:
   - name: upstream
     type: socks5
@@ -107,6 +109,9 @@ proxies:
 	}
 	for _, item := range addresses {
 		if item == "198.18.0.0/16" { t.Fatalf("fake-IP range must remain routed through TUN: %#v", addresses) }
+		if item == "223.5.5.5/32" || item == "119.29.29.29/32" {
+			t.Fatalf("legacy public DNS bypass %v must be removed from persisted TUN exclusions: %#v", item, addresses)
+		}
 	}
 }
 
@@ -150,20 +155,29 @@ tun:
 		seen := map[string]bool{}
 		for _, raw := range servers {
 			server, ok := raw.(string)
-			if !ok || net.ParseIP(server) == nil { t.Errorf("%s contains non-literal bootstrap %v", key, raw); continue }
-			if server == "127.0.0.1" || server == "127.0.0.1:6053" { t.Errorf("%s must not point to SmartDNS: %q", key, server) }
+			if !ok || !strings.HasPrefix(server, "tls://") || net.ParseIP(strings.TrimPrefix(server, "tls://")) == nil {
+				t.Errorf("%s contains non-encrypted or non-literal bootstrap %v", key, raw); continue
+			}
+			if strings.TrimPrefix(server, "tls://") == "127.0.0.1" || strings.TrimPrefix(server, "tls://") == "127.0.0.1:6053" {
+				t.Errorf("%s must not point to SmartDNS: %q", key, server)
+			}
 			seen[server] = true
 		}
-		for _, required := range []string{"223.5.5.5", "119.29.29.29"} {
+		for _, required := range []string{"tls://223.5.5.5", "tls://223.6.6.6"} {
 			if !seen[required] { t.Errorf("%s missing independent bootstrap %s: %#v", key, required, servers) }
 		}
 	}
 	tun := config["tun"].(map[string]any)
 	excluded := tun["route-exclude-address"].([]any)
-	for _, required := range []string{"223.5.5.5/32", "119.29.29.29/32", "::1/128", "fc00::/7", "fe80::/10"} {
+	for _, required := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10"} {
 		found := false
 		for _, raw := range excluded { if raw == required { found = true; break } }
 		if !found { t.Errorf("TUN route exclusions missing %s: %#v", required, excluded) }
+	}
+	for _, forbidden := range []string{"223.5.5.5/32", "119.29.29.29/32"} {
+		for _, raw := range excluded {
+			if raw == forbidden { t.Errorf("public bootstrap resolver %s must not bypass TUN by default: %#v", forbidden, excluded) }
+		}
 	}
 }
 
@@ -1015,7 +1029,7 @@ func TestBuildConfigWithoutProxyKeepsDNSBootstrapValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildConfigFromProxies() error = %v", err)
 	}
-	for _, want := range []string{"listen: 127.0.0.1:5353", "nameserver:", "223.5.5.5", "119.29.29.29", "DOMAIN-SUFFIX,v2net.cc,DIRECT"} {
+	for _, want := range []string{"listen: 127.0.0.1:5353", "nameserver:", "tls://223.5.5.5", "tls://223.6.6.6", "DOMAIN-SUFFIX,v2net.cc,DIRECT"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("default DNS configuration missing %q:\n%s", want, got)
 		}
@@ -1050,8 +1064,8 @@ func TestBuildConfigIncludesTUNDNSDefaults(t *testing.T) {
 		"https://dns.google/dns-query",
 		"fallback-filter:",
 		"geoip-code: CN",
-		"223.5.5.5",
-		"119.29.29.29",
+		"tls://223.5.5.5",
+		"tls://223.6.6.6",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated TUN/DNS config missing %q:\n%s", want, got)
@@ -1321,8 +1335,39 @@ func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
 	generated := "dns:\n  enable: true\n  nameserver:\n    - 127.0.0.1:6053\n  default-nameserver:\n    - 223.5.5.5\n"
 	safeFallback, err := applyAgentRuntimeDNS(generated, false)
 	if err != nil { t.Fatalf("fallback generated SmartDNS DNS: %v", err) }
-	if !strings.Contains(safeFallback, "223.5.5.5") || strings.Contains(safeFallback, "127.0.0.1:6053") {
-		t.Fatalf("unhealthy generated SmartDNS must fall back to independent resolvers:\n%s", safeFallback)
+	var fallbackConfig map[string]any
+	if err := yaml.Unmarshal([]byte(safeFallback), &fallbackConfig); err != nil {
+		t.Fatalf("decode unhealthy SmartDNS fallback: %v\\n%s", err, safeFallback)
+	}
+	fallbackDNS, ok := fallbackConfig["dns"].(map[string]any)
+	if !ok {
+		t.Fatalf("fallback dns section missing or invalid:\\n%s", safeFallback)
+	}
+	fallbackServers, ok := fallbackDNS["nameserver"].([]any)
+	if !ok {
+		t.Fatalf("fallback dns.nameserver missing or invalid:\\n%s", safeFallback)
+	}
+	wantFallback := map[string]bool{
+		"https://dns.cloudflare.com/dns-query": false,
+		"https://dns.google/dns-query": false,
+	}
+	for _, raw := range fallbackServers {
+		server, ok := raw.(string)
+		if !ok {
+			t.Errorf("fallback nameserver has unexpected type %T", raw)
+			continue
+		}
+		if _, exists := wantFallback[server]; exists {
+			wantFallback[server] = true
+		}
+		if server == "127.0.0.1:6053" || server == "223.5.5.5" || server == "119.29.29.29" {
+			t.Errorf("fallback dns.nameserver must not contain SmartDNS or plaintext public DNS %q", server)
+		}
+	}
+	for server, found := range wantFallback {
+		if !found {
+			t.Errorf("encrypted fallback nameserver %q missing: %#v", server, fallbackServers)
+		}
 	}
 }
 
@@ -1386,3 +1431,62 @@ func TestRestoreAgentDNSNameserverIsIdempotentAndRejectsMalformedYAML(t *testing
 	if _, _, err := restoreAgentDNSNameserver("dns: [unterminated", baseline); err == nil { t.Fatal("malformed current YAML must fail") }
 	if _, _, err := restoreAgentDNSNameserver(legacy, "dns: [unterminated"); err == nil { t.Fatal("malformed baseline YAML must fail") }
 }
+
+func TestSmartDNSProcessRoutingRulePrecedesAllTerminalPolicies(t *testing.T) {
+	proxies := []Proxy{{
+		Name: "dns-egress", Type: "socks5", Server: "192.0.2.53",
+		Port: 1080, MachineCode: "__GLOBAL__", Enabled: true,
+	}}
+	for _, mode := range []string{"global", "split", "rule", "return", "game"} {
+		t.Run(mode, func(t *testing.T) {
+			got, err := buildConfigFromProxiesWithMode(proxies, "", "test-secret", mode, "")
+			if err != nil {
+				t.Fatalf("build config: %v", err)
+			}
+			var config map[string]any
+			if err := yaml.Unmarshal([]byte(got), &config); err != nil {
+				t.Fatalf("decode generated config: %v", err)
+			}
+			rules, ok := config["rules"].([]any)
+			if !ok {
+				t.Fatalf("rules is not a sequence: %#v", config["rules"])
+			}
+			processIndex, terminalIndex := -1, -1
+			processCount, terminalCount := 0, 0
+			for i, raw := range rules {
+				rule, ok := raw.(string)
+				if !ok {
+					t.Fatalf("rule %d is not a string: %#v", i, raw)
+				}
+				if strings.HasPrefix(rule, "PROCESS-NAME,smartdns,") {
+					processCount++
+					processIndex = i
+					if rule != "PROCESS-NAME,smartdns,dns-egress" {
+						t.Errorf("unexpected SmartDNS route target %q", rule)
+					}
+				}
+				if strings.HasPrefix(rule, "MATCH,") {
+					terminalCount++
+					terminalIndex = i
+				}
+			}
+			if processCount != 1 {
+				t.Fatalf("expected exactly one SmartDNS process route, got %d: %#v", processCount, rules)
+			}
+			if terminalCount != 1 || terminalIndex <= processIndex {
+				t.Fatalf("SmartDNS process route must precede the sole terminal MATCH: process=%d terminal=%d rules=%#v", processIndex, terminalIndex, rules)
+			}
+		})
+	}
+}
+
+func TestSmartDNSProcessRoutingRuleOmittedWithoutUsableProxy(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-without-proxy", "test-secret", "rule", "")
+	if err != nil {
+		t.Fatalf("build config without proxy: %v", err)
+	}
+	if strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("must not generate SmartDNS process rule with no usable proxy:\n%s", got)
+	}
+}
+

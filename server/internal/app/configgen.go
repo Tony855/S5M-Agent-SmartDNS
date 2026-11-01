@@ -41,11 +41,11 @@ dns:
         - '+.v2net.cc'
         - 'geosite:private'
     default-nameserver:
-        - 223.5.5.5
-        - 119.29.29.29
+        - tls://223.5.5.5
+        - tls://223.6.6.6
     proxy-server-nameserver:
-        - 223.5.5.5
-        - 119.29.29.29
+        - tls://223.5.5.5
+        - tls://223.6.6.6
     nameserver:
         - 127.0.0.1:6053
     fallback:
@@ -193,22 +193,29 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "default-nameserver"}, defaultDNS)
 		}
 	}
-	// Bootstrap resolvers must be literal IP addresses, never hostnames or the
-	// SmartDNS loopback endpoint. This keeps proxy endpoint resolution independent
-	// from SmartDNS and from a proxy connection that has not been established yet.
+	// Bootstrap resolvers must use encrypted DNS with literal IP endpoints.
+	// This avoids plaintext bootstrap queries and hostname-resolution loops.
 	filterLiteralBootstrap := func(sequence *yaml.Node) {
 		kept := make([]*yaml.Node, 0, len(sequence.Content))
 		for _, item := range sequence.Content {
-			if item.Kind != yaml.ScalarNode || net.ParseIP(strings.Trim(item.Value, "[]")) == nil ||
-				item.Value == "127.0.0.1" || item.Value == "127.0.0.1:6053" {
+			if item.Kind != yaml.ScalarNode { continue }
+			value := strings.TrimSpace(item.Value)
+			if strings.HasPrefix(value, "tls://") {
+				value = strings.TrimPrefix(value, "tls://")
+			} else if strings.Contains(value, "://") {
 				continue
 			}
+			if net.ParseIP(strings.Trim(value, "[]")) == nil ||
+				value == "127.0.0.1" || value == "127.0.0.1:6053" {
+				continue
+			}
+			item.Value = "tls://" + value
 			kept = append(kept, item)
 		}
 		sequence.Content = kept
 	}
 	filterLiteralBootstrap(defaultDNS)
-	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
+	for _, server := range []string{"tls://223.5.5.5", "tls://223.6.6.6"} {
 		found := false
 		for _, item := range defaultDNS.Content {
 			if item.Value == server { found = true; break }
@@ -236,7 +243,7 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	}
 	// Proxy endpoint bootstrap follows the same literal-IP-only policy.
 	filterLiteralBootstrap(proxyDNS)
-	for _, server := range []string{"223.5.5.5", "119.29.29.29"} {
+	for _, server := range []string{"tls://223.5.5.5", "tls://223.6.6.6"} {
 		found := false
 		for _, item := range proxyDNS.Content {
 			if item.Value == server { found = true; break }
@@ -296,9 +303,6 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	excluded := []string{
 		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
 		"192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
-		// Keep bootstrap DNS outside the TUN so resolver bootstrap never
-		// loops back through the local DNS listener or SmartDNS.
-		"223.5.5.5/32", "119.29.29.29/32",
 	}
 	seen := make(map[string]bool, len(excluded))
 	for _, cidr := range excluded {
@@ -389,6 +393,26 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "route-exclude-address"}, routeExclude)
 		}
 	}
+	// Remove legacy public DNS bypasses from persisted/custom TUN exclusions.
+	// These addresses were previously excluded to reach bootstrap resolvers, but
+	// doing so lets plaintext DNS escape the TUN. Proxy endpoint exclusions are
+	// added separately above and remain intact.
+	legacyDNSBypasses := map[string]bool{
+		"223.5.5.5/32": true,
+		"119.29.29.29/32": true,
+	}
+	filteredRouteExcludes := routeExclude.Content[:0]
+	for _, item := range routeExclude.Content {
+		// Drop malformed nil YAML nodes instead of carrying them into the
+		// subsequent CIDR merge loop, which expects every entry to be non-nil.
+		if item == nil {
+			continue
+		}
+		if !legacyDNSBypasses[item.Value] {
+			filteredRouteExcludes = append(filteredRouteExcludes, item)
+		}
+	}
+	routeExclude.Content = filteredRouteExcludes
 	for _, cidr := range excluded {
 		found := false
 		for _, item := range routeExclude.Content {
@@ -481,9 +505,12 @@ func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 			if servers.Kind != yaml.SequenceNode || len(servers.Content) != 1 || servers.Content[0].Value != "127.0.0.1:6053" {
 				return yml, nil
 			}
+			// SmartDNS failure must not silently downgrade ordinary DNS queries
+			// to plaintext UDP/TCP. Use encrypted DoH endpoints; bootstrap resolvers
+			// remain separate and are used only to resolve endpoint/proxy hostnames.
 			servers.Content = []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.cloudflare.com/dns-query"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.google/dns-query"},
 			}
 			out, err := yaml.Marshal(&doc)
 			return string(out), err
@@ -536,8 +563,8 @@ func restoreAgentDNSNameserver(yml, fallbackYML string) (string, bool, error) {
 	// SmartDNS is unhealthy must restore independent bootstrap resolvers instead.
 	if len(fallbackNameserver.Content) == 1 && fallbackNameserver.Content[0].Value == "127.0.0.1:6053" {
 		fallbackNameserver = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "119.29.29.29"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.cloudflare.com/dns-query"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.google/dns-query"},
 		}}
 	}
 	for i := 0; i+1 < len(currentDNS.Content); i += 2 {
