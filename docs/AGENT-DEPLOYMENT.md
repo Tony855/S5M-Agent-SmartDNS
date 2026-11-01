@@ -19,7 +19,8 @@ chmod 0755 /usr/local/sbin/s5m-agent-deploy
 | `IMAGE` | `ghcr.io/tony855/s5m-agent-smartdns:dev` | Agent 镜像 |
 | `CONTAINER_NAME` | `s5m-agent` | 容器名称 |
 | `S5M_HOSTNAME` | 空（自动使用系统 hostname） | Agent 上报主机名 |
-| `BIND_IP` | `0.0.0.0` | 宿主机端口监听地址 |
+| `BIND_IP` | `0.0.0.0` | DNS 端口等通用宿主机绑定地址 |
+| `WEB_BIND_IP` | `127.0.0.1`（新配置） | Agent 注册管理页面/API 独立绑定地址 |
 | `WEB_PORT` | `80` | 映射容器 Web 端口；设为 `0` 禁用 |
 | `PROXY_PORT` | `0` | 映射容器代理端口 7890；设为 `0` 禁用 |
 | `PROXY_BIND_IP` | `127.0.0.1`（新配置） | 代理端口独立绑定地址；旧配置缺少此项时沿用 `BIND_IP`，保持升级兼容 |
@@ -51,7 +52,8 @@ EXTRA_ENV_FILE="/etc/s5m-agent-smartdns.env"
 
 - 代理端口默认不发布（`PROXY_PORT=0`）。新配置即使启用 `PROXY_PORT`，也默认只绑定 `127.0.0.1`；需要 LAN 客户端访问时，显式设置 `PROXY_BIND_IP` 为指定 LAN 地址，并配置防火墙来源 IP 白名单或 Mihomo 代理认证。不要绑定 `0.0.0.0` 后直接暴露公网。
 - 为兼容旧部署，已有配置文件若没有 `PROXY_BIND_IP`，升级脚本继续沿用原来的 `BIND_IP`，不会擅自把既有 7890 映射改成回环地址。
-- Web 端口默认绑定所有网卡的 80 端口。公网管理页面应配置 HTTPS 和访问控制；如仅本机访问，可将 `BIND_IP` 改为 `127.0.0.1`。
+- Agent 注册页面和 `/api/bind` 会改变节点主控地址及注册凭据。新配置默认将 Web 端口绑定到 `127.0.0.1`，建议通过 SSH 本地转发或受认证的反向代理访问。确需 LAN 访问时，显式设置 `WEB_BIND_IP` 为可信 LAN 地址并配置防火墙白名单；不要直接暴露到公网。
+- 为兼容旧部署，已有配置文件若没有 `WEB_BIND_IP`，升级脚本继续沿用原来的 `BIND_IP`，不会擅自改变既有 Web 端口映射。
 - Agent 内部 API 端口 8088 不会映射到宿主机。
 - SmartDNS 默认不对宿主机发布；需要提供 DNS 服务时再配置 `DNS_PORT`，并限制来源网络。
 - TUN 默认关闭。启用前确认宿主机存在 `/dev/net/tun`，并了解 NET_ADMIN 权限影响。
