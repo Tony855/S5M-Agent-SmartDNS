@@ -12,7 +12,7 @@
 | Agent 绑定页面/API | 80/TCP | 初次绑定和 Agent 管理 |
 | Mihomo 控制 API | 8088/TCP | 仅供容器内部 Agent 使用，**不要映射到公网** |
 
-建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent 不提供 7890 HTTP/SOCKS 显式代理入口；Linux 节点通过 Mihomo TUN 实现透明代理，TUN 需在节点配置中启用。 在主控节点的 Mihomo 配置中设置 `tun.enable: true`；容器运行参数必须包含 `NET_ADMIN` 和 `/dev/net/tun`。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
+建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent 不提供 7890 HTTP/SOCKS 显式代理入口；Linux 节点通过 Mihomo TUN 实现透明代理，TUN 需在节点配置中启用。 在主控节点的 Mihomo 配置中设置 `tun.enable: true`；容器运行参数必须包含 `NET_ADMIN` 和 `/dev/net/tun`。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
 
 ## 2. 部署前准备
 
