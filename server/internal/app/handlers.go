@@ -1773,7 +1773,7 @@ func (a *App) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Keep legacy config delivery aligned with the Agent container's 7890:7890 mapping.
-	normalized, normalizeErr := normalizeAgentMixedPort(yml)
+	normalized, normalizeErr := normalizeAgentProxyConfig(yml)
 	if normalizeErr != nil {
 		writeErr(w, http.StatusInternalServerError, "校正节点代理端口失败")
 		return
@@ -2430,7 +2430,7 @@ func (a *App) handleGetNodeConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Repair stale persisted Agent YAML before returning it to the management UI.
 	// Keep the controller/global template untouched and update only this machine's config.
-	normalized, normalizeErr := normalizeAgentMixedPort(cfg.YAML)
+	normalized, normalizeErr := normalizeAgentProxyConfig(cfg.YAML)
 	if normalizeErr != nil {
 		writeErr(w, http.StatusInternalServerError, "节点配置端口校正失败: "+normalizeErr.Error())
 		return
