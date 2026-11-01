@@ -2007,6 +2007,31 @@ func controllerWebSocketResponseError(operation, message string) error {
 	return fmt.Errorf("主控端%s失败: %s", operation, message)
 }
 
+func runAgentRouteRefreshLoop(ctx context.Context, centralURL string, interval time.Duration) {
+	if interval < 30*time.Second {
+		interval = 30 * time.Second
+	}
+	refresh := func() {
+		if err := refreshAndApplyCentralRouteExclusions(centralURL); err != nil {
+			setAgentRouteSyncError("主控直连路由更新失败: " + err.Error())
+			fmt.Printf("刷新主控直连排除地址失败: %s\n", safeMihomoValidationDiagnostic([]byte(err.Error())))
+			return
+		}
+		setAgentRouteSyncError("")
+	}
+	refresh()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
+}
+
 func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	base, err := url.Parse(strings.TrimRight(cfg.CentralURL, "/"))
 	if err != nil || base.Host == "" {
