@@ -856,6 +856,36 @@ func TestStrictRuleModeIsDefault(t *testing.T) {
 	}
 }
 
+func TestMachineRoutingModeIsIndependentFromProxyCRUDAndMigratesLegacyMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machine-routing.db")
+	store, err := OpenStore(path)
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	// Simulate a pre-migration database containing an old per-proxy mode.
+	_, err = store.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,machine_code,enabled) VALUES(?,?,?,?,?,?,1)`, "legacy-first", "split", "socks5", "192.0.2.1", 1080, "node-a")
+	if err != nil { t.Fatalf("insert legacy proxy: %v", err) }
+	if err := store.db.Close(); err != nil { t.Fatalf("close store: %v", err) }
+
+	store, err = OpenStore(path)
+	if err != nil { t.Fatalf("reopen/migrate store: %v", err) }
+	defer store.db.Close()
+	mode, err := store.GetMachineProxyMode("node-a")
+	if err != nil || mode != "split" { t.Fatalf("migrated mode = %q, err=%v; want split", mode, err) }
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatalf("SetMachineProxyMode: %v", err) }
+
+	proxy := &Proxy{Name: "new-proxy", Mode: "global", Type: "socks5", Server: "192.0.2.2", Port: 1080, MachineCode: "node-a", SourceCIDR: "0.0.0.0/0", Enabled: true}
+	if err := store.CreateProxy(proxy); err != nil { t.Fatalf("CreateProxy: %v", err) }
+	proxy.Name = "renamed-proxy"
+	proxy.Server = "192.0.2.3"
+	if err := store.UpdateProxy(proxy); err != nil { t.Fatalf("UpdateProxy: %v", err) }
+	if err := store.DeleteProxy(proxy.ID); err != nil { t.Fatalf("DeleteProxy: %v", err) }
+	mode, err = store.GetMachineProxyMode("node-a")
+	if err != nil || mode != "return" { t.Fatalf("proxy CRUD changed machine mode to %q, err=%v; want return", mode, err) }
+	if err := store.SetMachineProxyMode("node-b", "game"); err != nil { t.Fatalf("set node-b mode: %v", err) }
+	modeA, _ := store.GetMachineProxyMode("node-a")
+	modeB, _ := store.GetMachineProxyMode("node-b")
+	if modeA != "return" || modeB != "game" { t.Fatalf("machine modes not isolated: node-a=%q node-b=%q", modeA, modeB) }
+}
+
 func TestStoreCreateProxyDefaultsToStrictRuleMode(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-default-mode.db"))
 	if err != nil {
