@@ -991,7 +991,7 @@ func TestBuildConfigForHistoricalProxyAliasesKeepsTheirTrafficPolicy(t *testing.
 	}
 }
 
-func TestRoutingModeForMachineUsesPersistedProxyIDOrder(t *testing.T) {
+func TestLegacyProxyModesDoNotControlMachineRoutingAfterMigration(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "routing-mode-order.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -1013,8 +1013,8 @@ func TestRoutingModeForMachineUsesPersistedProxyIDOrder(t *testing.T) {
 	if len(persisted) != 2 || persisted[0].Name != "legacy-split-first" || persisted[1].Name != "new-rule-second" {
 		t.Fatalf("ListProxies order = %#v, want stable insertion/ID order", persisted)
 	}
-	if got := routingModeForMachine(persisted, "node-a"); got != "split" {
-		t.Fatalf("routing mode = %q, want legacy split anchor", got)
+	if got := routingModeForMachine(persisted, "node-a"); got != "rule" {
+		t.Fatalf("new proxy records must not select machine routing mode; got %q, want rule fallback", got)
 	}
 }
 
