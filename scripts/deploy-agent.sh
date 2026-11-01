@@ -20,6 +20,8 @@ IMAGE="ghcr.io/tony855/s5m-agent-smartdns:dev"
 CONTAINER_NAME="s5m-agent"
 S5M_HOSTNAME=""
 BIND_IP="0.0.0.0"
+# Agent registration UI/API is local-only on fresh installs; use SSH tunnel or explicitly bind a trusted LAN IP.
+WEB_BIND_IP="127.0.0.1"
 WEB_PORT="80"
 # 代理端口默认不映射；启用时默认只绑定本机回环地址。
 PROXY_PORT="0"
@@ -45,6 +47,8 @@ IMAGE="${IMAGE:-ghcr.io/tony855/s5m-agent-smartdns:dev}"
 CONTAINER_NAME="${CONTAINER_NAME:-s5m-agent}"
 S5M_HOSTNAME="${S5M_HOSTNAME:-$(hostname)}"
 BIND_IP="${BIND_IP:-0.0.0.0}"
+# Legacy config files without WEB_BIND_IP retain their previous BIND_IP behavior.
+WEB_BIND_IP="${WEB_BIND_IP:-$BIND_IP}"
 WEB_PORT="${WEB_PORT:-80}"
 PROXY_PORT="${PROXY_PORT:-0}"
 # Legacy config files without PROXY_BIND_IP retain their previous BIND_IP behavior.
@@ -69,6 +73,9 @@ valid_port "$DNS_PORT" DNS_PORT
 [[ "$ENABLE_TUN" == "0" || "$ENABLE_TUN" == "1" ]] || die "ENABLE_TUN 只能是 0 或 1。"
 [[ "$PULL_IMAGE" == "0" || "$PULL_IMAGE" == "1" ]] || die "PULL_IMAGE 只能是 0 或 1。"
 [[ "$BIND_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "BIND_IP 格式不正确。"
+if (( WEB_PORT > 0 )); then
+  [[ "$WEB_BIND_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "WEB_BIND_IP 格式不正确。"
+fi
 if (( PROXY_PORT > 0 )); then
   [[ "$PROXY_BIND_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "PROXY_BIND_IP 格式不正确。"
 fi
@@ -90,12 +97,14 @@ fi
 
 BIND_ADDR="$BIND_IP"
 [[ "$BIND_IP" == *:* ]] && BIND_ADDR="[$BIND_IP]"
+WEB_BIND_ADDR="$WEB_BIND_IP"
+[[ "$WEB_BIND_IP" == *:* ]] && WEB_BIND_ADDR="[$WEB_BIND_IP]"
 PROXY_BIND_ADDR="$PROXY_BIND_IP"
 [[ "$PROXY_BIND_IP" == *:* ]] && PROXY_BIND_ADDR="[$PROXY_BIND_IP]"
 args=(run -d --name "$CONTAINER_NAME" --restart "$RESTART_POLICY")
 args+=(-e "S5M_HOSTNAME=$S5M_HOSTNAME" -v "$DATA_DIR:/data")
 [[ -n "$EXTRA_ENV_FILE" ]] && args+=(--env-file "$EXTRA_ENV_FILE")
-(( WEB_PORT > 0 )) && args+=(-p "$BIND_ADDR:$WEB_PORT:80/tcp")
+(( WEB_PORT > 0 )) && args+=(-p "$WEB_BIND_ADDR:$WEB_PORT:80/tcp")
 (( PROXY_PORT > 0 )) && args+=(-p "$PROXY_BIND_ADDR:$PROXY_PORT:7890/tcp")
 if (( DNS_PORT > 0 )); then
   args+=(-p "$BIND_ADDR:$DNS_PORT:6053/tcp" -p "$BIND_ADDR:$DNS_PORT:6053/udp")
