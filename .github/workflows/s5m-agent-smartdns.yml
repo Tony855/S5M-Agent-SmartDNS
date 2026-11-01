@@ -7,6 +7,8 @@ on:
       - "s5m-agent/Dockerfile.smartdns"
       - "s5m-agent/docker-compose.yml"
       - "s5m-agent/docker-compose.tun.yml"
+      - "s5m-agent/default-config.yaml"
+      - "s5m-agent/smartdns/default-config-smartdns.yaml"
       - "s5m-agent/Dockerfile"
       - "scripts/s5m-deploy.sh"
       - "s5m-agent/Dockerfile.routeros"
