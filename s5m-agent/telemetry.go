@@ -59,7 +59,11 @@ func mihomoControllerSecret() (string, error) {
 		return "", fmt.Errorf("解析 Mihomo 配置失败: %w", err)
 	}
 	secret, _ := cfg["secret"].(string)
-	return strings.TrimSpace(secret), nil
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return "", fmt.Errorf("Mihomo 配置缺少 API secret，拒绝发起未鉴权统计请求")
+	}
+	return secret, nil
 }
 
 func newMihomoAPIRequest(ctx context.Context, path, secret string) (*http.Request, error) {
