@@ -12,7 +12,7 @@
 | Agent 绑定页面/API | 80/TCP | 初次绑定和 Agent 管理 |
 | Mihomo 控制 API | 8088/TCP | 仅供容器内部 Agent 使用，**不要映射到公网** |
 
-建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent 不提供 7890 HTTP/SOCKS 显式代理入口；Linux 节点可选择通过 Mihomo TUN 实现透明代理；TUN 默认关闭，且 Agent 容器默认不获得 `NET_ADMIN` 或 `/dev/net/tun`。只有明确启用 TUN 时才额外授予这两项权限。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
+建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent 不提供 7890 HTTP/SOCKS 显式代理入口；Linux 节点可选择通过 Mihomo TUN 实现透明代理；TUN 默认开启，Agent 容器默认获得最小必需的 `NET_ADMIN` capability 和 `/dev/net/tun` 设备映射；部署前必须确认宿主机存在字符设备 `/dev/net/tun`。如需关闭 TUN，可设置 `ENABLE_TUN=0` 并在配置中关闭 `tun.enable`。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
 
 ## 2. 部署前准备
 
@@ -123,8 +123,8 @@ export S5M_HOSTNAME="$(hostname)"
 cd s5m-agent
 # 默认无 TUN 权限；需要 TUN 时先配置 tun.enable: true，再显式叠加权限文件。
 docker compose up -d
-# TUN opt-in（仅在宿主机 /dev/net/tun 存在时）：
-# docker compose -f docker-compose.yml -f docker-compose.tun.yml up -d
+docker compose -f docker-compose.yml up -d
+# 如需关闭 TUN，使用不带设备权限的自定义 Compose 覆盖配置，并同时设置 tun.enable: false。
 ```
 
 如果用 systemd、面板或其他自动化工具启动 Compose，请在其环境配置中显式设置 `S5M_HOSTNAME` 为宿主机的真实 hostname。
