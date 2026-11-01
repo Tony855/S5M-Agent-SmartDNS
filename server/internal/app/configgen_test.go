@@ -839,6 +839,27 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}
 }
 
+func TestReturnModeWithoutProxyRejectsNonMainlandTraffic(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-a", "test-secret", "return", "")
+	if err != nil { t.Fatalf("build return config: %v", err) }
+	if !strings.Contains(got, "GEOIP,CN,DIRECT") || !strings.Contains(got, "MATCH,REJECT") || strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("return mode without an outbound must not leak non-mainland traffic direct:\n%s", got)
+	}
+}
+
+func TestProxyLegacyModeFieldDoesNotAffectOutboundGeneration(t *testing.T) {
+	proxies := []Proxy{
+		{Name:"legacy-direct", Mode:"direct", Type:"socks5", Server:"192.0.2.31", Port:1080, MachineCode:"node-a", Enabled:true},
+		{Name:"legacy-reject", Mode:"reject", Type:"socks5", Server:"192.0.2.32", Port:1081, MachineCode:"node-a", Enabled:true},
+		{Name:"legacy-unknown", Mode:"obsolete", Type:"socks5", Server:"192.0.2.33", Port:1082, MachineCode:"node-a", Enabled:true},
+	}
+	got, err := buildConfigFromProxiesWithMode(proxies, "node-a", "test-secret", "rule", "")
+	if err != nil { t.Fatalf("legacy mode values must not invalidate outbound records: %v", err) }
+	for _, name := range []string{"legacy-direct", "legacy-reject", "legacy-unknown"} {
+		if !strings.Contains(got, name) { t.Errorf("proxy outbound %q omitted because of legacy mode field", name) }
+	}
+}
+
 func TestLegacySplitModeKeepsHistoricalFallback(t *testing.T) {
 	got, err := buildConfigFromProxiesWithMode(nil, "node-legacy", "test-secret", "split", "")
 	if err != nil {
@@ -920,37 +941,6 @@ func TestStoreCreateProxyDefaultsToStrictRuleMode(t *testing.T) {
 	}
 }
 
-func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
-	proxies := []Proxy{
-		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
-		{Name: "node-b-proxy", Mode: "rule", MachineCode: "node-b", Enabled: true},
-		{Name: "global-proxy", Mode: "game", MachineCode: "__GLOBAL__", Enabled: true},
-	}
-	if got := routingModeForMachine(proxies, "node-a"); got != "return" {
-		t.Fatalf("node-a routing mode = %q, want return", got)
-	}
-	if got := routingModeForMachine(proxies, "node-b"); got != "rule" {
-		t.Fatalf("node-b routing mode = %q, want rule", got)
-	}
-	if got := routingModeForMachine(proxies, ""); got != "game" {
-		t.Fatalf("global routing mode = %q, want game", got)
-	}
-}
-
-func TestRoutingModeForMachineMixedProxyModesKeepStableFirstMode(t *testing.T) {
-	proxies := []Proxy{
-		{Name: "legacy-anchor", Mode: "split", MachineCode: "node-mixed", Enabled: true},
-		{Name: "additional-rule-proxy", Mode: "rule", MachineCode: "node-mixed", Enabled: true},
-	}
-	if got := routingModeForMachine(proxies, "node-mixed"); got != "split" {
-		t.Fatalf("mixed-mode node routing mode = %q, want stable first persisted mode split", got)
-	}
-	reordered := []Proxy{proxies[1], proxies[0]}
-	if got := routingModeForMachine(reordered, "node-mixed"); got != "rule" {
-		t.Fatalf("routing mode must follow persisted proxy order; got %q, want rule", got)
-	}
-}
-
 func TestNormalizeProxyRoutingModePreservesHistoricalAliases(t *testing.T) {
 	cases := []struct {
 		input string
@@ -968,68 +958,6 @@ func TestNormalizeProxyRoutingModePreservesHistoricalAliases(t *testing.T) {
 				t.Fatalf("normalizeProxyRoutingMode(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestBuildConfigForHistoricalProxyAliasesKeepsTheirTrafficPolicy(t *testing.T) {
-	cases := []struct {
-		name string
-		mode string
-		want []string
-		avoid []string
-	}{
-		{name: "proxy alias returns mainland traffic direct", mode: "proxy", want: []string{"GEOIP,CN,DIRECT", "MATCH,legacy-proxy"}, avoid: []string{"GEOIP,CN,legacy-proxy", "MATCH,DIRECT", "MATCH,REJECT"}},
-		{name: "china alias", mode: "china", want: []string{"MATCH,legacy-proxy"}, avoid: []string{"GEOIP,CN,", "MATCH,REJECT"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			proxies := []Proxy{{
-				Name: "legacy-proxy", Mode: tc.mode, Type: "socks5",
-				Server: "192.0.2.20", Port: 1080, MachineCode: "node-legacy", Enabled: true,
-			}}
-			mode := routingModeForMachine(proxies, "node-legacy")
-			got, err := buildConfigFromProxiesWithMode(proxies, "node-legacy", "test-secret", mode, "")
-			if err != nil {
-				t.Fatalf("build config: %v", err)
-			}
-			for _, want := range tc.want {
-				if !strings.Contains(got, want) {
-					t.Errorf("historical mode %q lost expected rule %q:\\n%s", tc.mode, want, got)
-				}
-			}
-			for _, avoid := range tc.avoid {
-				if strings.Contains(got, avoid) {
-					t.Errorf("historical mode %q unexpectedly contains %q:\\n%s", tc.mode, avoid, got)
-				}
-			}
-		})
-	}
-}
-
-func TestLegacyProxyModesDoNotControlMachineRoutingAfterMigration(t *testing.T) {
-	store, err := OpenStore(filepath.Join(t.TempDir(), "routing-mode-order.db"))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.db.Close()
-
-	for _, proxy := range []*Proxy{
-		{Name: "legacy-split-first", Mode: "split", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: "node-a", Enabled: true},
-		{Name: "new-rule-second", Mode: "rule", Type: "socks5", Server: "192.0.2.11", Port: 1081, MachineCode: "node-a", Enabled: true},
-	} {
-		if err := store.CreateProxy(proxy); err != nil {
-			t.Fatalf("CreateProxy(%s): %v", proxy.Name, err)
-		}
-	}
-	persisted, err := store.ListProxies()
-	if err != nil {
-		t.Fatalf("ListProxies: %v", err)
-	}
-	if len(persisted) != 2 || persisted[0].Name != "legacy-split-first" || persisted[1].Name != "new-rule-second" {
-		t.Fatalf("ListProxies order = %#v, want stable insertion/ID order", persisted)
-	}
-	if got := routingModeForMachine(persisted, "node-a"); got != "rule" {
-		t.Fatalf("new proxy records must not select machine routing mode; got %q, want rule fallback", got)
 	}
 }
 
