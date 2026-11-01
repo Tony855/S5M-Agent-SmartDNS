@@ -2091,21 +2091,15 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	if heartbeatInterval < 5*time.Second || heartbeatInterval > 60*time.Second {
 		heartbeatInterval = 30 * time.Second
 	}
-	// Telemetry has its own 200ms publisher and does not wait for the heartbeat,
-	// config sync, or command polling cycle.
+	// Telemetry and dynamic controller-route refresh run independently from
+	// heartbeat/config/command exchanges so DNS or route operations cannot stall
+	// the control-plane read/write cycle.
 	telemetryCtx, stopTelemetry := context.WithCancel(context.Background())
 	defer stopTelemetry()
 	go runAgentTelemetryPublisher(telemetryCtx, conn)
+	go runAgentRouteRefreshLoop(telemetryCtx, cfg.CentralURL, heartbeatInterval)
 
 	for {
-		// Refresh the controller's resolved A/AAAA addresses on each heartbeat
-		// cycle, without changing the hash of the controller-provided YAML.
-		if routeErr := refreshAndApplyCentralRouteExclusions(cfg.CentralURL); routeErr != nil {
-			setAgentRouteSyncError("主控直连路由更新失败: " + routeErr.Error())
-			fmt.Printf("刷新主控直连排除地址失败: %s\n", safeMihomoValidationDiagnostic([]byte(routeErr.Error())))
-		} else {
-			setAgentRouteSyncError("")
-		}
 		// 1. Status/heartbeat is WebSocket-only.
 		status := collectMihomoStatus()
 		configSyncError, routeSyncError := agentControlSyncErrors()
