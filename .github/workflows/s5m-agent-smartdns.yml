@@ -37,6 +37,7 @@ on:
       - "s5m-agent/docker-compose.yml"
       - "s5m-agent/smartdns/**"
       - "s5m-agent/main.go"
+      - "s5m-agent/telemetry.go"
       - "s5m-agent/*_test.go"
       - "s5m-agent/smartdns_runtime.go"
       - "source/**"
