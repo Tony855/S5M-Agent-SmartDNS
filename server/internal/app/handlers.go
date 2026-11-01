@@ -1510,15 +1510,19 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 			} `json:"authentication"`
 			Servers []struct {
 				Server     string `json:"server"`
+				Address    string `json:"address"`
 				Port       int    `json:"port"`
 				Username   string `json:"username"`
 				Password   string `json:"password"`
 				UDP        bool   `json:"udp"`
 				Name       string `json:"name"`
+				Remarks    string `json:"remarks"`
 				VmessLink  string `json:"vmess_link"`
 				UUID       string `json:"uuid"`
+				ID         string `json:"id"`
 				AlterID    int    `json:"alterId"`
 				Cipher     string `json:"cipher"`
+				Security   string `json:"security"`
 				Network    string `json:"network"`
 				TLS        bool   `json:"tls"`
 				ServerName string `json:"servername"`
@@ -1531,17 +1535,32 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 			return nil, []string{"JSON 文件格式错误: " + err.Error()}
 		}
 		protocol := strings.ToLower(strings.TrimSpace(input.Protocol))
-		if protocol == "" {
-			return nil, []string{"JSON 文件缺少 protocol"}
-		}
 		if len(input.Servers) == 0 {
 			return nil, []string{"JSON 文件缺少 servers 节点"}
+		}
+		// Legacy v2rayN exports omit a top-level protocol and use address/id/
+		// alterId/security/network fields instead of server/type/protocol.
+		if protocol == "" {
+			for _, server := range input.Servers {
+				if strings.TrimSpace(server.ID) != "" || strings.TrimSpace(server.UUID) != "" {
+					if strings.TrimSpace(server.Network) != "" || server.AlterID >= 0 {
+						protocol = "vmess"
+						break
+					}
+				}
+			}
+		}
+		if protocol == "" {
+			return nil, []string{"JSON 文件缺少 protocol，且无法根据节点字段识别代理协议"}
 		}
 		proxies := make([]*Proxy, 0, len(input.Servers))
 		var failures []string
 		for i, server := range input.Servers {
-			p := &Proxy{Mode: "rule", Type: protocol, Server: strings.TrimSpace(server.Server), Port: server.Port, SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
+			serverAddress := strings.TrimSpace(server.Server)
+			if serverAddress == "" { serverAddress = strings.TrimSpace(server.Address) }
+			p := &Proxy{Mode: "rule", Type: protocol, Server: serverAddress, Port: server.Port, SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
 			p.Name = strings.TrimSpace(server.Name)
+			if p.Name == "" { p.Name = strings.TrimSpace(server.Remarks) }
 			// Some provider JSON formats include a complete vmess:// URI per server.
 			// Parse that URI through the same tested path used by text imports so UUID,
 			// cipher, transport, WebSocket path/Host and TLS/SNI are not discarded.
@@ -1563,17 +1582,16 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 					p.Name = fmt.Sprintf("%s-%s:%d", protocol, p.Server, p.Port)
 				}
 				if protocol == "vmess" {
-					if uuid := strings.TrimSpace(server.UUID); uuid != "" {
-						p.Extra["uuid"] = uuid
-					}
+					uuid := strings.TrimSpace(server.UUID)
+					if uuid == "" { uuid = strings.TrimSpace(server.ID) }
+					if uuid != "" { p.Extra["uuid"] = uuid }
 					if server.AlterID >= 0 {
 						p.Extra["alterId"] = server.AlterID
 					}
-					if cipher := strings.TrimSpace(server.Cipher); cipher != "" {
-						p.Extra["cipher"] = cipher
-					} else {
-						p.Extra["cipher"] = "auto"
-					}
+					cipher := strings.TrimSpace(server.Cipher)
+					if cipher == "" { cipher = strings.TrimSpace(server.Security) }
+					if cipher == "" { cipher = "auto" }
+					p.Extra["cipher"] = cipher
 					if network := strings.TrimSpace(server.Network); network != "" {
 						p.Extra["network"] = network
 					}
