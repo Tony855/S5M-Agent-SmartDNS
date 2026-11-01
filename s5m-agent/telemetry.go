@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -80,7 +81,7 @@ func streamMihomoTraffic(ctx context.Context, state *mihomoTelemetryState, secre
 	for ctx.Err() == nil {
 		req, err := newMihomoAPIRequest(ctx, "/traffic", secret)
 		if err != nil {
-			state.update(func(v *mihomoTelemetrySnapshot) { v.TrafficError = err.Error() })
+			state.update(func(v *mihomoTelemetrySnapshot) { v.UploadSpeed = 0; v.DownloadSpeed = 0; v.TrafficError = safeMihomoValidationDiagnostic([]byte(err.Error())) })
 			return
 		}
 		resp, err := client.Do(req)
@@ -88,14 +89,14 @@ func streamMihomoTraffic(ctx context.Context, state *mihomoTelemetryState, secre
 			if ctx.Err() != nil {
 				return
 			}
-			state.update(func(v *mihomoTelemetrySnapshot) { v.TrafficError = "Mihomo /traffic 连接失败: " + err.Error() })
+			state.update(func(v *mihomoTelemetrySnapshot) { v.UploadSpeed = 0; v.DownloadSpeed = 0; v.TrafficError = safeMihomoValidationDiagnostic([]byte("Mihomo /traffic 连接失败: " + err.Error())) })
 			if !waitTelemetryBackoff(ctx, backoff) { return }
 			backoff = min(backoff*2, 15*time.Second)
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			_ = resp.Body.Close()
-			state.update(func(v *mihomoTelemetrySnapshot) { v.TrafficError = fmt.Sprintf("Mihomo /traffic 返回 HTTP %d", resp.StatusCode) })
+			state.update(func(v *mihomoTelemetrySnapshot) { v.UploadSpeed = 0; v.DownloadSpeed = 0; v.TrafficError = fmt.Sprintf("Mihomo /traffic 返回 HTTP %d", resp.StatusCode) })
 			if !waitTelemetryBackoff(ctx, backoff) { return }
 			backoff = min(backoff*2, 15*time.Second)
 			continue
@@ -110,8 +111,8 @@ func streamMihomoTraffic(ctx context.Context, state *mihomoTelemetryState, secre
 			if err := decoder.Decode(&sample); err != nil {
 				break
 			}
-			if sample.Up < 0 || sample.Down < 0 {
-				state.update(func(v *mihomoTelemetrySnapshot) { v.TrafficError = "Mihomo /traffic 返回负数速率" })
+			if math.IsNaN(sample.Up) || math.IsNaN(sample.Down) || math.IsInf(sample.Up, 0) || math.IsInf(sample.Down, 0) || sample.Up < 0 || sample.Down < 0 {
+				state.update(func(v *mihomoTelemetrySnapshot) { v.UploadSpeed = 0; v.DownloadSpeed = 0; v.TrafficError = "Mihomo /traffic 返回无效速率" })
 				continue
 			}
 			state.update(func(v *mihomoTelemetrySnapshot) {
@@ -122,7 +123,7 @@ func streamMihomoTraffic(ctx context.Context, state *mihomoTelemetryState, secre
 		}
 		_ = resp.Body.Close()
 		if ctx.Err() != nil { return }
-		state.update(func(v *mihomoTelemetrySnapshot) { v.TrafficError = "Mihomo /traffic 流已断开，正在重连" })
+		state.update(func(v *mihomoTelemetrySnapshot) { v.UploadSpeed = 0; v.DownloadSpeed = 0; v.TrafficError = "Mihomo /traffic 流已断开，正在重连" })
 		if !waitTelemetryBackoff(ctx, backoff) { return }
 		backoff = min(backoff*2, 15*time.Second)
 	}
@@ -146,7 +147,7 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 	poll := func() {
 		req, err := newMihomoAPIRequest(ctx, "/connections", secret)
 		if err != nil {
-			state.update(func(v *mihomoTelemetrySnapshot) { v.ConnectionsError = err.Error() })
+			state.update(func(v *mihomoTelemetrySnapshot) { v.ConnectionsError = safeMihomoValidationDiagnostic([]byte(err.Error())) })
 			return
 		}
 		resp, err := client.Do(req)
@@ -194,7 +195,7 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 	secret, err := mihomoControllerSecret()
 	state := &mihomoTelemetryState{}
 	if err != nil {
-		state.update(func(v *mihomoTelemetrySnapshot) { v.TrafficError = err.Error(); v.ConnectionsError = err.Error() })
+		state.update(func(v *mihomoTelemetrySnapshot) { diagnostic := safeMihomoValidationDiagnostic([]byte(err.Error())); v.TrafficError = diagnostic; v.ConnectionsError = diagnostic })
 	} else {
 		go streamMihomoTraffic(ctx, state, secret)
 		go pollMihomoConnections(ctx, state, secret)
