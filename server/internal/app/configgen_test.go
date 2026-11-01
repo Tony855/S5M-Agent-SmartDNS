@@ -191,7 +191,7 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
 	}
-	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: false"} {
+	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
 		if !strings.Contains(agentYAML, want) {
 			t.Errorf("Agent initial config missing %q:\\n%s", want, agentYAML)
 		}
@@ -1309,8 +1309,14 @@ func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply unhealthy SmartDNS fallback: %v", err)
 	}
-	if fallback != source {
-		t.Fatalf("unhealthy SmartDNS must retain original DNS upstreams\nwant:\n%s\ngot:\n%s", source, fallback)
+	if !strings.Contains(fallback, "1.1.1.1") || !strings.Contains(fallback, "8.8.8.8") {
+		t.Fatalf("unhealthy SmartDNS must preserve operator DNS upstreams:\n%s", fallback)
+	}
+	generated := "dns:\n  enable: true\n  nameserver:\n    - 127.0.0.1:6053\n  default-nameserver:\n    - 223.5.5.5\n"
+	safeFallback, err := applyAgentRuntimeDNS(generated, false)
+	if err != nil { t.Fatalf("fallback generated SmartDNS DNS: %v", err) }
+	if !strings.Contains(safeFallback, "223.5.5.5") || strings.Contains(safeFallback, "127.0.0.1:6053") {
+		t.Fatalf("unhealthy generated SmartDNS must fall back to independent resolvers:\n%s", safeFallback)
 	}
 }
 
