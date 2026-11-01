@@ -1297,7 +1297,7 @@ func parseProxyLine(line string) (*Proxy, error) {
 		}
 		for key, value := range vm {
 			switch key {
-			case "add", "port", "ps", "v", "aid", "scy", "net", "tls", "sni", "host", "path", "type", "id":
+			case "add", "port", "ps", "v", "aid", "scy", "net", "tls", "sni", "host", "path", "type", "id", "alpn", "fp":
 				continue
 			}
 			p.Extra[key] = value
@@ -1316,19 +1316,26 @@ func parseProxyLine(line string) (*Proxy, error) {
 		network := strings.TrimSpace(fmt.Sprint(vm["net"]))
 		if network != "" && network != "<nil>" {
 			p.Extra["network"] = network
-			if network == "ws" {
-				headers := map[string]any{}
-				if host := strings.TrimSpace(fmt.Sprint(vm["host"])); host != "" && host != "<nil>" {
-					headers["Host"] = host
-				}
+			host := strings.TrimSpace(fmt.Sprint(vm["host"]))
+			path := strings.TrimSpace(fmt.Sprint(vm["path"]))
+			if host == "<nil>" { host = "" }
+			if path == "<nil>" { path = "" }
+			switch network {
+			case "ws":
 				ws := map[string]any{}
-				if path := strings.TrimSpace(fmt.Sprint(vm["path"])); path != "" && path != "<nil>" {
-					ws["path"] = path
-				}
-				if len(headers) > 0 {
-					ws["headers"] = headers
-				}
+				if path != "" { ws["path"] = path }
+				if host != "" { ws["headers"] = map[string]any{"Host": host} }
 				p.Extra["ws-opts"] = ws
+			case "grpc":
+				if path != "" { p.Extra["grpc-opts"] = map[string]any{"grpc-service-name": path} }
+			case "tcp":
+				headerType := strings.TrimSpace(fmt.Sprint(vm["type"]))
+				if headerType == "http" {
+					httpOpts := map[string]any{"method": "GET"}
+					if path != "" { httpOpts["path"] = []string{path} }
+					if host != "" { httpOpts["headers"] = map[string]any{"Host": []string{host}} }
+					p.Extra["http-opts"] = httpOpts
+				}
 			}
 		}
 		if tls := strings.TrimSpace(fmt.Sprint(vm["tls"])); tls != "" && tls != "none" && tls != "<nil>" {
@@ -1336,6 +1343,16 @@ func parseProxyLine(line string) (*Proxy, error) {
 		}
 		if sni := strings.TrimSpace(fmt.Sprint(vm["sni"])); sni != "" && sni != "<nil>" {
 			p.Extra["servername"] = sni
+		}
+		if fingerprint := strings.TrimSpace(fmt.Sprint(vm["fp"])); fingerprint != "" && fingerprint != "<nil>" {
+			p.Extra["client-fingerprint"] = fingerprint
+		}
+		if rawALPN := strings.TrimSpace(fmt.Sprint(vm["alpn"])); rawALPN != "" && rawALPN != "<nil>" {
+			alpn := make([]string, 0)
+			for _, item := range strings.Split(rawALPN, ",") {
+				if item = strings.TrimSpace(item); item != "" { alpn = append(alpn, item) }
+			}
+			if len(alpn) > 0 { p.Extra["alpn"] = alpn }
 		}
 	} else if p.Type == "ss" {
 		payload := line[schemeIdx+3:]
