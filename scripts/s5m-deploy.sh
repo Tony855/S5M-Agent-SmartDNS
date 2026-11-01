@@ -155,11 +155,11 @@ if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "
   die "现有 config.yaml 中 tun.enable=true；为避免升级后 TUN 失效，请使用 ENABLE_TUN=1 或先明确关闭 TUN。"
 fi
 
-# TUN 默认开启；仅在 ENABLE_TUN=0 时关闭 TUN 权限。
+# TUN 默认关闭；只有 ENABLE_TUN=1 才授予 TUN 权限。
 TUN_ARGS=()
 if [ "$ENABLE_TUN" = "1" ]; then
   TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)
-  log "TUN 默认启用：授予 NET_ADMIN 并挂载 /dev/net/tun，继续使用 bridge 网络隔离。"
+  log "已显式启用容器内 TUN；继续使用 bridge 网络隔离。"
 else
   log "已显式关闭 TUN：未授予 NET_ADMIN，也未挂载 /dev/net/tun。"
 fi
