@@ -33,6 +33,8 @@ jobs:
           bash -n scripts/install.sh
           bash -n scripts/install-server.sh
           bash -n scripts/s5m-deploy.sh
+          grep -q 'ENABLE_TUN=.*:-0' scripts/s5m-deploy.sh
+          grep -q 'S5M_HOSTNAME=\$(hostname)' scripts/s5m-deploy.sh
 
       - name: Verify self-contained server installer contract
         run: |
