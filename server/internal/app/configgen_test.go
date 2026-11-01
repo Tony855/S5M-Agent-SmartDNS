@@ -1024,7 +1024,7 @@ func TestBuildConfigWithoutProxyKeepsDNSBootstrapValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildConfigFromProxies() error = %v", err)
 	}
-	for _, want := range []string{"listen: 127.0.0.1:5353", "nameserver:", "223.5.5.5", "119.29.29.29", "DOMAIN-SUFFIX,v2net.cc,DIRECT"} {
+	for _, want := range []string{"listen: 127.0.0.1:5353", "nameserver:", "tls://223.5.5.5", "tls://223.6.6.6", "DOMAIN-SUFFIX,v2net.cc,DIRECT"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("default DNS configuration missing %q:\n%s", want, got)
 		}
