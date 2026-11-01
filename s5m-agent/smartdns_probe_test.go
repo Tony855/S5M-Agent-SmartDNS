@@ -641,6 +641,49 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
 	})
 
+	t.Run("restart recovers unhealthy resolver before fallback", func(t *testing.T) {
+		deps := good
+		probeCalls, restartCalls := 0, 0
+		deps.probe = func() bool { probeCalls++; return probeCalls > 1 }
+		deps.restart = func() error { restartCalls++; return nil }
+		deps.waitHealthy = func(timeout time.Duration) bool { return true }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_recovery", "restarted")
+		if restartCalls != 1 { t.Fatalf("restart calls = %d, want 1", restartCalls) }
+	})
+
+	t.Run("failed restart reports unhealthy for controller DNS fallback", func(t *testing.T) {
+		deps := good
+		deps.probe = func() bool { return false }
+		restartCalls := 0
+		deps.restart = func() error { restartCalls++; return os.ErrPermission }
+		deps.waitHealthy = func(time.Duration) bool { t.Fatal("must not wait after restart command failure"); return false }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_running", true)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if restartCalls != 1 { t.Fatalf("restart calls = %d, want 1", restartCalls) }
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "s6 重启失败") {
+			t.Fatalf("restart failure diagnostic missing: %q", got)
+		}
+	})
+
+	t.Run("restart command succeeds but DNS remains unhealthy", func(t *testing.T) {
+		deps := good
+		deps.probe = func() bool { return false }
+		deps.restart = func() error { return nil }
+		deps.waitHealthy = func(time.Duration) bool { return false }
+		status := map[string]any{}
+		collectSmartDNSStatusWithDependencies(status, deps)
+		assert(t, status, "smartdns_dns_healthy", false)
+		if got, _ := status["smartdns_last_error"].(string); !strings.Contains(got, "主控应切换备用 DNS") {
+			t.Fatalf("fallback diagnostic missing: %q", got)
+		}
+	})
+
 	t.Run("first failure diagnostic wins", func(t *testing.T) {
 		deps := good
 		deps.readConfig = func(string) ([]byte, error) { return nil, os.ErrPermission }
