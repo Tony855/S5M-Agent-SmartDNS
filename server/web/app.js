@@ -904,8 +904,9 @@ createApp({
                 const vmess = {
                   v: '2', ps: name, add: server, port: String(port),
                   id: uuid, aid: String(item.alterId ?? item.aid ?? 0),
-                  scy: String(item.cipher || item.scy || 'auto'),
-                  net: String(item.network || item.net || item.headerType || 'tcp'),
+                  scy: String(item.cipher || item.scy || (['tls', 'reality'].includes(String(item.security || '').toLowerCase()) ? 'auto' : (item.security || 'auto'))),
+                  net: String(item.network || item.net || 'tcp'),
+                  type: String(item.headerType || 'none'),
                   tls: tls ? 'tls' : '',
                   sni: String(item.servername || item.sni || ''),
                   host: String(headers.Host || headers.host || item.host || item.requestHost || ''),
