@@ -260,7 +260,7 @@ rules:
 			t.Fatalf("node config missing after attempt %d", attempt)
 		}
 		for _, want := range []string{
-			"mixed-port: 7890",
+			"allow-lan: false",
 			"secret: keep-this-secret",
 			"enable: false",
 			"listen: 127.0.0.1:5353",
@@ -866,7 +866,7 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 		t.Fatalf("saved per-node YAML should contain expanded proxy fields, not merge aliases:\n%s", got.YAML)
 	}
 	for _, want := range []string{
-		"mixed-port: 7890",
+		"allow-lan: false",
 		"secret: keep-this-secret",
 		"same-vless-443",
 		"same-vless-8443",
