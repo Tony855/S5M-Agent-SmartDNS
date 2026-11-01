@@ -211,9 +211,9 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if mode, ok := in["proxy_routing_mode"]; ok {
 		switch strings.TrimSpace(mode) {
-		case "global", "split", "return", "game":
+		case "global", "split", "rule", "return", "game":
 		default:
-			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、split、return 或 game")
+			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、rule、return 或 game")
 			return
 		}
 	}
