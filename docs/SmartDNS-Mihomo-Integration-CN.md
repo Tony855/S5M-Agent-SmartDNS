@@ -4,6 +4,16 @@
 
 ## 推荐拓扑
 
+## S5M 自动配置策略
+
+- SmartDNS 健康检查同时执行本机 UDP 和 TCP DNS A 查询；只有进程、配置策略和两种查询均正常时，主控才将 Agent 的普通 `dns.nameserver` 切换到 `127.0.0.1:6053`。
+- SmartDNS 不健康时，下一次 Agent WebSocket 配置同步自动恢复节点原有 `dns.nameserver`；运行时切换不写回节点持久配置。
+- SmartDNS 默认使用 Cloudflare/Google 的 DNS-over-TLS 上游，连接端点使用字面 IP 和明确 TLS 主机名，避免 Bootstrap DNS 递归。
+- Mihomo 使用 `find-process-mode: strict` 和 `PROCESS-NAME,smartdns,<代理名>`，使 SmartDNS 的加密上游连接走选定代理；节点域名解析仍由独立的字面 IP `default-nameserver` / `proxy-server-nameserver` 完成。
+- TUN 同时劫持 UDP/TCP 53，并排除回环网段和代理节点出口地址，避免 DNS 自环及代理连接递归。
+- Agent 拒绝明文 SmartDNS 上游 `server` / `server-tcp`，并在下发配置前做语法预检；配置替换失败会恢复旧文件、重启旧服务并重新验证 UDP/TCP。
+
+
 客户端 → Mihomo DNS（Fake-IP / TUN 劫持）→ SmartDNS（127.0.0.1:6053）→ 加密 DNS 上游
 
 SmartDNS 示例配置见 `smartdns-cache.conf.example`。请按安装包版本核对指令兼容性。
