@@ -22,9 +22,8 @@ import (
 // defaultMihomoTemplate is shown when no draft has been saved yet. It is a
 // safe starter template based on the project's generated configuration shape.
 // Replace the example proxy endpoint and secret before applying it to a node.
-const defaultMihomoTemplate = `# 基础设置
-mixed-port: 7890
-allow-lan: true
+const defaultMihomoTemplate = `# 透明代理：不开放 HTTP/SOCKS 显式代理端口
+allow-lan: false
 mode: rule
 log-level: info
 ipv6: false
