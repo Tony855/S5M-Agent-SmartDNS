@@ -1225,7 +1225,7 @@ func TestGetNodeConfigRemovesExplicitProxyListeners(t *testing.T) {
 	if normalized["allow-lan"] != true || normalized["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("Agent listener security normalization failed: %s", response.YAML)
 	}
-	if !strings.Contains(response.YAML, "secret: keep-this-secret") || !strings.Contains(response.YAML, "authentication:") ||
+	if !strings.Contains(response.YAML, "secret: keep-this-secret") || strings.Contains(response.YAML, "authentication:") ||
 		!strings.Contains(response.YAML, "enable: false") ||
 		!strings.Contains(response.YAML, "enable: true") {
 		t.Fatalf("normalization did not preserve node-specific settings: %s", response.YAML)
