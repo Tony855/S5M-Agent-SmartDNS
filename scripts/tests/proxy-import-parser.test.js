@@ -84,4 +84,29 @@ const vmessGRPC = JSON.parse(Buffer.from(links[3].slice('vmess://'.length), 'bas
 assert.equal(vmessGRPC.net, 'grpc');
 assert.equal(vmessGRPC.path, 'grpc-service');
 assert.ok(links[4].startsWith('ss://'));
+// Exact legacy v2rayN export shape used by the user's 80-node file:
+ // top-level protocol is absent; endpoints use address/id/alterId/security/network/path.
+const legacyConfig = {
+  version: '1.0',
+  remarks: 'Mihomo IPv6 配置',
+  servers: Array.from({ length: 80 }, (_, index) => ({
+    address: '109.176.19.70',
+    port: 24580 + index,
+    id: 'legacy-vmess-uuid',
+    alterId: 0,
+    security: 'auto',
+    network: 'ws',
+    path: '/ws',
+    remarks: `Mihomo-IPv6-${24580 + index}`
+  }))
+};
+const legacyLinks = convert(legacyConfig);
+assert.equal(legacyLinks.length, 80, 'legacy v2rayN servers JSON must convert all 80 VMess nodes');
+const legacyFirst = JSON.parse(Buffer.from(legacyLinks[0].slice('vmess://'.length), 'base64').toString('utf8'));
+assert.equal(legacyFirst.add, '109.176.19.70');
+assert.equal(legacyFirst.port, '24580');
+assert.equal(legacyFirst.id, 'legacy-vmess-uuid');
+assert.equal(legacyFirst.net, 'ws');
+assert.equal(legacyFirst.path, '/ws');
+assert.equal(legacyFirst.ps, 'Mihomo-IPv6-24580');
 console.log('V2RayN outbound JSON import conversion tests passed.');

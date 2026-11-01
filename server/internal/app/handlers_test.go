@@ -630,6 +630,37 @@ func TestParseProxyImportContentPreservesVLESSRealityOptions(t *testing.T) {
 	}
 }
 
+func TestParseProxyImportContentLegacyV2RayNServersJSON(t *testing.T) {
+	var content strings.Builder
+	content.WriteString(`{"version":"1.0","remarks":"Mihomo IPv6 配置","servers":[`)
+	for i := 0; i < 80; i++ {
+		if i > 0 { content.WriteByte(',') }
+		port := 24580 + i
+		fmt.Fprintf(&content, `{"address":"109.176.19.70","port":%d,"id":"legacy-vmess-uuid","alterId":0,"security":"auto","network":"ws","path":"/ws","remarks":"Mihomo-IPv6-%d"}`, port, port)
+	}
+	content.WriteString(`]}`)
+
+	proxies, failures := parseProxyImportContent(content.String())
+	if len(failures) != 0 { t.Fatalf("unexpected failures: %v", failures) }
+	if len(proxies) != 80 { t.Fatalf("got %d proxies, want 80", len(proxies)) }
+	for i, p := range proxies {
+		wantPort := 24580 + i
+		if p.Type != "vmess" || p.Server != "109.176.19.70" || p.Port != wantPort {
+			t.Errorf("node %d endpoint/type mismatch: type=%q server=%q port=%d", i+1, p.Type, p.Server, p.Port)
+		}
+		if p.Name != fmt.Sprintf("Mihomo-IPv6-%d", wantPort) || p.Extra["uuid"] != "legacy-vmess-uuid" {
+			t.Errorf("node %d name/UUID not preserved: name=%q extra=%#v", i+1, p.Name, p.Extra)
+		}
+		if p.Extra["network"] != "ws" || p.Extra["cipher"] != "auto" {
+			t.Errorf("node %d VMess fields not preserved: %#v", i+1, p.Extra)
+		}
+		ws, ok := p.Extra["ws-opts"].(map[string]any)
+		if !ok || ws["path"] != "/ws" {
+			t.Errorf("node %d WebSocket path not preserved: %#v", i+1, p.Extra["ws-opts"])
+		}
+	}
+}
+
 func TestParseProxyImportContentPreservesVMessLinkOptions(t *testing.T) {
 	vmessJSON := `{"v":"2","ps":"link-name","add":"109.176.19.70","port":"22080","id":"test-uuid","aid":"0","scy":"auto","net":"ws","type":"none","host":"ws.example.test","path":"/ws","tls":""}`
 	link := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))
