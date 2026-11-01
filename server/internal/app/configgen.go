@@ -18,8 +18,7 @@ import (
 )
 
 const baseTemplate = `mode: rule
-mixed-port: 8080
-allow-lan: true
+allow-lan: false
 log-level: info
 ipv6: false
 external-controller: 127.0.0.1:8088
@@ -72,9 +71,9 @@ type proxyOut struct {
 	Extra  map[string]any `yaml:",inline"`
 }
 
-// normalizeAgentMixedPort enforces the Agent's published proxy port and TUN safety settings.
-// Controller/global configs intentionally retain their own 8080 listener.
-func normalizeAgentMixedPort(yml string) (string, error) {
+// normalizeAgentProxyConfig removes explicit proxy listeners from Agent configs.
+// Agent nodes use Mihomo TUN for transparent proxying, not a public HTTP/SOCKS port.
+func normalizeAgentProxyConfig(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
 		return "", fmt.Errorf("解析 Agent Mihomo 配置失败: %w", err)
@@ -106,7 +105,7 @@ func normalizeAgentMixedPort(yml string) (string, error) {
 		}
 		return nil
 	}
-	deleteKeys := map[string]bool{"port": true, "socks-port": true}
+	deleteKeys := map[string]bool{"mixed-port": true, "port": true, "socks-port": true, "redir-port": true, "tproxy-port": true, "allow-lan": true}
 	filtered := make([]*yaml.Node, 0, len(root.Content))
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if !deleteKeys[root.Content[i].Value] {
@@ -114,7 +113,7 @@ func normalizeAgentMixedPort(yml string) (string, error) {
 		}
 	}
 	root.Content = filtered
-	setScalar(root, "mixed-port", "7890", "!!int")
+	setScalar(root, "allow-lan", "false", "!!bool")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 
 	// Keep the controller's own hostname out of fake-IP answers to avoid breaking
@@ -401,9 +400,9 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Controller configs use 8080; Agent configs must always match Docker's 7890:7890 mapping.
+	// Controller configs keep their separate listener; Agent configs expose no explicit proxy listener.
 	if strings.TrimSpace(machineCode) != "" {
-		yml, err = normalizeAgentMixedPort(yml)
+		yml, err = normalizeAgentProxyConfig(yml)
 		if err != nil {
 			return "", err
 		}
@@ -498,9 +497,9 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			}
 			generated = string(marshaled)
 		}
-		generated, err = normalizeAgentMixedPort(generated)
+		generated, err = normalizeAgentProxyConfig(generated)
 		if err != nil {
-			return fmt.Errorf("机器 %s 的代理端口校正失败: %w", machineCode, err)
+			return fmt.Errorf("机器 %s 的透明代理配置校正失败: %w", machineCode, err)
 		}
 		var doc map[string]any
 		if err := yaml.Unmarshal([]byte(generated), &doc); err != nil {
