@@ -512,8 +512,7 @@ func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.cloudflare.com/dns-query"},
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.google/dns-query"},
 			}
-			out, err := yaml.Marshal(&doc)
-			return string(out), err
+			return marshal()
 		}
 	}
 	return yml, nil
@@ -616,8 +615,7 @@ func routeAgentDNSViaSmartDNS(yml string) (string, error) {
 			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
 		}},
 	)
-	out, err := yaml.Marshal(&doc)
-	return string(out), err
+	return marshal()
 }
 
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
@@ -672,6 +670,14 @@ func setAgentTUNEnabled(yml string, enabled bool) (string, error) {
 		return "", fmt.Errorf("Agent Mihomo 配置必须是 YAML 对象")
 	}
 	root := doc.Content[0]
+	marshal := func() (string, error) {
+		var out strings.Builder
+		enc := yaml.NewEncoder(&out)
+		enc.SetIndent(2)
+		if err := enc.Encode(&doc); err != nil { return "", err }
+		if err := enc.Close(); err != nil { return "", err }
+		return out.String(), nil
+	}
 	var tun *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if root.Content[i].Value == "tun" { tun = root.Content[i+1]; break }
