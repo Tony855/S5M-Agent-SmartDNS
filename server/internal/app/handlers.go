@@ -290,6 +290,24 @@ func (a *App) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "已删除"})
 }
 
+func (a *App) handleGetMachineProxyMode(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.PathValue("code"))
+	if code == "" || code == "__GLOBAL__" { writeErr(w, http.StatusBadRequest, "机器码无效"); return }
+	mode, err := a.store.GetMachineProxyMode(code)
+	if err != nil { writeErr(w, http.StatusInternalServerError, "读取机器代理模式失败"); return }
+	writeJSON(w, http.StatusOK, map[string]string{"machine_code": code, "routing_mode": mode})
+}
+
+func (a *App) handleSetMachineProxyMode(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.PathValue("code"))
+	if code == "" || code == "__GLOBAL__" { writeErr(w, http.StatusBadRequest, "机器码无效"); return }
+	var in struct { RoutingMode string `json:"routing_mode"` }
+	if err := decode(r, &in); err != nil { writeErr(w, http.StatusBadRequest, "参数错误"); return }
+	if err := a.store.SetMachineProxyMode(code, in.RoutingMode); err != nil { writeErr(w, http.StatusBadRequest, err.Error()); return }
+	if err := a.syncAuthorizedNodeConfigs(); err != nil { writeErr(w, http.StatusInternalServerError, "机器模式已保存，但节点配置同步失败: "+err.Error()); return }
+	writeJSON(w, http.StatusOK, map[string]string{"machine_code": code, "routing_mode": strings.ToLower(strings.TrimSpace(in.RoutingMode)), "message": "机器代理模式已保存并同步"})
+}
+
 func (a *App) handleListProxies(w http.ResponseWriter, r *http.Request) {
 	list, err := a.store.ListProxies()
 	if err != nil {
@@ -301,43 +319,21 @@ func (a *App) handleListProxies(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) validateProxy(p *Proxy) string {
 	p.Name = strings.TrimSpace(p.Name)
-	if p.Name == "" {
-		return "名称不能为空"
-	}
+	if p.Name == "" { return "名称不能为空" }
 	p.MachineCode = strings.TrimSpace(p.MachineCode)
-	if p.MachineCode != "" && p.MachineCode != "__GLOBAL__" &&
-		(len(p.MachineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(p.MachineCode)) {
+	if p.MachineCode != "" && p.MachineCode != "__GLOBAL__" && (len(p.MachineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(p.MachineCode)) {
 		return "关联机器码格式错误；留空表示未绑定，或选择全局节点"
 	}
-	p.Mode = strings.TrimSpace(p.Mode)
-	if p.Mode == "" {
-		p.Mode = "rule"
-	}
-	switch p.Mode {
-	case "proxy", "china", "global", "split", "rule", "return", "game":
-		p.Type = strings.ToLower(strings.TrimSpace(p.Type))
-		p.Server = strings.TrimSpace(p.Server)
-		switch p.Type {
-		case "socks5", "http", "ss", "vmess", "vless", "trojan":
-		default:
-			return "代理类型无效，必须是 socks5、http、ss、vmess、vless 或 trojan"
-		}
-		if p.Server == "" {
-			return "代理必须填写类型、服务器和端口"
-		}
-		if p.Port < 1 || p.Port > 65535 {
-			return "代理端口必须在 1-65535 之间"
-		}
-	default:
-		return "运行模式无效，必须是 global、rule、return 或 game"
-	}
+	// Per-proxy routing mode is deprecated; routing is configured once per machine.
+	p.Mode = "rule"
+	p.Type = strings.ToLower(strings.TrimSpace(p.Type))
+	p.Server = strings.TrimSpace(p.Server)
+	switch p.Type { case "socks5", "http", "ss", "vmess", "vless", "trojan": default: return "代理类型无效，必须是 socks5、http、ss、vmess、vless 或 trojan" }
+	if p.Server == "" { return "代理必须填写类型、服务器和端口" }
+	if p.Port < 1 || p.Port > 65535 { return "代理端口必须在 1-65535 之间" }
 	p.SourceCIDR = strings.TrimSpace(p.SourceCIDR)
-	if p.SourceCIDR == "" {
-		p.SourceCIDR = "0.0.0.0/0"
-	}
-	if _, _, err := net.ParseCIDR(p.SourceCIDR); err != nil {
-		return "源 IP 必须是合法 CIDR"
-	}
+	if p.SourceCIDR == "" { p.SourceCIDR = "0.0.0.0/0" }
+	if _, _, err := net.ParseCIDR(p.SourceCIDR); err != nil { return "源 IP 必须是合法 CIDR" }
 	return ""
 }
 
