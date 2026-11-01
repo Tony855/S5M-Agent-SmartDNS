@@ -831,7 +831,24 @@ createApp({
         }
         const fragment = encodeURIComponent(name);
         if (protocol === 'vmess') {
-          const vmess = { v: '2', ps: name, add: server, port: String(port), id: String(user.id || ''), aid: String(user.alterId ?? 0), scy: String(user.security || 'auto'), net: network, tls: security === 'tls' ? 'tls' : '', sni, host: String((stream.wsSettings || {}).headers?.Host || ''), path: String((stream.wsSettings || {}).path || '') };
+          const ws = stream.wsSettings || {};
+          const tcpHeader = (stream.tcpSettings || {}).header || {};
+          const tcpRequest = tcpHeader.request || {};
+          const tcpHeaders = tcpRequest.headers || {};
+          const tcpHost = tcpHeaders.Host || tcpHeaders.host || [];
+          const grpc = stream.grpcSettings || {};
+          const alpn = Array.isArray(tls.alpn) ? tls.alpn.join(',') : String(tls.alpn || '');
+          const fingerprint = String(tls.fingerprint || '');
+          const vmess = {
+            v: '2', ps: name, add: server, port: String(port),
+            id: String(user.id || ''), aid: String(user.alterId ?? 0),
+            scy: String(user.security || 'auto'), net: network,
+            type: String(tcpHeader.type || 'none'),
+            tls: security === 'tls' ? 'tls' : '', sni,
+            host: String(ws.headers?.Host || ws.headers?.host || tcpHost[0] || ''),
+            path: String(ws.path || (Array.isArray(tcpRequest.path) ? tcpRequest.path[0] : tcpRequest.path) || grpc.serviceName || ''),
+            alpn, fp: fingerprint
+          };
           if (!vmess.id) continue;
           links.push('vmess://' + btoa(unescape(encodeURIComponent(JSON.stringify(vmess)))));
         } else if (protocol === 'vless') {
