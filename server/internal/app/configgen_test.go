@@ -997,3 +997,25 @@ func TestAgentHasHealthySmartDNSRequiresProcessAndDNSProbe(t *testing.T) {
 		})
 	}
 }
+
+
+func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
+	source := "dns:\n  enable: true\n  nameserver:\n    - 1.1.1.1\n    - 8.8.8.8\n  default-nameserver:\n    - 223.5.5.5\n"
+	healthy, err := applyAgentRuntimeDNS(source, true)
+	if err != nil {
+		t.Fatalf("apply healthy SmartDNS runtime DNS: %v", err)
+	}
+	if !strings.Contains(healthy, "127.0.0.1:6053") {
+		t.Fatalf("healthy runtime config did not use local SmartDNS:\n%s", healthy)
+	}
+	if strings.Contains(source, "127.0.0.1:6053") {
+		t.Fatal("runtime transformation mutated the persisted source string")
+	}
+	fallback, err := applyAgentRuntimeDNS(source, false)
+	if err != nil {
+		t.Fatalf("apply unhealthy SmartDNS fallback: %v", err)
+	}
+	if fallback != source {
+		t.Fatalf("unhealthy SmartDNS must retain original DNS upstreams\nwant:\n%s\ngot:\n%s", source, fallback)
+	}
+}
