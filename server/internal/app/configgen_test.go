@@ -58,8 +58,8 @@ proxies:
 	if config["allow-lan"] != true {
 		t.Fatalf("allow-lan = %#v, want true", config["allow-lan"])
 	}
-	if auth, ok := config["authentication"].([]any); !ok || len(auth) != 1 || !strings.HasPrefix(auth[0].(string), "s5m:") {
-		t.Fatalf("LAN proxy authentication missing or invalid: %#v", config["authentication"])
+	if _, exists := config["authentication"]; exists {
+		t.Fatalf("proxy authentication must be opt-in, got %#v", config["authentication"])
 	}
 	if config["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("external-controller = %#v", config["external-controller"])
@@ -199,7 +199,7 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
 	}
-	for _, want := range []string{"allow-lan: true", "authentication:", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
+	for _, want := range []string{"allow-lan: true", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
 		if !strings.Contains(agentYAML, want) {
 			t.Errorf("Agent initial config missing %q:\\n%s", want, agentYAML)
 		}
