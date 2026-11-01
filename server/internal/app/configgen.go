@@ -91,16 +91,6 @@ func normalizeAgentProxyConfig(yml string) (string, error) {
 }
 
 // normalizeAgentProxyConfigOnce performs one policy-normalization pass.
-func removeMappingKey(root *yaml.Node, key string) {
-	if root == nil || root.Kind != yaml.MappingNode { return }
-	filtered := make([]*yaml.Node, 0, len(root.Content))
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == key { continue }
-		filtered = append(filtered, root.Content[i], root.Content[i+1])
-	}
-	root.Content = filtered
-}
-
 func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
@@ -145,7 +135,6 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	// intentionally opt-in; the Mihomo API secret remains independently enabled.
 	setScalar(root, "mixed-port", "7890", "!!int")
 	setScalar(root, "allow-lan", "true", "!!bool")
-	removeMappingKey(root, "authentication")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
 	setScalar(root, "find-process-mode", "strict", "!!str")
