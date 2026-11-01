@@ -20,6 +20,7 @@ on:
       - "s5m-agent/cont-init.d/**"
       - "s5m-agent/services/**"
       - ".github/workflows/s5m-agent-smartdns.yml"
+      - ".github/workflows/release.yml"
   push:
     branches: [main]
     paths:
@@ -37,6 +38,7 @@ on:
       - "s5m-agent/cont-init.d/**"
       - "s5m-agent/services/**"
       - ".github/workflows/s5m-agent-smartdns.yml"
+      - ".github/workflows/release.yml"
 
 # Validation jobs may run concurrently across commits. Only GHCR publication
 # is serialized because all main-branch runs update the shared image tags.
