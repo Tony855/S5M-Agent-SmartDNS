@@ -54,7 +54,7 @@ func TestDefaultMihomoTemplateIsUsableStarter(t *testing.T) {
 			t.Errorf("default template missing baseline section %q", want)
 		}
 	}
-	for _, unwanted := range []string{"mixed-port:", "socks-port:", "redir-port:", "tproxy-port:", "allow-lan: true", "YOUR_PROXY_SERVER", "221111cdn"} {
+	for _, unwanted := range []string{"mixed-port:", "socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true", "YOUR_PROXY_SERVER", "221111cdn"} {
 		if strings.Contains(defaultMihomoTemplate, unwanted) {
 			t.Fatalf("default template must not contain placeholder/hard-coded rule %q", unwanted)
 		}
