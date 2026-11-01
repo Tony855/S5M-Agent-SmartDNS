@@ -54,8 +54,11 @@ proxies:
 			t.Errorf("additional proxy listener %q must be removed: %s", key, got)
 		}
 	}
-	if config["allow-lan"] != false {
-		t.Fatalf("allow-lan = %#v, want false", config["allow-lan"])
+	if config["allow-lan"] != true {
+		t.Fatalf("allow-lan = %#v, want true", config["allow-lan"])
+	}
+	if auth, ok := config["authentication"].([]any); !ok || len(auth) != 1 || !strings.HasPrefix(auth[0].(string), "s5m:") {
+		t.Fatalf("LAN proxy authentication missing or invalid: %#v", config["authentication"])
 	}
 	if config["external-controller"] != "127.0.0.1:8088" {
 		t.Fatalf("external-controller = %#v", config["external-controller"])
@@ -189,12 +192,12 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	if !strings.Contains(agentYAML, "tun:\n  enable: true") {
 		t.Errorf("new Agent config should enable TUN by default:\\n%s", agentYAML)
 	}
-	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
+	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
 		if strings.Contains(agentYAML, forbidden) {
 			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
 	}
-	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
+	for _, want := range []string{"allow-lan: true", "authentication:", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
 		if !strings.Contains(agentYAML, want) {
 			t.Errorf("Agent initial config missing %q:\\n%s", want, agentYAML)
 		}
@@ -343,7 +346,7 @@ rules:
 		}
 		for _, want := range []string{
 			"mode: rule",
-			"allow-lan: false",
+			"allow-lan: true",
 			"secret: keep-this-secret",
 			"enable: false",
 			"listen: 127.0.0.1:5353",
@@ -1028,7 +1031,7 @@ func TestBuildConfigIncludesTUNDNSDefaults(t *testing.T) {
 		t.Fatalf("buildConfigFromProxies() error = %v", err)
 	}
 	for _, want := range []string{
-		"enable: false",
+		"enable: true",
 		"stack: system",
 		"auto-route: true",
 		"auto-detect-interface: true",
