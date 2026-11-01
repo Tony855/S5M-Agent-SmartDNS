@@ -209,6 +209,8 @@ type smartDNSStatusDependencies struct {
 	version    func() ([]byte, error)
 	process    func() ([]byte, error)
 	probe      func() bool
+	restart    func() error
+	waitHealthy func(time.Duration) bool
 }
 
 func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
@@ -222,6 +224,10 @@ func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
 			return exec.Command("pidof", "smartdns").CombinedOutput()
 		},
 		probe: probeSmartDNSDNS,
+		restart: func() error {
+			return exec.Command("s6-svc", "-r", "/run/service/smartdns").Run()
+		},
+		waitHealthy: waitForSmartDNSHealthy,
 	}
 }
 
@@ -267,18 +273,39 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		appendSmartDNSStatusError(status, "读取 SmartDNS 版本失败: "+safeSmartDNSDiagnostic(strings.TrimSpace(string(output)+" "+err.Error())))
 	}
 
-	if output, err := deps.process(); err == nil && len(bytes.TrimSpace(output)) > 0 {
+	processOutput, processErr := deps.process()
+	processHealthy := processErr == nil && len(bytes.TrimSpace(processOutput)) > 0
+	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
+	if processHealthy {
 		status["smartdns_running"] = true
-	} else {
-		appendSmartDNSStatusError(status, "SmartDNS 进程未运行或进程检测失败")
 	}
-	if status["smartdns_running"] == true {
-		if deps.probe() {
-			status["smartdns_dns_healthy"] = true
+	if dnsHealthy {
+		status["smartdns_dns_healthy"] = true
+		return
+	}
+
+	// s6 supervises SmartDNS when it exits, but a live yet unresponsive
+	// resolver is not automatically restarted. Ask s6 to restart it once,
+	// then require a real UDP+TCP DNS probe before reporting it healthy.
+	if deps.restart == nil || deps.waitHealthy == nil {
+		if !processHealthy {
+			appendSmartDNSStatusError(status, "SmartDNS 进程未运行或进程检测失败")
 		} else {
 			appendSmartDNSStatusError(status, "SmartDNS UDP/TCP DNS 查询探测失败")
 		}
+		return
 	}
+	if err := deps.restart(); err != nil {
+		appendSmartDNSStatusError(status, "SmartDNS 异常，s6 重启失败: "+safeSmartDNSDiagnostic(err.Error()))
+		return
+	}
+	if deps.waitHealthy(5 * time.Second) {
+		status["smartdns_running"] = true
+		status["smartdns_dns_healthy"] = true
+		status["smartdns_recovery"] = "restarted"
+		return
+	}
+	appendSmartDNSStatusError(status, "SmartDNS 已尝试由 s6 重启，但 UDP/TCP DNS 健康检查仍失败；主控应切换备用 DNS")
 }
 
 func smartDNSConfigAlreadyApplied(path string, candidate []byte) (bool, error) {
