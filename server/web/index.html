@@ -333,6 +333,7 @@
                     </div>
                   </div>
                   <span>关联代理：<strong>{{ proxyCountForMachine(item.code) }}</strong></span>
+                  <span v-if="item.telemetryStale" class="instance-summary-error">流量数据已过期，当前显示最后一次成功采样{{ item.telemetrySampledAt ? '（' + new Date(item.telemetrySampledAt).toLocaleString() + '）' : '（尚无有效采样）' }}</span>
                   <span v-if="item.runtimeMessage || item.lastError || item.telemetryError" class="instance-summary-error">Agent 状态/错误信息：{{ [item.runtimeMessage, item.lastError, item.telemetryError].filter(Boolean).join('；') }}</span>
                 </div>
               </div>
