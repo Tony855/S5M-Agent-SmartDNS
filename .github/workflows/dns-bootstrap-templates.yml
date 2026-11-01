@@ -1,0 +1,47 @@
+name: DNS bootstrap template validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "s5m-agent/default-config.yaml"
+      - "s5m-agent/smartdns/default-config-smartdns.yaml"
+      - "s5m-agent/smartdns/smartdns.conf"
+      - ".github/workflows/dns-bootstrap-templates.yml"
+  push:
+    branches: [main]
+    paths:
+      - "s5m-agent/default-config.yaml"
+      - "s5m-agent/smartdns/default-config-smartdns.yaml"
+      - "s5m-agent/smartdns/smartdns.conf"
+      - ".github/workflows/dns-bootstrap-templates.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate encrypted DNS defaults
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Mihomo bootstrap resolvers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for config in s5m-agent/default-config.yaml s5m-agent/smartdns/default-config-smartdns.yaml; do
+            grep -Fqx '    - tls://223.5.5.5' "$config"
+            grep -Fqx '    - tls://223.6.6.6' "$config"
+            ! grep -Fqx '    - 223.5.5.5' "$config"
+            ! grep -Fqx '    - 119.29.29.29' "$config"
+          done
+      - name: Validate SmartDNS encrypted upstreams and private listeners
+        shell: bash
+        run: |
+          set -euo pipefail
+          config=s5m-agent/smartdns/smartdns.conf
+          grep -Fqx 'bind 127.0.0.1:6053' "$config"
+          grep -Fqx 'bind-tcp 127.0.0.1:6053' "$config"
+          grep -Fqx 'server-tls 1.1.1.1:853 -host-name cloudflare-dns.com' "$config"
+          grep -Fqx 'server-tls 8.8.8.8:853 -host-name dns.google' "$config"
+          ! grep -Eq '^[[:space:]]*server(-tcp)?[[:space:]]' "$config"
