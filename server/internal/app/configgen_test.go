@@ -808,16 +808,16 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}
 }
 
-func TestLegacyRoutingModeKeepsHistoricalDirectFallback(t *testing.T) {
-	got, err := buildConfigFromProxiesWithMode(nil, "node-legacy", "test-secret", "legacy", "")
+func TestLegacySplitModeKeepsHistoricalFallback(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-legacy", "test-secret", "split", "")
 	if err != nil {
-		t.Fatalf("build legacy config: %v", err)
+		t.Fatalf("build legacy split config: %v", err)
 	}
 	if !strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatalf("legacy mode must preserve its historical MATCH,DIRECT fallback:\\n%s", got)
+		t.Fatalf("legacy split mode without a proxy must preserve its historical MATCH,DIRECT fallback:\\n%s", got)
 	}
 	if strings.Contains(got, "MATCH,REJECT") {
-		t.Fatalf("legacy mode must not be silently upgraded to strict rule mode:\\n%s", got)
+		t.Fatalf("legacy split mode must not be silently upgraded to strict rule mode:\\n%s", got)
 	}
 }
 
@@ -864,7 +864,6 @@ func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
 		{Name: "node-b-proxy", Mode: "rule", MachineCode: "node-b", Enabled: true},
 		{Name: "global-proxy", Mode: "game", MachineCode: "__GLOBAL__", Enabled: true},
-		{Name: "legacy-proxy", Mode: "legacy", MachineCode: "node-legacy", Enabled: true},
 	}
 	if got := routingModeForMachine(proxies, "node-a"); got != "return" {
 		t.Fatalf("node-a routing mode = %q, want return", got)
@@ -874,9 +873,6 @@ func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 	}
 	if got := routingModeForMachine(proxies, ""); got != "game" {
 		t.Fatalf("global routing mode = %q, want game", got)
-	}
-	if got := routingModeForMachine(proxies, "node-legacy"); got != "legacy" {
-		t.Fatalf("legacy routing mode = %q, want legacy", got)
 	}
 }
 
