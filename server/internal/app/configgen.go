@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -378,6 +379,65 @@ func indent(s, prefix string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// agentHasHealthySmartDNS reports whether the authenticated Agent heartbeat
+// confirms that the combined image has a working local SmartDNS resolver.
+func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
+	if strings.TrimSpace(machineCode) == "" {
+		return false
+	}
+	value, err := a.store.GetSetting("agent_status_" + machineCode)
+	if err != nil || strings.TrimSpace(value) == "" {
+		return false
+	}
+	var status map[string]any
+	if err := json.Unmarshal([]byte(value), &status); err != nil {
+		return false
+	}
+	return status["smartdns_available"] == true &&
+		status["smartdns_running"] == true &&
+		status["smartdns_dns_healthy"] == true
+}
+
+// routeAgentDNSViaSmartDNS changes only the ordinary nameserver list. Bootstrap
+// and proxy-server DNS stay on literal IP resolvers to avoid resolver loops.
+func routeAgentDNSViaSmartDNS(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 Agent DNS 配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	var dns *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dns" {
+			dns = root.Content[i+1]
+			break
+		}
+	}
+	if dns == nil || dns.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 配置缺少 dns 对象")
+	}
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		if dns.Content[i].Value == "nameserver" {
+			dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+			}}
+			out, err := yaml.Marshal(&doc)
+			return string(out), err
+		}
+	}
+	dns.Content = append(dns.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"},
+		&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+		}},
+	)
+	out, err := yaml.Marshal(&doc)
+	return string(out), err
+}
+
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
@@ -404,6 +464,14 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	// Controller configs keep their separate listener; Agent configs expose no explicit proxy listener.
 	if strings.TrimSpace(machineCode) != "" {
 		yml, err = normalizeAgentProxyConfig(yml)
+		if err != nil {
+			return "", err
+		}
+	}
+	// Use SmartDNS only after this Agent's heartbeat proves both its process
+	// and real UDP/TCP DNS probes are healthy. Other Agent images retain normal DNS.
+	if strings.TrimSpace(machineCode) != "" && a.agentHasHealthySmartDNS(machineCode) {
+		yml, err = routeAgentDNSViaSmartDNS(yml)
 		if err != nil {
 			return "", err
 		}
