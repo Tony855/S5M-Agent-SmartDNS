@@ -914,7 +914,7 @@ createApp({
             const parsedJSON = JSON.parse(content);
             const v2rayLinks = v2rayNOutboundLinks(parsedJSON);
             if (v2rayLinks.length) {
-              importText.value = v2rayLinks.join('\\n');
+              importText.value = v2rayLinks.join('\n');
               showMsg(`识别到 V2RayN/V2Ray 配置，成功解析 ${v2rayLinks.length} 个出站节点`, 'success');
               return;
             }
