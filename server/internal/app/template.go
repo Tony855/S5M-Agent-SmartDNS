@@ -132,25 +132,6 @@ func validateMihomoTemplate(yml string) error {
 	return nil
 }
 
-// validateAgentPublishedProxyPort enforces the fixed Docker host-port contract.
-// Agent deployment publishes host port 7890 to container port 7890; a different
-// mixed-port would leave the configured proxy unreachable through the published port.
-func validateAgentPublishedProxyPort(yml string) error {
-	var cfg map[string]any
-	if err := yaml.Unmarshal([]byte(yml), &cfg); err != nil {
-		return fmt.Errorf("YAML 语法错误: %w", err)
-	}
-	value, ok := cfg["mixed-port"]
-	if !ok {
-		return fmt.Errorf("Agent 配置必须设置 mixed-port: 7890，当前部署只发布代理端口 7890")
-	}
-	port, ok := value.(int)
-	if !ok || port != 7890 {
-		return fmt.Errorf("Agent 代理端口必须为 mixed-port: 7890，才能匹配 Docker 端口映射")
-	}
-	return nil
-}
-
 func hashConfig(yml string) string {
 	sum := sha256.Sum256([]byte(yml))
 	return hex.EncodeToString(sum[:])
