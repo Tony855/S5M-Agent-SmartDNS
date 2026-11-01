@@ -12,6 +12,7 @@ on:
       - "s5m-agent/Dockerfile.routeros"
       - "s5m-agent/smartdns/**"
       - "s5m-agent/main.go"
+      - "s5m-agent/telemetry.go"
       - "s5m-agent/*_test.go"
       - "s5m-agent/smartdns_runtime.go"
       - "s5m-agent/go.mod"
