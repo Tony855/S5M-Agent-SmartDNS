@@ -15,6 +15,11 @@ port: 8080
 socks-port: 8081
 redir-port: 8082
 tproxy-port: 8083
+listeners:
+  - name: unsafe-socks
+    type: socks
+    listen: 0.0.0.0
+    port: 7891
 allow-lan: true
 external-controller: 0.0.0.0:8088
 dns:
@@ -38,7 +43,7 @@ proxies:
 	if err := yaml.Unmarshal([]byte(got), &config); err != nil {
 		t.Fatalf("decode normalized YAML: %v", err)
 	}
-	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port"} {
+	for _, key := range []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "listeners"} {
 		if _, exists := config[key]; exists {
 			t.Errorf("explicit proxy listener %q must be removed: %s", key, got)
 		}
@@ -103,7 +108,7 @@ func TestBuildConfigForMachineDoesNotExposeExplicitProxyListener(t *testing.T) {
 
 	agentYAML, err := app.BuildConfigForMachine("node-a")
 	if err != nil { t.Fatalf("BuildConfigForMachine(agent): %v", err) }
-	for _, forbidden := range []string{"mixed-port:", "port:", "socks-port:", "redir-port:", "tproxy-port:", "allow-lan: true"} {
+	for _, forbidden := range []string{"mixed-port:", "port:", "socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
 		if strings.Contains(agentYAML, forbidden) {
 			t.Errorf("Agent config must not expose explicit proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
