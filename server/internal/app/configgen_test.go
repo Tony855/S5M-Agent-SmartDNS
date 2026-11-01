@@ -588,6 +588,54 @@ func TestBuildConfigNormalizesPersistedProxyFields(t *testing.T) {
 	}
 }
 
+func TestMergeManagedRuleValuesRequiresOneTerminalMatchAndValidCustomRules(t *testing.T) {
+	generated := []any{
+		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
+		"DOMAIN,controller.example.com,DIRECT",
+		"MATCH,REJECT",
+	}
+	for _, tc := range []struct {
+		name string
+		custom any
+	}{
+		{name: "scalar rules", custom: "DOMAIN-SUFFIX,custom.example,DIRECT"},
+		{name: "object rule", custom: []any{map[string]any{"rule": "DOMAIN-SUFFIX,custom.example,DIRECT"}}},
+		{name: "empty rule", custom: []any{" "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := mergeManagedRuleValues(tc.custom, generated); err == nil {
+				t.Fatal("malformed custom rules must be rejected")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		generated []any
+	}{
+		{name: "missing terminal", generated: []any{"DOMAIN-SUFFIX,v2net.cc,DIRECT"}},
+		{name: "multiple terminals", generated: []any{"MATCH,DIRECT", "MATCH,REJECT"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := mergeManagedRuleValues([]any{"DOMAIN-SUFFIX,custom.example,DIRECT"}, tc.generated); err == nil {
+				t.Fatal("generated rules must contain exactly one terminal MATCH")
+			}
+		})
+	}
+
+	merged, err := mergeManagedRuleValues([]any{
+		"DOMAIN-SUFFIX,custom.example,DIRECT",
+		"MATCH,DIRECT",
+		"DOMAIN-SUFFIX,custom.example,DIRECT",
+	}, generated)
+	if err != nil {
+		t.Fatalf("merge valid custom rules: %v", err)
+	}
+	if len(merged) != 4 || merged[0] != generated[0] || merged[1] != generated[1] ||
+		merged[2] != "DOMAIN-SUFFIX,custom.example,DIRECT" || merged[3] != "MATCH,REJECT" {
+		t.Fatalf("unexpected merged rule order or terminal policy: %#v", merged)
+	}
+}
+
 func TestMergeManagedProxySectionsPreservesCustomSettings(t *testing.T) {
 	custom := `mode: global
 mixed-port: 7890
@@ -803,6 +851,7 @@ func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 		{Name: "node-a-proxy", Mode: "return", MachineCode: "node-a", Enabled: true},
 		{Name: "node-b-proxy", Mode: "rule", MachineCode: "node-b", Enabled: true},
 		{Name: "global-proxy", Mode: "game", MachineCode: "__GLOBAL__", Enabled: true},
+		{Name: "legacy-proxy", Mode: "legacy", MachineCode: "node-legacy", Enabled: true},
 	}
 	if got := routingModeForMachine(proxies, "node-a"); got != "return" {
 		t.Fatalf("node-a routing mode = %q, want return", got)
@@ -812,6 +861,23 @@ func TestRoutingModeForMachineUsesNodeMode(t *testing.T) {
 	}
 	if got := routingModeForMachine(proxies, ""); got != "game" {
 		t.Fatalf("global routing mode = %q, want game", got)
+	}
+	if got := routingModeForMachine(proxies, "node-legacy"); got != "legacy" {
+		t.Fatalf("legacy routing mode = %q, want legacy", got)
+	}
+}
+
+func TestRoutingModeForMachineMixedProxyModesKeepStableFirstMode(t *testing.T) {
+	proxies := []Proxy{
+		{Name: "legacy-anchor", Mode: "split", MachineCode: "node-mixed", Enabled: true},
+		{Name: "additional-rule-proxy", Mode: "rule", MachineCode: "node-mixed", Enabled: true},
+	}
+	if got := routingModeForMachine(proxies, "node-mixed"); got != "split" {
+		t.Fatalf("mixed-mode node routing mode = %q, want stable first persisted mode split", got)
+	}
+	reordered := []Proxy{proxies[1], proxies[0]}
+	if got := routingModeForMachine(reordered, "node-mixed"); got != "rule" {
+		t.Fatalf("routing mode must follow persisted proxy order; got %q, want rule", got)
 	}
 }
 
