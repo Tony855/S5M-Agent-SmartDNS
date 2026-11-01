@@ -213,7 +213,7 @@
               <el-input v-model="proxyForm.source_cidr" placeholder="例如 192.168.1.0/24，0.0.0.0/0 表示全部"></el-input>
             </el-form-item>
             <el-form-item label="名称"><el-input v-model="proxyForm.name"></el-input></el-form-item>
-            <el-form-item label="运行模式">
+            <el-form-item label="代理模式">
               <el-select v-model="proxyForm.mode" style="width:100%">
                 <el-option label="规则模式（默认：按规则匹配；未命中 REJECT）" value="rule"></el-option>
                 <el-option label="分流模式（规则匹配走代理；未匹配流量直连）" value="split"></el-option>
