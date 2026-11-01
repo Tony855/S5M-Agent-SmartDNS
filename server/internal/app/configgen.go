@@ -690,7 +690,7 @@ func routingModeForMachine(proxies []Proxy, machineCode string) string {
 			return "split"
 		}
 	}
-	return "return"
+	return "rule"
 }
 
 func controllerHostFromSettings(settings map[string]string) string {
