@@ -6,6 +6,7 @@ on:
     paths:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
+      - "scripts/s5m-deploy.sh"
       - "server/**"
       - ".github/workflows/installer-validation.yml"
   pull_request:
@@ -31,6 +32,7 @@ jobs:
         run: |
           bash -n scripts/install.sh
           bash -n scripts/install-server.sh
+          bash -n scripts/s5m-deploy.sh
 
       - name: Verify self-contained server installer contract
         run: |
@@ -93,7 +95,7 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck errors
-        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/s5m-deploy.sh
 
       - name: Check embedded web JavaScript syntax
         run: node --check server/web/app.js
