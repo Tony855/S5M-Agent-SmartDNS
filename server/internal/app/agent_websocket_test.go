@@ -1533,7 +1533,14 @@ func TestNewAgentCommandIDUsesUniqueHexadecimalIdentifiers(t *testing.T) {
 
 func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDNS(t *testing.T) {
 	app, code, token := websocketTestApp(t)
-	persisted := "allow-lan: false\\ndns:\\n  enable: true\\n  nameserver:\\n    - 8.8.8.8\\n  default-nameserver:\\n    - 223.5.5.5\\n"
+	persisted := `allow-lan: false
+dns:
+  enable: true
+  nameserver:
+    - 8.8.8.8
+  default-nameserver:
+    - 223.5.5.5
+`
 	if err := app.store.SaveNodeConfig(code, persisted); err != nil { t.Fatalf("save node config: %v", err) }
 	setHealth := func(healthy bool) {
 		t.Helper()
