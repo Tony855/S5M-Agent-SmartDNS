@@ -34,7 +34,7 @@ func TestDefaultMihomoTemplateIsUsableStarter(t *testing.T) {
 		t.Fatalf("default Mihomo template should be valid YAML: %v", err)
 	}
 	for _, want := range []string{
-		"mixed-port: 7890",
+		"allow-lan: false",
 		"external-controller: 127.0.0.1:8088",
 		"listen: 127.0.0.1:5353",
 		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
@@ -54,7 +54,7 @@ func TestDefaultMihomoTemplateIsUsableStarter(t *testing.T) {
 			t.Errorf("default template missing baseline section %q", want)
 		}
 	}
-	for _, unwanted := range []string{"YOUR_PROXY_SERVER", "221111cdn"} {
+	for _, unwanted := range []string{"mixed-port:", "socks-port:", "redir-port:", "tproxy-port:", "allow-lan: true", "YOUR_PROXY_SERVER", "221111cdn"} {
 		if strings.Contains(defaultMihomoTemplate, unwanted) {
 			t.Fatalf("default template must not contain placeholder/hard-coded rule %q", unwanted)
 		}
