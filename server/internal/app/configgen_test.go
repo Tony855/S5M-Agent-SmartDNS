@@ -1326,11 +1326,39 @@ func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
 	generated := "dns:\n  enable: true\n  nameserver:\n    - 127.0.0.1:6053\n  default-nameserver:\n    - 223.5.5.5\n"
 	safeFallback, err := applyAgentRuntimeDNS(generated, false)
 	if err != nil { t.Fatalf("fallback generated SmartDNS DNS: %v", err) }
-	if !strings.Contains(safeFallback, "https://dns.cloudflare.com/dns-query") ||
-		!strings.Contains(safeFallback, "https://dns.google/dns-query") ||
-		strings.Contains(safeFallback, "127.0.0.1:6053") ||
-		strings.Contains(safeFallback, "223.5.5.5") || strings.Contains(safeFallback, "119.29.29.29") {
-		t.Fatalf("unhealthy generated SmartDNS must fall back to encrypted DoH, not plaintext DNS:\n%s", safeFallback)
+	var fallbackConfig map[string]any
+	if err := yaml.Unmarshal([]byte(safeFallback), &fallbackConfig); err != nil {
+		t.Fatalf("decode unhealthy SmartDNS fallback: %v\\n%s", err, safeFallback)
+	}
+	fallbackDNS, ok := fallbackConfig["dns"].(map[string]any)
+	if !ok {
+		t.Fatalf("fallback dns section missing or invalid:\\n%s", safeFallback)
+	}
+	fallbackServers, ok := fallbackDNS["nameserver"].([]any)
+	if !ok {
+		t.Fatalf("fallback dns.nameserver missing or invalid:\\n%s", safeFallback)
+	}
+	wantFallback := map[string]bool{
+		"https://dns.cloudflare.com/dns-query": false,
+		"https://dns.google/dns-query": false,
+	}
+	for _, raw := range fallbackServers {
+		server, ok := raw.(string)
+		if !ok {
+			t.Errorf("fallback nameserver has unexpected type %T", raw)
+			continue
+		}
+		if _, exists := wantFallback[server]; exists {
+			wantFallback[server] = true
+		}
+		if server == "127.0.0.1:6053" || server == "223.5.5.5" || server == "119.29.29.29" {
+			t.Errorf("fallback dns.nameserver must not contain SmartDNS or plaintext public DNS %q", server)
+		}
+	}
+	for server, found := range wantFallback {
+		if !found {
+			t.Errorf("encrypted fallback nameserver %q missing: %#v", server, fallbackServers)
+		}
 	}
 }
 
