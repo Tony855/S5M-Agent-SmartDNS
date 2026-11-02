@@ -348,6 +348,11 @@ tun:
 dns:
   enable: true
   listen: 127.0.0.1:5353
+proxy-groups:
+  - name: CUSTOM-MANUAL
+    type: select
+    proxies:
+      - DIRECT
 proxies:
   - name: stale-proxy
     type: socks5
@@ -386,6 +391,8 @@ rules:
 			"enable: false",
 			"listen: 127.0.0.1:5353",
 			"managed-proxy",
+			"CUSTOM-MANUAL",
+			"PROXY",
 			"DOMAIN-SUFFIX,custom-node.example,DIRECT",
 			"MATCH,REJECT",
 		} {
