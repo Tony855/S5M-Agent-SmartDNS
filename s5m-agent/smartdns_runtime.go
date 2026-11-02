@@ -23,7 +23,7 @@ import (
 	"unicode/utf8"
 )
 
-const smartDNSConfigPath = "/data/smartdns.conf"
+var smartDNSConfigPath = "/data/smartdns.conf"
 const smartDNSPreflightOutputLimit = 8 << 10
 const smartDNSRestartCooldown = 30 * time.Second
 
