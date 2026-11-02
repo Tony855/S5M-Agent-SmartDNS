@@ -161,6 +161,9 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 			if !ok || strings.TrimSpace(value) == "" {
 				return "", fmt.Errorf("Mihomo listeners 第 %d 项名称无效", index)
 			}
+			if usedNames[value] {
+				return "", fmt.Errorf("Mihomo Listener 名称 %q 重复", value)
+			}
 			usedNames[value] = true
 		}
 		if rawPort, exists := item["port"]; exists {
@@ -181,6 +184,9 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 			}
 			if port < 1 || port > 65535 {
 				return "", fmt.Errorf("Mihomo listeners 第 %d 项端口越界", index)
+			}
+			if usedPorts[port] {
+				return "", fmt.Errorf("Mihomo Listener 端口 %d 重复", port)
 			}
 			usedPorts[port] = true
 		}
