@@ -15,8 +15,8 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 	if plan.Mode != SmartDNSProxyModeShared {
 		return document, nil
 	}
-	if plan.Strategy != SmartDNSDefaultStrategy || len(plan.ProxyNames) == 0 {
-		return "", fmt.Errorf("SmartDNS shared fallback 缺少有效代理或策略")
+	if plan.Strategy != "" && plan.Strategy != SmartDNSDefaultStrategy {
+		return "", fmt.Errorf("SmartDNS shared fallback 策略无效")
 	}
 	var root map[string]any
 	if err := yaml.Unmarshal([]byte(document), &root); err != nil {
@@ -33,21 +33,26 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 			return "", fmt.Errorf("代理组名称 %q 已被占用", SmartDNSGroupName)
 		}
 	}
-	proxies := make([]any, 0, len(plan.ProxyNames))
-	for _, name := range plan.ProxyNames {
-		if strings.TrimSpace(name) == "" {
-			return "", fmt.Errorf("SmartDNS Fallback 代理名称不能为空")
+	if len(plan.ProxyNames) > 0 {
+		proxies := make([]any, 0, len(plan.ProxyNames))
+		for _, name := range plan.ProxyNames {
+			if strings.TrimSpace(name) == "" {
+				return "", fmt.Errorf("SmartDNS Fallback 代理名称不能为空")
+			}
+			proxies = append(proxies, name)
 		}
-		proxies = append(proxies, name)
+		groups = append(groups, map[string]any{
+			"name": SmartDNSGroupName,
+			"type": "fallback",
+			"proxies": proxies,
+			"url": "https://www.gstatic.com/generate_204",
+			"interval": 30,
+			"timeout": 5000,
+			"lazy": false,
+			"expected-status": 204,
+		})
+		root["proxy-groups"] = groups
 	}
-	groups = append(groups, map[string]any{
-		"name": SmartDNSGroupName,
-		"type": "fallback",
-		"proxies": proxies,
-		"url": "https://www.gstatic.com/generate_204",
-		"interval": 60,
-	})
-	root["proxy-groups"] = groups
 
 	rules, ok := root["rules"].([]any)
 	if !ok {
@@ -62,7 +67,9 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		parts := strings.Split(rule, ",")
 		if len(parts) >= 3 && strings.EqualFold(strings.TrimSpace(parts[0]), "PROCESS-NAME") &&
 			strings.EqualFold(strings.TrimSpace(parts[1]), "smartdns") {
-			rules[i] = "PROCESS-NAME,smartdns," + SmartDNSGroupName
+			target := SmartDNSGroupName
+			if len(plan.ProxyNames) == 0 { target = "REJECT" }
+			rules[i] = "PROCESS-NAME,smartdns," + target
 			replaced = true
 		}
 	}
@@ -96,7 +103,9 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		}
 		rules = append(rules, nil)
 		copy(rules[insertAt+1:], rules[insertAt:])
-		rules[insertAt] = "PROCESS-NAME,smartdns," + SmartDNSGroupName
+		target := SmartDNSGroupName
+		if len(plan.ProxyNames) == 0 { target = "REJECT" }
+		rules[insertAt] = "PROCESS-NAME,smartdns," + target
 	}
 	root["rules"] = rules
 	out, err := yaml.Marshal(root)

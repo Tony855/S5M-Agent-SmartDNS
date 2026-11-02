@@ -648,26 +648,51 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// SmartDNS routing is opt-in. An absent setting is the legacy state and
-	// must not alter existing node traffic behavior.
-	if raw := strings.TrimSpace(settings["smartdns_routing_config"]); raw != "" {
-		var routing SmartDNSRoutingConfig
-		if err := json.Unmarshal([]byte(raw), &routing); err != nil {
+	// Shared SmartDNS fallback is the default for Agent machines. An explicitly
+	// stored empty value remains the opt-out switch for legacy routing; controller
+	// config (machineCode == "") is never changed by this Agent-only policy.
+	rawRouting, routingSettingExists := settings["smartdns_routing_config"]
+	applySharedFallback := strings.TrimSpace(machineCode) != "" && !routingSettingExists
+	var routing SmartDNSRoutingConfig
+	if routingSettingExists && strings.TrimSpace(rawRouting) != "" {
+		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+		}
+		applySharedFallback = true
+	}
+	if applySharedFallback {
+		routing.Mode = strings.ToLower(strings.TrimSpace(routing.Mode))
+		routing.Strategy = strings.ToLower(strings.TrimSpace(routing.Strategy))
+		if routing.Mode == "" {
+			routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
 		}
 		if routing.Mode == SmartDNSProxyModePerClient {
 			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
 		}
 		refs := make([]SmartDNSProxyRef, 0, len(proxies))
 		for _, p := range proxies {
-			matches := p.MachineCode == "__GLOBAL__" || (machineCode != "" && p.MachineCode == machineCode)
+			machine := strings.TrimSpace(p.MachineCode)
+			matches := machine == "__GLOBAL__" || (machineCode != "" && machine == machineCode)
 			if matches { refs = append(refs, SmartDNSProxyRef{Name: p.Name, Enabled: p.Enabled}) }
 		}
-		plan, err := BuildSmartDNSRoutingPlan(routing, refs)
-		if err != nil { return "", fmt.Errorf("SmartDNS 路由计划无效: %w", err) }
-		if plan.Mode == SmartDNSProxyModeShared {
-			yml, err = applySmartDNSSharedFallback(yml, plan)
+		hasEnabledProxy := false
+		for _, ref := range refs { if ref.Enabled { hasEnabledProxy = true; break } }
+		if routing.Mode == SmartDNSProxyModeShared {
+			if !hasEnabledProxy {
+				// No eligible outbound means SmartDNS must be rejected, never sent direct.
+				yml, err = applySmartDNSSharedFallback(yml, SmartDNSRoutingPlan{
+					Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy,
+				})
+			} else {
+				plan, planErr := BuildSmartDNSRoutingPlan(routing, refs)
+				if planErr != nil { return "", fmt.Errorf("SmartDNS 路由计划无效: %w", planErr) }
+				yml, err = applySmartDNSSharedFallback(yml, plan)
+			}
 			if err != nil { return "", err }
+		} else {
+			if _, planErr := BuildSmartDNSRoutingPlan(routing, refs); planErr != nil {
+				return "", fmt.Errorf("SmartDNS 路由计划无效: %w", planErr)
+			}
 		}
 	}
 	// Controller configs keep their separate listener; Agent configs expose no explicit proxy listener.
@@ -1304,6 +1329,22 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 			// explicitly overrides it; this also keeps repeated node sync idempotent.
 			if name == "PROXY" {
 				continue
+			}
+			if name == SmartDNSGroupName {
+				// The fallback group is generated on every sync. Replace a prior
+				// managed instance so membership tracks current enabled machine nodes,
+				// but never overwrite an operator-owned group with a different shape.
+				managed := false
+				for i, existing := range merged {
+					current, ok := existing.(map[string]any)
+					if !ok || current["name"] != SmartDNSGroupName { continue }
+					managed = current["type"] == "fallback" &&
+						current["url"] == "https://www.gstatic.com/generate_204"
+					if !managed { break }
+					merged[i] = raw
+					break
+				}
+				if managed { continue }
 			}
 			return nil, fmt.Errorf("proxy-group 名称冲突: %q", name)
 		}

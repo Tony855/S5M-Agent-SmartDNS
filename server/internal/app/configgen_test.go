@@ -1883,3 +1883,142 @@ func TestBuildConfigRejectsUnsafeProxyNames(t *testing.T) {
 		}
 	}
 }
+
+
+// TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback verifies that
+// every Agent gets an independent fallback group containing only enabled
+// global and machine-bound nodes, including in return mode.
+func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-default-fallback.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	proxies := []Proxy{
+		{Name: "24587", Type: "vmess", Server: "192.0.2.10", Port: 24587, MachineCode: "__GLOBAL__", Enabled: true},
+		{Name: "24588", Type: "vmess", Server: "192.0.2.11", Port: 24588, MachineCode: "node-a", Enabled: true},
+		{Name: "foreign-node", Type: "vmess", Server: "192.0.2.12", Port: 24589, MachineCode: "node-b", Enabled: true},
+		{Name: "disabled-node", Type: "vmess", Server: "192.0.2.13", Port: 24590, MachineCode: "node-a", Enabled: false},
+	}
+	for i := range proxies {
+		p := proxies[i]
+		if err := store.CreateProxy(&p); err != nil { t.Fatalf("CreateProxy(%s): %v", p.Name, err) }
+	}
+	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatalf("decode config: %v", err) }
+	groups := doc["proxy-groups"].([]any)
+	var smart map[string]any
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		if group["name"] == SmartDNSGroupName { smart = group }
+	}
+	if smart == nil { t.Fatalf("default SmartDNS fallback group missing: %#v", groups) }
+	if smart["type"] != "fallback" || smart["url"] != "https://www.gstatic.com/generate_204" ||
+		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 {
+		t.Fatalf("unexpected fallback health-check settings: %#v", smart)
+	}
+	members := smart["proxies"].([]any)
+	if len(members) != 2 || members[0] != "24587" || members[1] != "24588" {
+		t.Fatalf("fallback must contain only sorted enabled global + node-a proxies: %#v", members)
+	}
+	for _, forbidden := range []string{"DIRECT", "foreign-node", "disabled-node"} {
+		for _, member := range members { if member == forbidden { t.Fatalf("fallback contains forbidden member %q: %#v", forbidden, members) } }
+	}
+	found := false
+	for _, raw := range doc["rules"].([]any) {
+		if raw == "PROCESS-NAME,smartdns,"+SmartDNSGroupName { found = true }
+	}
+	if !found { t.Fatalf("return mode must also route SmartDNS through the dedicated fallback group: %#v", doc["rules"]) }
+	manual := false
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		if group["name"] == "PROXY" && group["type"] == "select" { manual = true }
+	}
+	if !manual { t.Fatalf("ordinary manual PROXY select group was changed or removed: %#v", groups) }
+}
+
+// An explicitly stored empty setting is the backwards-compatible opt-out.
+func TestBuildConfigForMachineExplicitlyDisablesDefaultSmartDNSFallback(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-fallback-optout.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	p := Proxy{Name: "24587", Type: "vmess", Server: "192.0.2.10", Port: 24587, MachineCode: "__GLOBAL__", Enabled: true}
+	if err := store.CreateProxy(&p); err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{"smartdns_routing_config": ""}); err != nil { t.Fatal(err) }
+	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	if strings.Contains(got, SmartDNSGroupName) { t.Fatalf("explicit opt-out unexpectedly generated fallback group:\n%s", got) }
+	if strings.Contains(got, "PROCESS-NAME,smartdns,") { t.Fatalf("explicit opt-out changed legacy return-mode process routing:\n%s", got) }
+}
+
+// With no enabled eligible proxy, the default policy must reject SmartDNS
+// rather than allowing return-mode MATCH,DIRECT to leak overseas DNS upstreams.
+func TestBuildConfigForMachineRejectsSmartDNSWhenNoEligibleProxy(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-no-proxy.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	p := Proxy{Name: "foreign-only", Type: "vmess", Server: "192.0.2.20", Port: 24587, MachineCode: "node-b", Enabled: true}
+	if err := store.CreateProxy(&p); err != nil { t.Fatal(err) }
+	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	if !strings.Contains(got, "PROCESS-NAME,smartdns,REJECT") {
+		t.Fatalf("SmartDNS must fail closed when no eligible proxy exists:\n%s", got)
+	}
+	if strings.Contains(got, "SMARTDNS-PROXY") { t.Fatalf("empty fallback group must not be generated:\n%s", got) }
+}
+
+
+// Repeated sync must refresh a previously generated SmartDNS group rather
+// than treating the managed group as an operator-owned name collision.
+func TestMergeManagedProxySectionsRefreshesSmartDNSFallbackMembership(t *testing.T) {
+	custom := `proxies:
+  - name: old-node
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [old-node]
+    url: https://www.gstatic.com/generate_204
+    interval: 30
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	generated := `proxies:
+  - name: current-node
+    type: socks5
+    server: 192.0.2.2
+    port: 1080
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [current-node]
+    url: https://www.gstatic.com/generate_204
+    interval: 30
+    timeout: 5000
+    lazy: false
+    expected-status: 204
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("refresh managed SmartDNS group: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	groups := doc["proxy-groups"].([]any)
+	if len(groups) != 1 { t.Fatalf("expected one refreshed group, got %#v", groups) }
+	group := groups[0].(map[string]any)
+	members := group["proxies"].([]any)
+	if len(members) != 1 || members[0] != "current-node" {
+		t.Fatalf("stale fallback membership was not refreshed: %#v", members)
+	}
+	if group["expected-status"] != 204 || group["lazy"] != false {
+		t.Fatalf("new health-check options were not refreshed: %#v", group)
+	}
+}

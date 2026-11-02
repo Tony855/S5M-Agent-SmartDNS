@@ -220,7 +220,7 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if raw, ok := in["smartdns_routing_config"]; ok {
 		var cfg SmartDNSRoutingConfig
 		if strings.TrimSpace(raw) == "" {
-			// Empty value explicitly removes the opt-in setting and restores legacy behavior.
+			// Empty value explicitly opts out of the default shared SmartDNS fallback and restores legacy behavior.
 			in["smartdns_routing_config"] = ""
 		} else {
 			if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
