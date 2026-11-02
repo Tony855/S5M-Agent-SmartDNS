@@ -134,6 +134,7 @@
           <div class="card-title">
             <span>代理列表 (共 {{ proxies.length }} 个，当前分组 {{ filteredProxies.length }} 个)</span>
             <div>
+              <el-button size="small" :disabled="!filteredProxies.length || loadingProxies" @click="toggleSelectAllFilteredProxies">{{ allFilteredProxiesSelected ? '取消全选当前分组' : '全选当前分组' }}</el-button>
               <el-button size="small" type="primary" style="margin-right: 10px;" @click="showImport = true">批量导入</el-button>
               <el-button size="small" type="success" @click="openCreateProxy">新增节点</el-button>
             </div>
@@ -160,7 +161,7 @@
           </div>
 
           <!-- 桌面端表格 -->
-          <el-table class="desktop-table" :data="filteredProxies" style="width: 100%" stripe v-loading="loadingProxies" @selection-change="onProxySelectionChange">
+          <el-table ref="proxyTableRef" class="desktop-table" :data="filteredProxies" style="width: 100%" stripe v-loading="loadingProxies" @selection-change="onProxySelectionChange">
             <el-table-column type="selection" width="48"></el-table-column>
             <el-table-column prop="id" label="ID" width="70"></el-table-column>
             <el-table-column prop="name" label="名称" min-width="140"></el-table-column>
