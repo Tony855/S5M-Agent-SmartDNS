@@ -989,6 +989,13 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		if p.Name == "" || len(p.Name) > 100 {
 			return "", fmt.Errorf("代理名称不能为空且不能超过 100 个字符")
 		}
+		// Mihomo reserves these names for built-in policies and the managed
+		// PROXY select group. Allowing a node to shadow one would create an
+		// ambiguous or self-referencing proxy-group in the generated YAML.
+		switch strings.ToUpper(p.Name) {
+		case "PROXY", "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL":
+			return "", fmt.Errorf("代理名称 %q 与 Mihomo 内置策略或托管分组名称冲突", p.Name)
+		}
 		switch p.Type {
 		case "socks5", "http", "ss", "vmess", "vless", "trojan":
 		default:
