@@ -102,7 +102,6 @@ def request_via_mihomo(mixed_port, target_port):
 def main():
     node_a = serve(ProxyHandler, "a")
     node_b = serve(ProxyHandler, "b")
-    target = serve(HealthTargetHandler)
     controller = free_port()
     mixed = free_port()
 
@@ -128,7 +127,9 @@ proxy-groups:
     proxies:
       - node-a
       - node-b
-    url: http://127.0.0.1:{target}/generate_204
+    # Use a non-loopback hostname so Mihomo cannot short-circuit the health
+    # probe as local traffic; the HTTP proxy receives the absolute-form URL.
+    url: http://mihomo-health-check.invalid/generate_204
     interval: 1
     timeout: 1000
     lazy: false
