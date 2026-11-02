@@ -1224,6 +1224,43 @@ func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
 	return merged, nil
 }
 
+func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error) {
+	var custom, generated []any
+	if customValue != nil {
+		var ok bool
+		custom, ok = customValue.([]any)
+		if !ok { return nil, fmt.Errorf("自定义 proxy-groups 必须是数组") }
+	}
+	if generatedValue != nil {
+		var ok bool
+		generated, ok = generatedValue.([]any)
+		if !ok { return nil, fmt.Errorf("生成的 proxy-groups 必须是数组") }
+	}
+	merged := make([]any, 0, len(custom)+len(generated))
+	seen := make(map[string]bool, len(custom)+len(generated))
+	for _, raw := range custom {
+		group, ok := raw.(map[string]any)
+		if !ok { return nil, fmt.Errorf("自定义 proxy-groups 项必须是对象") }
+		name, ok := group["name"].(string)
+		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("自定义 proxy-group 名称不能为空") }
+		name = strings.TrimSpace(name)
+		if seen[name] { return nil, fmt.Errorf("自定义 proxy-group 名称重复: %q", name) }
+		seen[name] = true
+		merged = append(merged, raw)
+	}
+	for _, raw := range generated {
+		group, ok := raw.(map[string]any)
+		if !ok { return nil, fmt.Errorf("生成的 proxy-groups 项必须是对象") }
+		name, ok := group["name"].(string)
+		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("生成的 proxy-group 名称不能为空") }
+		name = strings.TrimSpace(name)
+		if seen[name] { return nil, fmt.Errorf("proxy-group 名称冲突: %q", name) }
+		seen[name] = true
+		merged = append(merged, raw)
+	}
+	return merged, nil
+}
+
 func mergeManagedProxySections(customYAML, generatedYAML string) (string, error) {
 	var customDoc map[string]any
 	if err := yaml.Unmarshal([]byte(customYAML), &customDoc); err != nil {
@@ -1245,8 +1282,12 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	if value, ok := generatedDoc["proxies"]; ok {
 		customDoc["proxies"] = value
 	}
-	if value, ok := generatedDoc["proxy-groups"]; ok {
-		customDoc["proxy-groups"] = value
+	mergedGroups, err := mergeManagedProxyGroupValues(customDoc["proxy-groups"], generatedDoc["proxy-groups"])
+	if err != nil {
+		return "", fmt.Errorf("合并代理组失败: %w", err)
+	}
+	if len(mergedGroups) > 0 {
+		customDoc["proxy-groups"] = mergedGroups
 	}
 	mergedRules, err := mergeManagedRuleValues(customDoc["rules"], generatedDoc["rules"])
 	if err != nil {
