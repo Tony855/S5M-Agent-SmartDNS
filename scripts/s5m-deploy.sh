@@ -8,7 +8,7 @@ IMAGE_LOCAL="s5m-agent:local"
 CONTAINER="s5m-agent"
 DATA_DIR="/opt/s5m-agent/data"
 PORT_WEB=80
-ENABLE_TUN="${ENABLE_TUN:-0}"
+ENABLE_TUN="${ENABLE_TUN:-1}"
 BACKUP_NAME="${CONTAINER}.rollback.${BASHPID}"
 HAD_OLD=0
 NEW_STARTED=0
@@ -155,7 +155,7 @@ if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "
   die "现有 config.yaml 中 tun.enable=true；为避免升级后 TUN 失效，请使用 ENABLE_TUN=1 或先明确关闭 TUN。"
 fi
 
-# TUN 默认关闭；只有 ENABLE_TUN=1 才授予 TUN 权限。
+# TUN 默认启用；可显式设置 ENABLE_TUN=0 关闭。
 TUN_ARGS=()
 if [ "$ENABLE_TUN" = "1" ]; then
   TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)

@@ -55,7 +55,7 @@ dns:
         geoip: true
         geoip-code: CN
 tun:
-    enable: false
+    enable: true
     stack: system
     auto-route: true
     auto-detect-interface: true
@@ -1067,13 +1067,12 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		proxiesYAML = "\n" + indent(string(b), "    ")
 	}
 
-	// Expose every eligible node through one selectable group. DIRECT remains
-	// available as an explicit fallback, matching the operator-facing template.
-	groupProxies := make([]string, 0, len(outs)+1)
+	// Expose every eligible node through one selectable group. Do not add
+	// DIRECT: the node policy requires outbound traffic to use a real proxy.
+	groupProxies := make([]string, 0, len(outs))
 	for _, proxy := range outs {
 		groupProxies = append(groupProxies, proxy.Name)
 	}
-	groupProxies = append(groupProxies, "DIRECT")
 	proxyGroups := []map[string]any{{
 		"name": "PROXY",
 		"type": "select",
@@ -1110,7 +1109,7 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	// Mihomo's own DoH bootstrap stays independent from SmartDNS and uses literal-IP DNS.
 	if len(outs) > 0 && routingMode != "global" && routingMode != "return" {
 		for _, domain := range []string{"dns.alidns.com", "doh.pub", "dns.cloudflare.com", "dns.google"} {
-			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, outs[0].Name))
+			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,PROXY", domain))
 		}
 	}
 	seenCIDR := map[string]string{}
@@ -1178,8 +1177,13 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 			rules = append(rules, "MATCH,DIRECT")
 		}
 	case "rule":
-		// Strict rule mode: only explicit rules may pass traffic; unmatched traffic is rejected.
-		rules = append(rules, "MATCH,REJECT")
+		// Rule mode sends unmatched traffic through the selectable proxy group.
+		// If no eligible node exists, fail closed rather than falling back to DIRECT.
+		if firstProxy != "" {
+			rules = append(rules, "MATCH,PROXY")
+		} else {
+			rules = append(rules, "MATCH,REJECT")
+		}
 	case "return":
 		// Return-to-China mode: mainland destinations must use the selected
 		// mainland egress proxy; destinations outside CN go direct.
@@ -1281,7 +1285,14 @@ func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
 			return nil, fmt.Errorf("自定义规则必须是非空字符串")
 		}
 		rule = strings.TrimSpace(rule)
-		if strings.HasPrefix(strings.ToUpper(rule), "MATCH,") || seen[rule] {
+		upper := strings.ToUpper(rule)
+		parts := strings.Split(rule, ",")
+		isSmartDNSProcessRule := len(parts) >= 2 &&
+			strings.EqualFold(strings.TrimSpace(parts[0]), "PROCESS-NAME") &&
+			strings.EqualFold(strings.TrimSpace(parts[1]), "smartdns")
+		if strings.HasPrefix(upper, "MATCH,") || isSmartDNSProcessRule || seen[rule] {
+			// The generated SmartDNS process route is authoritative. Do not
+			// append stale custom rules such as PROCESS-NAME,smartdns,REJECT.
 			continue
 		}
 		merged = append(merged, rule)
@@ -1350,9 +1361,18 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 						if !ok || strings.TrimSpace(value) == "" {
 							return nil, fmt.Errorf("PROXY 分组成员必须是非空字符串")
 						}
+					if strings.EqualFold(strings.TrimSpace(value), "DIRECT") {
+
+						continue
+
+					}
+
 					if !memberSeen[value] {
+
 						memberSeen[value] = true
+
 						members = append(members, value)
+
 					}
 				}
 				current["proxies"] = members

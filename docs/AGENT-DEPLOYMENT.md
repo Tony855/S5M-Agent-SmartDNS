@@ -27,7 +27,7 @@ chmod 0755 /usr/local/sbin/s5m-agent-deploy
 | `DNS_PORT` | `0` | 将同一宿主机端口映射到容器 6053 TCP/UDP；设为 `0` 禁用 |
 | `DATA_DIR` | `/opt/s5m-agent/data` | 持久化数据目录 |
 | `RESTART_POLICY` | `unless-stopped` | Docker 重启策略 |
-| `ENABLE_TUN` | `0` | 设为 `1` 时添加 NET_ADMIN 和 /dev/net/tun |
+| `ENABLE_TUN` | `1` | 默认启用 TUN；设为 `0` 可关闭，启用时需要 NET_ADMIN 和 /dev/net/tun |
 | `EXTRA_ENV_FILE` | 空 | 可选 Docker env-file 路径 |
 | `PULL_IMAGE` | `1` | 是否先拉取镜像；设为 `0` 使用本地镜像 |
 
@@ -56,7 +56,7 @@ EXTRA_ENV_FILE="/etc/s5m-agent-smartdns.env"
 - 为兼容旧部署，已有配置文件若没有 `WEB_BIND_IP`，升级脚本继续沿用原来的 `BIND_IP`，不会擅自改变既有 Web 端口映射。
 - Agent 内部 API 端口 8088 不会映射到宿主机。
 - SmartDNS 默认不对宿主机发布；需要提供 DNS 服务时再配置 `DNS_PORT`，并限制来源网络。
-- TUN 默认关闭。启用前确认宿主机存在 `/dev/net/tun`，并了解 NET_ADMIN 权限影响。
+- TUN 默认启用。部署前确认宿主机存在 `/dev/net/tun`；脚本会授予容器 NET_ADMIN 和设备映射。若需关闭，显式设置 `ENABLE_TUN=0`。
 - 脚本不会删除 `DATA_DIR`。升级时会先暂存同名旧容器；新容器启动检查失败时会尝试移除新容器并恢复旧容器。
 - 回滚只恢复旧容器及其容器配置，不会撤销镜像拉取或数据目录内由新版本写入的数据；升级前仍应备份持久化数据。
 - 配置文件与额外 env 文件会设置为仅 root 可读写（权限 0600），并拒绝符号链接；持久化目录权限为 0700。IPv6 的 BIND_IP 会自动使用 Docker 端口映射所需的方括号格式。

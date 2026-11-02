@@ -224,8 +224,8 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(agentYAML), &agentConfig); err != nil {
 		t.Fatalf("decode generated Agent config: %v", err)
 	}
-	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != false {
-		t.Errorf("new Agent config must keep TUN disabled by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
+	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != true {
+		t.Errorf("new Agent config must enable TUN by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
 	}
 	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
 		if strings.Contains(agentYAML, forbidden) {
@@ -394,7 +394,7 @@ rules:
 			"CUSTOM-MANUAL",
 			"PROXY",
 			"DOMAIN-SUFFIX,custom-node.example,DIRECT",
-			"MATCH,REJECT",
+			"MATCH,PROXY",
 		} {
 			if !strings.Contains(got.YAML, want) {
 				t.Errorf("attempt %d: synced YAML lost or omitted %q:\n%s", attempt, want, got.YAML)
@@ -558,11 +558,11 @@ func TestBuildConfigMapsDisabledCIDRToEnabledEndpoint(t *testing.T) {
 	if strings.Contains(got, "NETWORK,UDP,DIRECT") {
 		t.Fatal("不应生成全局 UDP 直连规则")
 	}
-	if !strings.Contains(got, "MATCH,REJECT") {
-		t.Fatal("严格规则模式必须以 MATCH,REJECT 收尾")
+	if !strings.Contains(got, "MATCH,PROXY") {
+		t.Fatal("规则模式必须以 MATCH,PROXY 收尾")
 	}
-	if strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatal("严格规则模式不能将未命中流量回退为 DIRECT")
+	if strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("存在可用代理时，未命中流量不能直连或拒绝")
 	}
 	for _, unwanted := range []string{"221111cdn", "^abc.*2222com"} {
 		if strings.Contains(got, unwanted) {
@@ -823,7 +823,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}{
 		{mode: "global", want: []string{"MATCH,PROXY", "DOMAIN,controller.example.com,DIRECT"}},
 		{mode: "split", want: []string{"MATCH,PROXY"}},
-		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
+		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,PROXY"}},
 		{mode: "return", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "GEOIP,CN,PROXY", "MATCH,DIRECT"}},
 		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,PROXY", "MATCH,DIRECT"}},
 	}
@@ -851,14 +851,14 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 				}
 			}
 			if tt.mode == "rule" {
-				if strings.Contains(got, "MATCH,proxy-a") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "GEOIP,CN,DIRECT") {
-					t.Errorf("rule mode must reject unmatched traffic and must not add implicit proxy/direct fallback:\\n%s", got)
+				if !strings.Contains(got, "MATCH,PROXY") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "MATCH,REJECT") {
+					t.Errorf("rule mode must route unmatched traffic through PROXY:\\n%s", got)
 				}
-				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,REJECT") {
-					t.Errorf("controller bypass must appear before terminal reject rule:\\n%s", got)
+				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,PROXY") {
+					t.Errorf("controller bypass must appear before terminal proxy rule:\\n%s", got)
 				}
-				if strings.Index(got, "PROCESS-NAME,smartdns,proxy-a") > strings.Index(got, "MATCH,REJECT") {
-					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal reject:\\n%s", got)
+				if strings.Index(got, "PROCESS-NAME,smartdns,proxy-a") > strings.Index(got, "MATCH,PROXY") {
+					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal proxy rule:\\n%s", got)
 				}
 			}
 		})
@@ -1034,10 +1034,10 @@ func TestBuildConfigRoutesConfiguredDoHThroughProxy(t *testing.T) {
 		"listen: 127.0.0.1:5353",
 		"fake-ip-range: 198.18.0.1/16",
 		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
-		"DOMAIN-SUFFIX,dns.alidns.com,proxy-a",
-		"DOMAIN-SUFFIX,doh.pub,proxy-a",
-		"DOMAIN-SUFFIX,dns.cloudflare.com,proxy-a",
-		"DOMAIN-SUFFIX,dns.google,proxy-a",
+		"DOMAIN-SUFFIX,dns.alidns.com,PROXY",
+		"DOMAIN-SUFFIX,doh.pub,PROXY",
+		"DOMAIN-SUFFIX,dns.cloudflare.com,PROXY",
+		"DOMAIN-SUFFIX,dns.google,PROXY",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated config missing %q:\\n%s", want, got)
@@ -1276,7 +1276,7 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 	}
 }
 
-func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
+func TestOpenStoreDefaultsTUNEnabled(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "tun-default.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -1287,8 +1287,8 @@ func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSetting(tun_enable): %v", err)
 	}
-	if got != "false" {
-		t.Fatalf("tun_enable default = %q, want false", got)
+	if got != "true" {
+		t.Fatalf("tun_enable default = %q, want true", got)
 	}
 }
 
@@ -1839,7 +1839,7 @@ func TestBuildConfigGeneratesSelectableProxyGroup(t *testing.T) {
 	if !ok {
 		t.Fatalf("PROXY members = %#v, want sequence", group["proxies"])
 	}
-	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588", "DIRECT"}
+	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588"}
 	if len(members) != len(want) {
 		t.Fatalf("PROXY members = %#v, want %#v", members, want)
 	}
@@ -1851,8 +1851,8 @@ func TestBuildConfigGeneratesSelectableProxyGroup(t *testing.T) {
 	if strings.Contains(got, "disabled-node") {
 		t.Fatal("disabled proxy must not be included in generated group")
 	}
-	if !strings.Contains(got, "MATCH,REJECT") {
-		t.Fatal("strict rule mode must keep rejecting unmatched traffic")
+	if !strings.Contains(got, "MATCH,PROXY") || strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("rule mode with enabled nodes must route unmatched traffic through PROXY")
 	}
 }
 
@@ -2081,7 +2081,7 @@ rules:
 	if !ok {
 		t.Fatalf("PROXY members are not a sequence: %#v", group["proxies"])
 	}
-	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588", "DIRECT"}
+	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588"}
 	if len(members) != len(want) {
 		t.Fatalf("PROXY members = %#v, want %#v", members, want)
 	}
@@ -2094,4 +2094,49 @@ rules:
 	if !ok || len(proxies) != 2 {
 		t.Fatalf("stale custom proxy inventory was not replaced by generated nodes: %#v", doc["proxies"])
 	}
+}
+
+
+func TestMergeManagedRuleValuesDropsStaleSmartDNSRejectRule(t *testing.T) {
+	generated := []any{"PROCESS-NAME,smartdns,SMARTDNS-PROXY", "MATCH,PROXY"}
+	custom := []any{"PROCESS-NAME,smartdns,REJECT", "DOMAIN,custom.example,DIRECT", "MATCH,REJECT"}
+	got, err := mergeManagedRuleValues(custom, generated)
+	if err != nil { t.Fatalf("merge managed SmartDNS rules: %v", err) }
+	count := 0
+	for _, raw := range got {
+		if strings.HasPrefix(raw.(string), "PROCESS-NAME,smartdns,") {
+			count++
+			if raw != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { t.Fatalf("stale SmartDNS route survived: %#v", raw) }
+		}
+	}
+	if count != 1 { t.Fatalf("expected one managed SmartDNS process rule, got %#v", got) }
+	if got[len(got)-1] != "MATCH,PROXY" { t.Fatalf("generated terminal policy was not retained: %#v", got) }
+}
+
+func TestMergeManagedProxySectionsRejectsDuplicateTopLevelRulesKey(t *testing.T) {
+	custom := `rules:
+  - DOMAIN,first.example,DIRECT
+rules:
+  - DOMAIN,second.example,DIRECT
+`
+	generated := `proxies: []
+proxy-groups: []
+rules:
+  - MATCH,PROXY
+`
+	if _, err := mergeManagedProxySections(custom, generated); err == nil {
+		t.Fatal("duplicate top-level rules keys must be rejected instead of silently selecting one")
+	}
+}
+
+func TestGeneratedNodeConfigDefaultsTUNEnabled(t *testing.T) {
+	got, err := buildConfigFromProxies([]Proxy{{
+		Name: "node-a", Type: "socks5", Server: "192.0.2.10", Port: 1080,
+		MachineCode: "__GLOBAL__", Enabled: true,
+	}}, "", "test-secret")
+	if err != nil { t.Fatalf("build node config: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	tun := doc["tun"].(map[string]any)
+	if tun["enable"] != true { t.Fatalf("generated TUN default = %#v, want true", tun["enable"]) }
 }

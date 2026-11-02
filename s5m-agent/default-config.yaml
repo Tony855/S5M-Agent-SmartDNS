@@ -53,7 +53,7 @@ rules:
 
 # TUN 设置
 tun:
-  enable: false
+  enable: true
   stack: system
   auto-route: true
   auto-detect-interface: true

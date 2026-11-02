@@ -533,3 +533,36 @@ func TestApplySmartDNSSharedFallbackRewritesEverySmartDNSProcessRule(t *testing.
 		}
 	}
 }
+
+
+func TestApplySmartDNSSharedFallbackRemovesDuplicateSmartDNSProcessRules(t *testing.T) {
+	input := `rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - PROCESS-NAME,smartdns,REJECT
+  - PROCESS-NAME,smartdns,node-a
+  - MATCH,REJECT
+proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+`
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
+	got, err := applySmartDNSSharedFallback(input, plan)
+	if err != nil { t.Fatalf("normalize duplicate SmartDNS rules: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	rules := doc["rules"].([]any)
+	count := 0
+	for _, raw := range rules {
+		rule := raw.(string)
+		if strings.HasPrefix(rule, "PROCESS-NAME,smartdns,") {
+			count++
+			if rule != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" {
+				t.Fatalf("unexpected SmartDNS process route: %s", rule)
+			}
+		}
+	}
+	if count != 1 { t.Fatalf("expected exactly one SmartDNS process rule, got %d: %#v", count, rules) }
+}

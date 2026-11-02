@@ -1085,8 +1085,8 @@ func TestImportProxiesPersistsAndFeedsGeneratedConfig(t *testing.T) {
 		"name: imported-proxy-b",
 		"server: 192.0.2.10",
 		"server: 192.0.2.11",
-		"DOMAIN-SUFFIX,dns.alidns.com,imported-proxy-a",
-		"MATCH,REJECT",
+		"DOMAIN-SUFFIX,dns.alidns.com,PROXY",
+		"MATCH,PROXY",
 	} {
 		if !strings.Contains(generated, want) {
 			t.Errorf("generated config missing %q:\\n%s", want, generated)
