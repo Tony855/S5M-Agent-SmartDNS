@@ -104,3 +104,75 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 	}
 	return string(out), nil
 }
+
+
+// applySmartDNSPerClientListeners creates one loopback-only SOCKS listener per
+// client mapping. Each listener is pinned directly to the selected Mihomo
+// outbound; it never traverses the global rules or a shared proxy group.
+func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) (string, error) {
+	if plan.Mode != SmartDNSProxyModePerClient {
+		return document, nil
+	}
+	if len(plan.Clients) == 0 || len(plan.ProxyNames) == 0 {
+		return "", fmt.Errorf("SmartDNS per-client 缺少客户端映射或可用代理")
+	}
+	allowed := make(map[string]bool, len(plan.ProxyNames))
+	for _, name := range plan.ProxyNames {
+		if strings.TrimSpace(name) == "" {
+			return "", fmt.Errorf("SmartDNS per-client 代理名称不能为空")
+		}
+		allowed[name] = true
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(document), &root); err != nil {
+		return "", fmt.Errorf("解析 Mihomo YAML 失败: %w", err)
+	}
+	if len(root) == 0 {
+		return "", fmt.Errorf("Mihomo YAML 必须是非空对象")
+	}
+	proxies, ok := root["proxies"].([]any)
+	if !ok {
+		return "", fmt.Errorf("Mihomo proxies 必须是数组")
+	}
+	existingProxies := make(map[string]bool, len(proxies))
+	for _, raw := range proxies {
+		p, ok := raw.(map[string]any)
+		if !ok { return "", fmt.Errorf("Mihomo proxies 包含无效项目") }
+		if name, ok := p["name"].(string); ok { existingProxies[name] = true }
+	}
+	listeners, _ := root["listeners"].([]any)
+	usedPorts := make(map[int]bool, len(listeners))
+	usedNames := make(map[string]bool, len(listeners))
+	for _, raw := range listeners {
+		item, ok := raw.(map[string]any)
+		if !ok { return "", fmt.Errorf("Mihomo listeners 包含无效项目") }
+		if name, ok := item["name"].(string); ok { usedNames[name] = true }
+		switch port := item["port"].(type) {
+		case int: usedPorts[port] = true
+		case int64: usedPorts[int(port)] = true
+		case uint64: usedPorts[int(port)] = true
+		case float64: usedPorts[int(port)] = true
+		}
+	}
+	for i, client := range plan.Clients {
+		if !allowed[client.ProxyName] || !existingProxies[client.ProxyName] {
+			return "", fmt.Errorf("客户端 %s 指向的代理 %q 未出现在当前 Mihomo 配置中", client.ClientCIDR, client.ProxyName)
+		}
+		port := client.ListenPort
+		if port == 0 { port = 16000 + i }
+		if port < 1024 || port > 65535 || usedPorts[port] {
+			return "", fmt.Errorf("客户端 %s 的 Mihomo SOCKS 监听端口 %d 无效或已占用", client.ClientCIDR, port)
+		}
+		name := fmt.Sprintf("s5m-smartdns-%d", port)
+		if usedNames[name] { return "", fmt.Errorf("Mihomo Listener 名称 %q 已被占用", name) }
+		listeners = append(listeners, map[string]any{
+			"name": name, "type": "socks", "listen": "127.0.0.1",
+			"port": port, "udp": true, "proxy": client.ProxyName,
+		})
+		usedPorts[port], usedNames[name] = true, true
+	}
+	root["listeners"] = listeners
+	out, err := yaml.Marshal(root)
+	if err != nil { return "", fmt.Errorf("序列化 Mihomo per-client Listener 失败: %w", err) }
+	return string(out), nil
+}
