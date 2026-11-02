@@ -6,6 +6,7 @@ on:
       - "feat/smartdns-*"
     paths:
       - "server/**"
+      - "s5m-agent/**"
       - ".github/workflows/smartdns-routing-validation.yml"
   pull_request:
     branches: [main]
@@ -32,6 +33,28 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
+      - name: Download dependencies
+        run: go mod download
+      - name: Unit tests
+        run: go test ./...
+      - name: Static analysis
+        run: go vet ./...
+      - name: Build AMD64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
+      - name: Build ARM64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
+
+  agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: s5m-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: s5m-agent/go.mod
+          cache-dependency-path: s5m-agent/go.sum
       - name: Download dependencies
         run: go mod download
       - name: Unit tests
