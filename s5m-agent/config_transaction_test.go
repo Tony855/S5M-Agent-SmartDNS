@@ -375,7 +375,7 @@ func TestConfigTransactionRestoresPartialMihomoMutationWhenMergeReturnsError(t *
 	}
 	for name, want := range map[string][]byte{
 		"config.yaml":                 []byte("old-mihomo"),
-		"controller-route-cidrs.json": []byte("[\\"192.0.2.10/32\\"]"),
+		"controller-route-cidrs.json": []byte("[\"192.0.2.10/32\"]"),
 		"controller-config.yaml":      []byte("old-controller-hash"),
 		"smartdns.conf":               []byte("old-smartdns"),
 	} {
