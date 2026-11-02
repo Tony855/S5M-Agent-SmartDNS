@@ -60,7 +60,7 @@ var (
 	transactionApplySmartDNS = writeSmartDNSConfigLockedWithBackupCleanup
 	transactionWaitSmartDNSHealthy = waitForSmartDNSHealthy
 	transactionRestartSmartDNS = func() error {
-		return transactionRestartSmartDNS()
+		return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
 	}
 	transactionWriteControllerConfig = writeControllerConfig
 )
@@ -120,7 +120,7 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 		if !restored {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", restoreErr))
 		} else if hadSmartDNS || updateSmartDNS {
-			if err := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run(); err != nil {
+			if err := transactionRestartSmartDNS(); err != nil {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
 			} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
@@ -138,7 +138,7 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 	if _, err := transactionMergeMihomo(mihomoYAML, centralURL); err != nil {
 		return rollback(fmt.Errorf("应用 Mihomo 配置失败: %w", err))
 	}
-	if err := reloadMihomo(); err != nil {
+	if err := transactionReloadMihomo(); err != nil {
 		return rollback(fmt.Errorf("Mihomo 联合事务健康检查失败: %w", err))
 	}
 
@@ -148,7 +148,7 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 		}
 	}
 	if hadSmartDNS || updateSmartDNS {
-		if !waitForSmartDNSHealthy(5 * time.Second) {
+		if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 			return rollback(fmt.Errorf("SmartDNS 联合事务 UDP/TCP DNS 健康检查失败"))
 		}
 	}
