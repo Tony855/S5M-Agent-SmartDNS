@@ -1071,7 +1071,7 @@ func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) 
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			config := []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\n" + tc.line + "\\n")
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + tc.line + "\n")
 			if err := validateSmartDNSConfig(config); err == nil {
 				t.Fatalf("unsafe encrypted upstream accepted: %s", tc.line)
 			}
@@ -1087,7 +1087,7 @@ func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
 	}
 	for _, line := range cases {
 		t.Run(line, func(t *testing.T) {
-			config := []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\n" + line + "\\n")
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + line + "\n")
 			if err := validateSmartDNSConfig(config); err != nil {
 				t.Fatalf("valid encrypted upstream rejected: %v", err)
 			}
