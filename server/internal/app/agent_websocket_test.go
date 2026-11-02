@@ -1655,15 +1655,22 @@ func TestLegacyHTTPAgentConfigETagTracksPersistedConfigChanges(t *testing.T) {
 	for _, validator := range []struct {
 		name string
 		value string
+		wantStatus int
 	}{
-		{name: "wildcard", value: "*"},
-		{name: "weak", value: "W/" + firstETag},
-		{name: "list", value: `"some-other-config", ` + firstETag},
+		{name: "wildcard", value: "*", wantStatus: http.StatusNotModified},
+		{name: "weak", value: "W/" + firstETag, wantStatus: http.StatusNotModified},
+		{name: "list", value: `"some-other-config", ` + firstETag, wantStatus: http.StatusNotModified},
+		{name: "quoted-comma-does-not-match", value: `"some,other-config"`, wantStatus: http.StatusOK},
+		{name: "quoted-comma-before-match", value: `"some,other-config", ` + firstETag, wantStatus: http.StatusNotModified},
+		{name: "malformed-tag-does-not-match", value: `W/not-an-etag`, wantStatus: http.StatusOK},
 	} {
 		t.Run("if-none-match-"+validator.name, func(t *testing.T) {
 			response := request(validator.value)
-			if response.Code != http.StatusNotModified || response.Body.Len() != 0 {
-				t.Fatalf("validator %q response = status %d body %q, want empty 304", validator.value, response.Code, response.Body.String())
+			if response.Code != validator.wantStatus {
+				t.Fatalf("validator %q response status = %d, want %d; body=%q", validator.value, response.Code, validator.wantStatus, response.Body.String())
+			}
+			if validator.wantStatus == http.StatusNotModified && response.Body.Len() != 0 {
+				t.Fatalf("validator %q returned a non-empty 304 body: %q", validator.value, response.Body.String())
 			}
 		})
 	}
