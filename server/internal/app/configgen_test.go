@@ -225,7 +225,7 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 		t.Fatalf("decode generated Agent config: %v", err)
 	}
 	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != false {
-		t.Errorf("new Agent config must keep TUN disabled by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
+		t.Errorf("new Agent config must enable TUN by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
 	}
 	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
 		if strings.Contains(agentYAML, forbidden) {
@@ -1276,7 +1276,7 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 	}
 }
 
-func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
+func TestOpenStoreDefaultsTUNEnabled(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "tun-default.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -1287,8 +1287,8 @@ func TestOpenStoreDefaultsTUNDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSetting(tun_enable): %v", err)
 	}
-	if got != "false" {
-		t.Fatalf("tun_enable default = %q, want false", got)
+	if got != "true" {
+		t.Fatalf("tun_enable default = %q, want true", got)
 	}
 }
 
