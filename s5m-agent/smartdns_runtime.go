@@ -708,7 +708,9 @@ func backupSmartDNSConfig(livePath, backupPath string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if err := writeSmartDNSFileAtomically(backupPath, oldData, 0600); err != nil {
+	if err := writeTransactionBackupPreservingPrior(backupPath, oldData, func(path string, data []byte, mode os.FileMode) error {
+		return writeSmartDNSFileAtomically(path, data, mode)
+	}); err != nil {
 		return nil, false, err
 	}
 	return oldData, true, nil
