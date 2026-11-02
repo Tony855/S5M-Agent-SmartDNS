@@ -105,8 +105,8 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 		restored, restoreErr := restoreSmartDNSConfigVerified(smartPath, oldSmartDNS, hadSmartDNS)
 		if !restored {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", restoreErr))
-		} else if updateSmartDNS && hadSmartDNS {
-			if err := execSmartDNSRestart(); err != nil {
+		} else if updateSmartDNS {
+			if err := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run(); err != nil {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
 			} else if !waitForSmartDNSHealthy(5 * time.Second) {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
@@ -158,7 +158,3 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 	return nil
 }
 
-// execSmartDNSRestart is a small seam for the transaction rollback path.
-func execSmartDNSRestart() error {
-	return restartSmartDNSService()
-}
