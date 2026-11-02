@@ -1050,3 +1050,47 @@ func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T)
 		t.Fatalf("fallback/cooldown diagnostic missing: %q", message)
 	}
 }
+
+
+func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "zero DoT port", line: "server-tls 1.1.1.1:0 -host-name cloudflare-dns.com"},
+		{name: "out of range DoT port", line: "server-tls 1.1.1.1:65536 -host-name cloudflare-dns.com"},
+		{name: "nonnumeric DoT port", line: "server-tls 1.1.1.1:https -host-name cloudflare-dns.com"},
+		{name: "missing TLS name value", line: "server-tls 1.1.1.1:853 -host-name"},
+		{name: "TLS name parsed as option", line: "server-tls 1.1.1.1:853 -host-name -group"},
+		{name: "invalid TLS name", line: "server-tls 1.1.1.1:853 -host-name bad_name.example"},
+		{name: "duplicate TLS name", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -host-name dns.google"},
+		{name: "DoH userinfo", line: "server-https https://user:pass@1.1.1.1/dns-query -host-name cloudflare-dns.com"},
+		{name: "DoH query string", line: "server-https https://1.1.1.1/dns-query?token=secret -host-name cloudflare-dns.com"},
+		{name: "DoH fragment", line: "server-https https://1.1.1.1/dns-query#fragment -host-name cloudflare-dns.com"},
+		{name: "invalid DoH port", line: "server-https https://1.1.1.1:70000/dns-query -host-name cloudflare-dns.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\n" + tc.line + "\\n")
+			if err := validateSmartDNSConfig(config); err == nil {
+				t.Fatalf("unsafe encrypted upstream accepted: %s", tc.line)
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
+	cases := []string{
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"server-https https://1.1.1.1:443/dns-query -host-name dns.google",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+	}
+	for _, line := range cases {
+		t.Run(line, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\n" + line + "\\n")
+			if err := validateSmartDNSConfig(config); err != nil {
+				t.Fatalf("valid encrypted upstream rejected: %v", err)
+			}
+		})
+	}
+}
