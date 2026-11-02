@@ -1325,9 +1325,40 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("生成的 proxy-group 名称不能为空") }
 		name = strings.TrimSpace(name)
 		if seen[name] {
-			// PROXY is the managed default group. A same-named operator group
-			// explicitly overrides it; this also keeps repeated node sync idempotent.
+			// Preserve operator-selected PROXY group options, but always inject the
+			// current database-managed proxy nodes. Previously a custom group such
+			// as "proxies: [DIRECT]" shadowed the generated group entirely, leaving
+			// ordinary proxy selection with no real outbound nodes.
 			if name == "PROXY" {
+				for i, existing := range merged {
+					current, ok := existing.(map[string]any)
+					if !ok || current["name"] != "PROXY" {
+						continue
+					}
+					generatedMembers, ok := group["proxies"].([]any)
+					if !ok {
+						return nil, fmt.Errorf("生成的 PROXY 分组缺少有效节点列表")
+					}
+					customMembers, ok := current["proxies"].([]any)
+					if current["proxies"] != nil && !ok {
+						return nil, fmt.Errorf("自定义 PROXY 分组的 proxies 必须是数组")
+					}
+					members := make([]any, 0, len(generatedMembers)+len(customMembers))
+					memberSeen := make(map[string]bool, len(generatedMembers)+len(customMembers))
+					for _, member := range append(append([]any(nil), generatedMembers...), customMembers...) {
+						value, ok := member.(string)
+						if !ok || strings.TrimSpace(value) == "" {
+							return nil, fmt.Errorf("PROXY 分组成员必须是非空字符串")
+						}
+					if !memberSeen[value] {
+						memberSeen[value] = true
+						members = append(members, value)
+					}
+				}
+				current["proxies"] = members
+				merged[i] = current
+				break
+				}
 				continue
 			}
 			if name == SmartDNSGroupName {
