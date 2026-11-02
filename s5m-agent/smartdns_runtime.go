@@ -470,6 +470,14 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 // apply/rollback semantics; a coordinated Mihomo+SmartDNS transaction must
 // use transaction-owned backups and must not call this cleanup-owning path.
 func writeSmartDNSConfigLocked(data []byte) (string, error) {
+	return writeSmartDNSConfigLockedWithBackupCleanup(data, true)
+}
+
+// writeSmartDNSConfigLockedWithBackupCleanup applies SmartDNS while the caller
+// holds smartDNSConfigMu. A coordinated transaction passes false so its
+// rollback copy remains available until the joint Mihomo+SmartDNS health check
+// has succeeded. The legacy wrapper retains its original cleanup behavior.
+func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool) (string, error) {
 	if err := validateSmartDNSConfig(data); err != nil {
 		return "", err
 	}
@@ -645,12 +653,14 @@ func writeSmartDNSConfigLocked(data []byte) (string, error) {
 		newPID, pidErr := exec.Command("pidof", "smartdns").Output()
 		if pidErr == nil && len(bytes.TrimSpace(newPID)) > 0 && !bytes.Equal(bytes.TrimSpace(newPID), oldPID) && probeSmartDNSDNS() {
 			sum := sha256.Sum256(bytes.TrimSpace(data))
-			if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
-				// The new configuration is already proven healthy. Keep the backup
-				// for manual recovery and do not report an applied config as failed.
-				fmt.Printf("SmartDNS: 无法清理旧配置备份: %v\n", err)
-			} else {
-				_ = smartDNSDirectorySync(filepath.Dir(livePath))
+			if cleanupBackup {
+				if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+					// The new configuration is already proven healthy. Keep the backup
+					// for manual recovery and do not report an applied config as failed.
+					fmt.Printf("SmartDNS: 无法清理旧配置备份: %v\n", err)
+				} else {
+					_ = smartDNSDirectorySync(filepath.Dir(livePath))
+				}
 			}
 			return hex.EncodeToString(sum[:]), nil
 		}
