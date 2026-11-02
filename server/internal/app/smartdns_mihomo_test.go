@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -224,5 +225,35 @@ rules: [MATCH,DIRECT]
 	if managed["port"] != 16001 { t.Fatalf("auto port = %#v, want 16001", managed["port"]) }
 	if managed["listen"] != "127.0.0.1" || managed["proxy"] != "node-a" || managed["udp"] != true {
 		t.Fatalf("managed listener is not loopback-only and pinned: %#v", managed)
+	}
+}
+
+
+func TestApplySmartDNSPerClientListenersRejectsMalformedExistingListeners(t *testing.T) {
+	base := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+rules: [MATCH,DIRECT]
+`
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModePerClient,
+		ProxyNames: []string{"node-a"},
+		Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a"}},
+	}
+	cases := []struct{name, listeners string}{
+		{"listeners is scalar", "listeners: invalid\n"},
+		{"listener port is string", "listeners:\n  - name: operator\n    port: \"16000\"\n"},
+		{"listener port out of range", "listeners:\n  - name: operator\n    port: 70000\n"},
+		{"listener name is not string", "listeners:\n  - name: 123\n    port: 16000\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.Replace(base, "rules:", tc.listeners+"rules:", 1)
+			if _, err := applySmartDNSPerClientListeners(input, plan); err == nil {
+				t.Fatal("expected malformed existing listener to be rejected")
+			}
+		})
 	}
 }
