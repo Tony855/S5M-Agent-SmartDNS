@@ -63,3 +63,46 @@ func TestDeleteProxiesDeletesSelectedRowsOnly(t *testing.T) {
 		t.Fatalf("unselected proxy changed: got=%#v err=%v", got, err)
 	}
 }
+
+
+func TestDeleteProxiesRollsBackWhenAnyProxyIsMissing(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-bulk-delete-rollback.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	first := seedBulkProxy(t, store, "proxy-a", "")
+	if err := store.DeleteProxies([]int64{first, 999999}); err == nil {
+		t.Fatal("expected missing proxy to abort the batch")
+	}
+	if got, err := store.GetProxy(first); err != nil || got.Name != "proxy-a" {
+		t.Fatalf("partial deletion committed: got=%#v err=%v", got, err)
+	}
+}
+
+func TestDeleteProxiesRejectsDuplicateIDsWithoutDeleting(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-bulk-delete-duplicate.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	id := seedBulkProxy(t, store, "proxy-a", "")
+	if err := store.DeleteProxies([]int64{id, id}); err == nil {
+		t.Fatal("expected duplicate IDs to be rejected")
+	}
+	if got, err := store.GetProxy(id); err != nil || got.Name != "proxy-a" {
+		t.Fatalf("duplicate request deleted proxy: got=%#v err=%v", got, err)
+	}
+}
+
+func TestDeleteProxiesRejectsInvalidIDsBeforeMutation(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-bulk-delete-invalid.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	id := seedBulkProxy(t, store, "proxy-a", "")
+	if err := store.DeleteProxies([]int64{id, 0}); err == nil {
+		t.Fatal("expected invalid ID to be rejected")
+	}
+	if got, err := store.GetProxy(id); err != nil || got.Name != "proxy-a" {
+		t.Fatalf("invalid ID request deleted proxy: got=%#v err=%v", got, err)
+	}
+}
