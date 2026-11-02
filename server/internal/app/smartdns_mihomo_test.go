@@ -432,3 +432,25 @@ rules: [MATCH,DIRECT]
 		t.Fatalf("SmartDNS mapping differs from Mihomo listener: listener=%#v mapping=%#v", managed, mappings[0])
 	}
 }
+
+
+// With no eligible outbound, shared fallback mode must install an explicit
+// process-level REJECT rule and must not create an empty or DIRECT-capable group.
+func TestApplySmartDNSSharedFallbackRejectsWhenNoProxyExists(t *testing.T) {
+	input := `rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - GEOIP,CN,REJECT
+  - MATCH,DIRECT
+`
+	got, err := applySmartDNSSharedFallback(input, SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy,
+	})
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	if _, exists := doc["proxy-groups"]; exists { t.Fatalf("must not create an empty fallback group: %#v", doc["proxy-groups"]) }
+	rules := doc["rules"].([]any)
+	if rules[1] != "PROCESS-NAME,smartdns,REJECT" {
+		t.Fatalf("SmartDNS REJECT rule must precede geography and MATCH rules: %#v", rules)
+	}
+}
