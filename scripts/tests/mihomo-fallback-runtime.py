@@ -20,20 +20,73 @@ servers = []
 threads = []
 
 
-class ProxyHandler(BaseHTTPRequestHandler):
-    node = ""
+class SocksProxyServer:
+    """Minimal SOCKS5 proxy that returns a controllable HTTP probe response."""
 
-    def do_GET(self):
-        status = states[self.node]
-        self.send_response(status)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+    def __init__(self, node):
+        self.node = node
+        self.server = socket.socket()
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen()
+        self.server.settimeout(0.2)
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+        self.port = self.server.getsockname()[1]
 
-    def do_HEAD(self):
-        self.do_GET()
+    def serve(self):
+        while True:
+            try:
+                client, _ = self.server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            threading.Thread(target=self.handle, args=(client,), daemon=True).start()
 
-    def log_message(self, *_args):
-        pass
+    def handle(self, client):
+        with client:
+            client.settimeout(3)
+            try:
+                greeting = client.recv(2)
+                if len(greeting) != 2 or greeting[0] != 5:
+                    return
+                methods = client.recv(greeting[1])
+                if not methods or 0 not in methods:
+                    return
+                client.sendall(b"\\x05\\x00")
+                request = client.recv(4)
+                if len(request) != 4 or request[0] != 5 or request[1] != 1:
+                    return
+                atyp = request[3]
+                if atyp == 1:
+                    client.recv(4)
+                elif atyp == 3:
+                    size = client.recv(1)
+                    if not size:
+                        return
+                    client.recv(size[0])
+                elif atyp == 4:
+                    client.recv(16)
+                else:
+                    return
+                client.recv(2)
+                client.sendall(b"\\x05\\x00\\x00\\x01\\x7f\\x00\\x00\\x01\\x00\\x50")
+                data = client.recv(65536)
+                if not data:
+                    return
+                status = states[self.node]
+                reason = b"No Content" if status == 204 else b"Service Unavailable"
+                client.sendall(
+                    b"HTTP/1.1 " + str(status).encode() + b" " + reason
+                    + b"\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n"
+                )
+            except (OSError, IndexError):
+                return
+
+    def close(self):
+        self.server.close()
+        self.thread.join(timeout=1)
 
 
 class HealthTargetHandler(BaseHTTPRequestHandler):
