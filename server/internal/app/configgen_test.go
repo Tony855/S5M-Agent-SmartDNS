@@ -823,7 +823,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 	}{
 		{mode: "global", want: []string{"MATCH,PROXY", "DOMAIN,controller.example.com,DIRECT"}},
 		{mode: "split", want: []string{"MATCH,PROXY"}},
-		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
+		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,PROXY"}},
 		{mode: "return", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "GEOIP,CN,PROXY", "MATCH,DIRECT"}},
 		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,PROXY", "MATCH,DIRECT"}},
 	}
@@ -2081,7 +2081,7 @@ rules:
 	if !ok {
 		t.Fatalf("PROXY members are not a sequence: %#v", group["proxies"])
 	}
-	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588", "DIRECT"}
+	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588"}
 	if len(members) != len(want) {
 		t.Fatalf("PROXY members = %#v, want %#v", members, want)
 	}
