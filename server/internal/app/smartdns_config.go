@@ -46,7 +46,14 @@ func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (stri
 		if strings.TrimSpace(m.ListenerName) == "" || strings.TrimSpace(m.ProxyName) == "" {
 			return "", fmt.Errorf("客户端 %s 的 Mihomo Listener 或代理名称为空", cidr)
 		}
-		proxyName := fmt.Sprintf("s5m-smartdns-%d", m.ListenerPort)
+		// The SmartDNS proxy name is derived from the exact Mihomo listener
+		// identity, not independently recreated from a port. This keeps both
+		// runtime components tied to the same assignment.
+		expectedListenerName := fmt.Sprintf("s5m-smartdns-%d", m.ListenerPort)
+		if m.ListenerName != expectedListenerName {
+			return "", fmt.Errorf("客户端 %s 的 Mihomo Listener 名称与端口映射不一致", cidr)
+		}
+		proxyName := m.ListenerName
 		groupName := fmt.Sprintf("s5m-smartdns-group-%d", m.ListenerPort)
 		if seenProxy[proxyName] {
 			return "", fmt.Errorf("SmartDNS SOCKS 代理名称 %q 重复", proxyName)
