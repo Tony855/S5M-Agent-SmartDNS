@@ -3,7 +3,7 @@ name: SmartDNS routing plan validation
 on:
   push:
     branches:
-      - "feat/smartdns-dynamic-proxy-routing"
+      - "feat/smartdns-*"
     paths:
       - "server/**"
       - ".github/workflows/smartdns-routing-validation.yml"
