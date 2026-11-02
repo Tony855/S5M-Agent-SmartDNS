@@ -12,7 +12,7 @@
 | Agent 绑定页面/API | 80/TCP | 初次绑定和 Agent 管理 |
 | Mihomo 控制 API | 8088/TCP | 仅供容器内部 Agent 使用，**不要映射到公网** |
 
-建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent Mihomo 默认在容器内监听 mixed-port 7890，`allow-lan: true`，默认不启用代理用户名/密码认证；Docker Compose 不将 7890 发布到宿主机，只有容器网络或明确配置的 LAN 路由可访问。Mihomo 控制 API 仍使用独立随机 `secret` 且仅监听回环地址；Linux 节点可通过 Mihomo TUN 实现透明代理；TUN 默认关闭，只有显式启用时才为 Agent 容器授予 `NET_ADMIN` capability 和 `/dev/net/tun` 设备映射。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
+建议拓扑：主控部署在 Debian/Ubuntu；每台代理节点运行一个 Agent 容器；Agent 主动连接主控地址。Agent Mihomo 默认在容器内监听 mixed-port 7890，`allow-lan: true`，默认不启用代理用户名/密码认证；Docker Compose 不将 7890 发布到宿主机，只有容器网络或明确配置的 LAN 路由可访问。Mihomo 控制 API 仍使用独立随机 `secret` 且仅监听回环地址；Linux 节点可通过 Mihomo TUN 实现透明代理；TUN 默认启用，Agent 容器默认获得 `NET_ADMIN` capability 和 `/dev/net/tun` 设备映射；如需关闭，必须同时将 `tun.enable` 设为 `false` 并移除容器对应权限。注意：Docker bridge 下的 TUN 首先接管 Agent 容器网络命名空间内的流量；要透明接管其他 LAN 客户端，还必须由宿主机/路由器配置策略路由或防火墙，把客户端流量导入该 TUN 路径。仅启用 TUN 不会自动接管 RouterOS 转发流量。未启用 TUN 时，Agent 只运行管理与 DNS 服务，不会自动接管设备流量。跨公网时优先使用 HTTPS 或 VPN/管理网。端口 80 应限制为管理员或主控管理网来源。
 
 ## 2. 部署前准备
 
@@ -141,7 +141,7 @@ docker compose up -d
 - `/data` 是持久化目录，保存 `config.yaml`、绑定凭据等；不要在普通升级时删除。
 - 不要添加 `-p 8088:8088`。Mihomo 控制 API 只监听容器回环地址。
 - Mihomo 在容器内监听 7890 mixed-port，默认 `allow-lan: true` 且不启用代理认证；Compose 不发布 7890 到宿主机。若要让 LAN 客户端访问，必须明确配置容器网络/VETH 与 LAN 路由，并仅允许可信来源；不要将 7890 暴露到公网。8088 控制 API 仍仅监听容器回环地址。
-- TUN 默认关闭：新安装默认 `tun.enable: false`，默认 Compose 和 `scripts/s5m-deploy.sh` 不授予 `NET_ADMIN`、不挂载 `/dev/net/tun`。只有明确将 `tun.enable: true` 并叠加 `docker-compose.tun.yml`，或运行安装脚本时设置 `ENABLE_TUN=1`，才启用容器内 TUN。已有 `/data/config.yaml` 不会被覆盖；若现有配置仍为 `tun.enable: true`，升级时必须继续显式启用 TUN 权限，或先由管理员确认后关闭 TUN。不要使用 host 网络模式。
+- TUN 默认启用：新安装默认 `tun.enable: true`，默认 Compose 和部署脚本授予 `NET_ADMIN` 并映射 `/dev/net/tun`。如需关闭，必须同时关闭配置中的 TUN 并移除相应容器权限。已有 `/data/config.yaml` 不会被覆盖；部署脚本会在宿主机缺少 TUN 设备时停止。不要使用 host 网络模式。
 - 若端口 80 已被占用，可改成 `-p 18080:80`，随后通过 `http://节点IP:18080/` 访问。
 - 若 Docker 守护进程以 root 运行，宿主机目录权限应允许容器运行用户写入。若日志报 `permission denied`，先检查目录权限和容器日志，不要直接将目录权限改为全局可写。
 
@@ -266,5 +266,5 @@ sudo docker run -d \
 - [ ] `/data` 使用持久化存储，重启容器后配置仍在。
 - [ ] Agent 绑定主控，持续心跳并显示在线。
 - [ ] 80/TCP 仅对管理网开放；7890 未发布；8088/TCP 没有映射或公网暴露。
-- [ ] 默认 Agent 不含 `NET_ADMIN` 和 `/dev/net/tun`；仅在明确启用 TUN 并验证宿主机设备后才叠加权限。
+- [ ] 默认 Agent 的 TUN 配置与 `NET_ADMIN`、`/dev/net/tun` 权限一致；关闭 TUN 时同时移除权限。
 - [ ] 已验证重启恢复、升级和回滚流程。
