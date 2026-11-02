@@ -1114,3 +1114,70 @@ func TestValidateSmartDNSConfigFailsClosedForPerClientRoutingDirectives(t *testi
 		})
 	}
 }
+
+
+func TestBackupSmartDNSConfigRestoresPriorSidecarAfterPostRenameSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "smartdns.conf")
+	backupPath := livePath + ".previous"
+	if err := os.WriteFile(livePath, []byte("live config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prior := []byte("prior recovery point")
+	if err := os.WriteFile(backupPath, prior, 0600); err != nil {
+		t.Fatal(err)
+	}
+	originalSync := smartDNSDirectorySync
+	calls := 0
+	smartDNSDirectorySync = func(path string) error {
+		calls++
+		if calls == 1 {
+			return os.ErrInvalid
+		}
+		return originalSync(path)
+	}
+	defer func() { smartDNSDirectorySync = originalSync }()
+
+	_, _, err := backupSmartDNSConfig(livePath, backupPath)
+	if err == nil {
+		t.Fatal("expected injected post-rename directory sync failure")
+	}
+	got, readErr := os.ReadFile(backupPath)
+	if readErr != nil {
+		t.Fatalf("read prior backup after failure: %v", readErr)
+	}
+	if !bytes.Equal(got, prior) {
+		t.Fatalf("prior SmartDNS backup overwritten: got %q want %q", got, prior)
+	}
+	live, readErr := os.ReadFile(livePath)
+	if readErr != nil || string(live) != "live config" {
+		t.Fatalf("live SmartDNS config changed: %q, err=%v", live, readErr)
+	}
+}
+
+func TestBackupSmartDNSConfigRemovesNewSidecarAfterPostRenameSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "smartdns.conf")
+	backupPath := livePath + ".previous"
+	if err := os.WriteFile(livePath, []byte("live config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	originalSync := smartDNSDirectorySync
+	calls := 0
+	smartDNSDirectorySync = func(path string) error {
+		calls++
+		if calls == 1 {
+			return os.ErrInvalid
+		}
+		return originalSync(path)
+	}
+	defer func() { smartDNSDirectorySync = originalSync }()
+
+	_, _, err := backupSmartDNSConfig(livePath, backupPath)
+	if err == nil {
+		t.Fatal("expected injected post-rename directory sync failure")
+	}
+	if _, statErr := os.Lstat(backupPath); !os.IsNotExist(statErr) {
+		t.Fatalf("failed first-install snapshot left sidecar behind, stat error=%v", statErr)
+	}
+}
