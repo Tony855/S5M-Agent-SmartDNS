@@ -1465,3 +1465,40 @@ func TestMachineProxyModeAPIStoresModeIndependently(t *testing.T) {
 	app.handleSetMachineProxyMode(badRec, bad)
 	if badRec.Code != http.StatusBadRequest { t.Fatalf("invalid mode status=%d body=%s", badRec.Code, badRec.Body.String()) }
 }
+
+func TestHandleUpdateSettingsReportsNodeSyncFailureAfterPersistingSettings(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "settings-node-sync.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	if err := store.UpdateSettings(map[string]string{
+		"agent_machine_node-a": "authorized-token",
+	}); err != nil {
+		t.Fatalf("seed Agent authorization: %v", err)
+	}
+	if err := store.SaveNodeConfig("node-a", "not: [valid: yaml"); err != nil {
+		t.Fatalf("seed invalid node YAML: %v", err)
+	}
+
+	app := &App{store: store}
+	body := `{"smartdns_routing_config":"{\"mode\":\"shared\",\"strategy\":\"fallback\"}"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	app.handleUpdateSettings(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "设置已保存，但节点配置同步失败") {
+		t.Fatalf("response must clearly report persisted settings and failed node sync: %s", rec.Body.String())
+	}
+	settings, err := store.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if settings["smartdns_routing_config"] == "" {
+		t.Fatal("validated setting should remain persisted when node sync fails")
+	}
+}
