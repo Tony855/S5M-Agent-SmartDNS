@@ -189,7 +189,7 @@ rules: [MATCH,DIRECT]
 }
 
 func TestApplySmartDNSPerClientListenersLeavesLegacyUntouched(t *testing.T) {
-	input := "rules:\\n  - MATCH,DIRECT\\n"
+	input := "rules:\n  - MATCH,DIRECT\n"
 	got, err := applySmartDNSPerClientListeners(input, SmartDNSRoutingPlan{Mode:"legacy"})
 	if err != nil { t.Fatal(err) }
 	if got != input { t.Fatalf("legacy document changed: %q", got) }
