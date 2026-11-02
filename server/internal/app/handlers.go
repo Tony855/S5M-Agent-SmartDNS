@@ -624,6 +624,7 @@ func (a *App) handleOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"server_time":    time.Now().Unix(),
 		"mihomo":         mihomo,
 		"total":          len(list),
 		"enabled":        enabled,
@@ -2358,6 +2359,7 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		Authorized          bool              `json:"authorized"`
 		TokenConfigured     bool              `json:"token_configured"`
 		LastSeen            int64             `json:"last_seen"`
+		ServerTime          int64             `json:"server_time"`
 		Status              map[string]any    `json:"status,omitempty"`
 		CommandResult       map[string]any    `json:"command_result,omitempty"`
 		PendingCommand      map[string]string `json:"pending_command,omitempty"`
@@ -2402,7 +2404,7 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal([]byte(raw), &pendingCommand)
 		}
 		info := AgentInfo{
-			Authorized: true, TokenConfigured: true, LastSeen: lastSeen, Status: status,
+			Authorized: true, TokenConfigured: true, LastSeen: lastSeen, ServerTime: time.Now().Unix(), Status: status,
 			CommandResult: commandResult, PendingCommand: pendingCommand,
 		}
 		if nodeConfig, configErr := a.store.GetNodeConfig(code); configErr == nil && nodeConfig != nil && strings.TrimSpace(nodeConfig.YAML) != "" {
