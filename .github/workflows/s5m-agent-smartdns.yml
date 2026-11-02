@@ -127,6 +127,11 @@ jobs:
           grep -q 'GetMachineProxyMode(machineCode)' server/internal/app/configgen.go
           grep -q 'CREATE TABLE IF NOT EXISTS machine_proxy_settings' server/internal/app/store.go
           grep -q 'DOMAIN-SUFFIX,v2net.cc,DIRECT' server/internal/app/configgen.go
+          grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/default-config.yaml
+          grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q 'bind 127.0.0.1:6054 -group china-dot' s5m-agent/smartdns/smartdns.conf
+          grep -q 'server-tls 223.5.5.5:853 -host-name dns.alidns.com -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
+          grep -q 'server-tls 1.12.12.12:853 -host-name dot.pub -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
           grep -q 'GEOIP,CN,PROXY' server/internal/app/configgen.go
           grep -q 'GEOIP,CN,REJECT' server/internal/app/configgen.go
           grep -q 'rules = append(rules, "MATCH,DIRECT")' server/internal/app/configgen.go
