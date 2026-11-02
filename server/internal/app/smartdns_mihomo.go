@@ -107,6 +107,47 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 }
 
 
+// SmartDNSClientRuntimeMapping is the single resolved client-to-Mihomo
+// listener assignment. DNS runtime generation must consume this exact mapping
+// rather than independently allocating ports or deriving listener names.
+type SmartDNSClientRuntimeMapping struct {
+	ClientCIDR      string
+	ProxyName       string
+	ListenerName    string
+	ListenerAddress string
+	ListenerPort    int
+}
+
+func buildSmartDNSClientRuntimeMappings(plan SmartDNSRoutingPlan, usedPorts map[int]bool, usedNames map[string]bool) ([]SmartDNSClientRuntimeMapping, error) {
+	if plan.Mode != SmartDNSProxyModePerClient || len(plan.Clients) == 0 {
+		return nil, fmt.Errorf("SmartDNS per-client 映射计划为空或模式无效")
+	}
+	mappings := make([]SmartDNSClientRuntimeMapping, 0, len(plan.Clients))
+	for _, client := range plan.Clients {
+		port := client.ListenPort
+		if port == 0 {
+			port = 16000
+			for port <= 65535 && usedPorts[port] {
+				port++
+			}
+		}
+		if port < 1024 || port > 65535 || usedPorts[port] {
+			return nil, fmt.Errorf("客户端 %s 的 Mihomo SOCKS 监听端口 %d 无效或已占用", client.ClientCIDR, port)
+		}
+		name := fmt.Sprintf("s5m-smartdns-%d", port)
+		if usedNames[name] {
+			return nil, fmt.Errorf("Mihomo Listener 名称 %q 已被占用", name)
+		}
+		usedPorts[port] = true
+		usedNames[name] = true
+		mappings = append(mappings, SmartDNSClientRuntimeMapping{
+			ClientCIDR: client.ClientCIDR, ProxyName: client.ProxyName,
+			ListenerName: name, ListenerAddress: "127.0.0.1", ListenerPort: port,
+		})
+	}
+	return mappings, nil
+}
+
 // applySmartDNSPerClientListeners creates one loopback-only SOCKS listener per
 // client mapping. Each listener is pinned directly to the selected Mihomo
 // outbound; it never traverses the global rules or a shared proxy group.
@@ -205,23 +246,16 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 		if !allowed[client.ProxyName] || !existingProxies[client.ProxyName] {
 			return "", fmt.Errorf("客户端 %s 指向的代理 %q 未出现在当前 Mihomo 配置中", client.ClientCIDR, client.ProxyName)
 		}
-		port := client.ListenPort
-		if port == 0 {
-			// Auto-assigned ports must skip operator-owned listeners instead of
-			// failing on the first deterministic slot. Keep allocation stable.
-			port = 16000
-			for port <= 65535 && usedPorts[port] { port++ }
-		}
-		if port < 1024 || port > 65535 || usedPorts[port] {
-			return "", fmt.Errorf("客户端 %s 的 Mihomo SOCKS 监听端口 %d 无效或已占用", client.ClientCIDR, port)
-		}
-		name := fmt.Sprintf("s5m-smartdns-%d", port)
-		if usedNames[name] { return "", fmt.Errorf("Mihomo Listener 名称 %q 已被占用", name) }
+	}
+	mappings, err := buildSmartDNSClientRuntimeMappings(plan, usedPorts, usedNames)
+	if err != nil {
+		return "", err
+	}
+	for _, mapping := range mappings {
 		listeners = append(listeners, map[string]any{
-			"name": name, "type": "socks", "listen": "127.0.0.1",
-			"port": port, "udp": true, "proxy": client.ProxyName,
+			"name": mapping.ListenerName, "type": "socks", "listen": mapping.ListenerAddress,
+			"port": mapping.ListenerPort, "udp": true, "proxy": mapping.ProxyName,
 		})
-		usedPorts[port], usedNames[name] = true, true
 	}
 	root["listeners"] = listeners
 	out, err := yaml.Marshal(root)
