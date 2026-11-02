@@ -1855,3 +1855,18 @@ func TestBuildConfigGeneratesSelectableProxyGroup(t *testing.T) {
 		t.Fatal("strict rule mode must keep rejecting unmatched traffic")
 	}
 }
+
+func TestBuildConfigRejectsMihomoReservedProxyNames(t *testing.T) {
+	reserved := []string{"PROXY", "proxy", "DIRECT", "direct", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			_, err := buildConfigFromProxies([]Proxy{{
+				Name: name, Type: "socks5", Server: "192.0.2.10", Port: 1080,
+				MachineCode: "__GLOBAL__", Enabled: true,
+			}}, "", "test-secret")
+			if err == nil || !strings.Contains(err.Error(), "内置策略或托管分组名称冲突") {
+				t.Fatalf("reserved proxy name %q should be rejected, got %v", name, err)
+			}
+		})
+	}
+}
