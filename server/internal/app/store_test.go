@@ -320,3 +320,54 @@ func TestSaveNodeConfigIfUnchangedCanInitializeMissingNode(t *testing.T) {
 		t.Fatalf("initialized config = %#v, err=%v", got, err)
 	}
 }
+
+func TestSaveNodeConfigsIfUnchangedRejectsConcurrentManualEditAndRollsBackBatch(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "node-config-batch-cas.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	originalA := "secret: old-a\n"
+	originalB := "secret: old-b\n"
+	manualB := "secret: manual-b\n"
+	if err := store.SaveNodeConfigs(map[string]string{"node-a": originalA, "node-b": originalB}); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	// Simulate a manual save after sync read its snapshots but before batch commit.
+	if err := store.SaveNodeConfig("node-b", manualB); err != nil { t.Fatalf("manual save: %v", err) }
+
+	err = store.SaveNodeConfigsIfUnchanged(
+		map[string]string{"node-a": originalA, "node-b": originalB},
+		map[string]string{"node-a": "secret: generated-a\n", "node-b": "secret: generated-b\n"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "同步期间已被修改") {
+		t.Fatalf("stale batch error = %v, want concurrent-edit conflict", err)
+	}
+	for code, want := range map[string]string{"node-a": originalA, "node-b": manualB} {
+		got, err := store.GetNodeConfig(code)
+		if err != nil { t.Fatalf("GetNodeConfig(%s): %v", code, err) }
+		if got == nil || got.YAML != want {
+			t.Errorf("%s YAML = %#v, want unchanged %q", code, got, want)
+		}
+	}
+}
+
+func TestSaveNodeConfigsIfUnchangedInitializesMissingRowsAndRejectsRacingInsert(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "node-config-batch-cas-init.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	if err := store.SaveNodeConfig("node-a", "secret: manual\n"); err != nil { t.Fatalf("racing insert: %v", err) }
+	err = store.SaveNodeConfigsIfUnchanged(
+		map[string]string{"node-a": "", "node-b": ""},
+		map[string]string{"node-a": "secret: stale\n", "node-b": "secret: generated\n"},
+	)
+	if err == nil { t.Fatal("batch should reject row inserted after empty snapshot") }
+	for code, want := range map[string]string{"node-a": "secret: manual\n"} {
+		got, err := store.GetNodeConfig(code)
+		if err != nil { t.Fatalf("GetNodeConfig(%s): %v", code, err) }
+		if got == nil || got.YAML != want { t.Errorf("%s was overwritten: %#v", code, got) }
+	}
+	if got, err := store.GetNodeConfig("node-b"); err != nil || got != nil {
+		t.Errorf("batch should roll back newly initialized node-b; got=%#v err=%v", got, err)
+	}
+}
