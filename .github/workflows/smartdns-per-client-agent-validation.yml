@@ -1,0 +1,44 @@
+name: SmartDNS per-client Agent validation
+
+on:
+  push:
+    branches:
+      - "feat/smartdns-*"
+    paths:
+      - "s5m-agent/**"
+      - ".github/workflows/smartdns-per-client-agent-validation.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "s5m-agent/**"
+      - ".github/workflows/smartdns-per-client-agent-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smartdns-per-client-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: s5m-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: s5m-agent/go.mod
+          cache-dependency-path: s5m-agent/go.sum
+      - name: Download dependencies
+        run: go mod download
+      - name: Agent unit tests
+        run: go test ./...
+      - name: Static analysis
+        run: go vet ./...
+      - name: Build AMD64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
+      - name: Build ARM64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
