@@ -154,19 +154,19 @@ jobs:
           check "TUN Compose syntax" docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config --quiet
           default_compose="$(docker compose -f s5m-agent/docker-compose.yml config)"
           tun_compose="$(docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config)"
-          check "default Compose has no TUN permissions" bash -c '! grep -Eq "NET_ADMIN|/dev/net/tun" <<<"$1"' _ "$default_compose"
+          check "default Compose grants TUN permissions" bash -c 'grep -q NET_ADMIN <<<"$1" && grep -q "target: /dev/net/tun" <<<"$1"' _ "$default_compose"
           check "TUN overlay adds NET_ADMIN" grep -q NET_ADMIN <<<"$tun_compose"
           check "TUN overlay mounts tun device" grep -q 'target: /dev/net/tun' <<<"$tun_compose"
-          check "default Mihomo config disables TUN" grep -q 'enable: false' s5m-agent/default-config.yaml
-          check "default SmartDNS config disables TUN" grep -q 'enable: false' s5m-agent/smartdns/default-config-smartdns.yaml
+          check "default Mihomo config enables TUN" grep -q 'enable: true' s5m-agent/default-config.yaml
+          check "default SmartDNS config enables TUN" grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           check "s5m-deploy shell syntax" bash -n scripts/s5m-deploy.sh
-          check "s5m-deploy defaults TUN off" grep -q 'ENABLE_TUN=.*:-0' scripts/s5m-deploy.sh
-          check "s5m-deploy grants TUN only on opt-in" grep -Fq 'TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)' scripts/s5m-deploy.sh
+          check "s5m-deploy defaults TUN on" grep -q 'ENABLE_TUN=.*:-1' scripts/s5m-deploy.sh
+          check "s5m-deploy grants TUN by default" grep -Fq 'TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)' scripts/s5m-deploy.sh
           check "s5m-deploy checks missing tun device" grep -Fq 'ENABLE_TUN=1' scripts/s5m-deploy.sh
           check "s5m-deploy detects existing TUN config" grep -q 'config_uses_tun' scripts/s5m-deploy.sh
           check "standalone deploy shell syntax" bash -n scripts/deploy-agent.sh
           check "standalone deploy detects existing TUN config" grep -q 'config_uses_tun' scripts/deploy-agent.sh
-          check "standalone deploy blocks TUN downgrade" grep -q 'tun.enable=true' scripts/deploy-agent.sh
+          check "standalone deploy defaults TUN on" grep -q 'ENABLE_TUN="1"' scripts/deploy-agent.sh
           check "rollback keeps previous container" grep -q 'BACKUP_NAME=.*rollback' scripts/s5m-deploy.sh
           check "rollback renames previous container" grep -Fq 'docker rename "$CONTAINER" "$BACKUP_NAME"' scripts/s5m-deploy.sh
           check "rollback restore function exists" grep -q 'restore_previous()' scripts/s5m-deploy.sh
