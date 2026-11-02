@@ -553,8 +553,13 @@ func (s *Store) BindProxiesToMachine(ids []int64, machineCode string) error {
 		return fmt.Errorf("未选择代理")
 	}
 	machineCode = strings.TrimSpace(machineCode)
-	if machineCode == "" || machineCode == "__GLOBAL__" || len(machineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(machineCode) {
+	if machineCode == "" || machineCode == "__GLOBAL__" || len(machineCode) > 64 {
 		return fmt.Errorf("节点实例机器码无效")
+	}
+	for _, ch := range machineCode {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-') {
+			return fmt.Errorf("节点实例机器码无效")
+		}
 	}
 	// Validate the complete request before mutation. Duplicate IDs must not
 	// inflate the API's updated count or silently repeat the same association.
