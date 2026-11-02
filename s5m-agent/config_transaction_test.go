@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSnapshotFileForTransactionPreservesExactPreviousBytes(t *testing.T) {
