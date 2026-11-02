@@ -66,7 +66,25 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		}
 	}
 	if !replaced {
-		return "", fmt.Errorf("未找到 SmartDNS PROCESS-NAME 路由规则，拒绝生成未生效的 Fallback 配置")
+		// Return-to-China mode historically omitted the SmartDNS process rule
+			// because DNS was expected to follow destination geography. Shared
+		// SmartDNS mode explicitly selects one DNS egress group, so add its rule
+		// after the controller/domain bypasses and before client/terminal rules.
+		insertAt := 0
+		for insertAt < len(rules) {
+			rule, ok := rules[insertAt].(string)
+			if !ok { break }
+			upper := strings.ToUpper(strings.TrimSpace(rule))
+			if strings.HasPrefix(upper, "DOMAIN-SUFFIX,V2NET.CC,") ||
+				strings.HasPrefix(upper, "DOMAIN,") || strings.HasPrefix(upper, "IP-CIDR,") {
+				insertAt++
+				continue
+			}
+			break
+		}
+		rules = append(rules, nil)
+		copy(rules[insertAt+1:], rules[insertAt:])
+		rules[insertAt] = "PROCESS-NAME,smartdns," + SmartDNSGroupName
 	}
 	root["rules"] = rules
 	out, err := yaml.Marshal(root)
