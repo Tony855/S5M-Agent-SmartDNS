@@ -50,7 +50,13 @@ func TestBuildSmartDNSRoutingPlanRejectsInvalidMappings(t *testing.T) {
 		{"duplicate cidr",SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a"},{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a"}}}},
 		{"duplicate port",SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a",ListenPort:6054},{ClientCIDR:"192.168.1.3/32",ProxyName:"node-a",ListenPort:6054}}}},
 	}
-	for _,tc:=range cases { t.Run(tc.name,func(t *testing.T){ if _,err:=BuildSmartDNSRoutingPlan(tc.cfg,proxies);err==nil { t.Fatal("expected validation error") } }) }
+	for _,tc:=range cases {
+		t.Run(tc.name,func(t *testing.T){
+			available := proxies
+			if tc.name == "no proxies" { available = nil }
+			if _,err:=BuildSmartDNSRoutingPlan(tc.cfg,available);err==nil { t.Fatal("expected validation error") }
+		})
+	}
 }
 
 func TestBuildSmartDNSRoutingPlanRejectsDisabledProxy(t *testing.T) {
