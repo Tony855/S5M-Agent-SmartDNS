@@ -48,6 +48,7 @@ func TestBuildSmartDNSRoutingPlanRejectsInvalidMappings(t *testing.T) {
 		{"invalid cidr",SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"not-a-cidr",ProxyName:"node-a"}}}},
 		{"unknown proxy",SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"missing"}}}},
 		{"duplicate cidr",SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a"},{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a"}}}},
+		{"overlapping cidr",SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.0/24",ProxyName:"node-a"},{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a"}}}},
 		{"duplicate port",SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a",ListenPort:6054},{ClientCIDR:"192.168.1.3/32",ProxyName:"node-a",ListenPort:6054}}}},
 	}
 	for _,tc:=range cases {
