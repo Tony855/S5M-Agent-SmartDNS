@@ -220,8 +220,8 @@ jobs:
           ! grep -q '^authentication:' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '127.0.0.1:6053' s5m-agent/default-config.yaml
           grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
-          grep -q 'enable: false' s5m-agent/default-config.yaml
-          grep -q 'enable: false' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q 'enable: true' s5m-agent/default-config.yaml
+          grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
             test -x /app/s5m-agent
             test -x /usr/local/bin/mihomo
@@ -235,7 +235,7 @@ jobs:
             test -s /usr/share/licenses/smartdns/LICENSE
             test -s /usr/share/licenses/smartdns/SOURCE_COMMIT
             grep -q "127.0.0.1:6053" /app/default-config.yaml
-            grep -q "enable: false" /app/default-config.yaml
+            grep -q "enable: true" /app/default-config.yaml
             /usr/local/bin/mihomo -v
             /usr/sbin/smartdns -h >/dev/null 2>&1 || true
           '
