@@ -106,6 +106,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 	oldRestart := transactionRestartSmartDNS
 	oldWriteController := transactionWriteControllerConfig
 	oldRemoveBackup := transactionRemoveBackup
+	oldSnapshotFile := transactionSnapshotFile
 	restore := func() {
 		smartDNSConfigPath = oldSmartPath
 		transactionMergeMihomo = oldMerge
@@ -115,6 +116,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 		transactionRestartSmartDNS = oldRestart
 		transactionWriteControllerConfig = oldWriteController
 		transactionRemoveBackup = oldRemoveBackup
+		transactionSnapshotFile = oldSnapshotFile
 	}
 	t.Cleanup(restore)
 
@@ -300,5 +302,52 @@ func TestConfigTransactionKeepsBackupWhenCleanupFailsAfterHealthyCommit(t *testi
 	}
 	if _, err := os.Stat(filepath.Join(dir, "smartdns.conf.previous")); err != nil {
 		t.Fatalf("failed cleanup must retain SmartDNS recovery copy: %v", err)
+	}
+}
+
+
+func TestSnapshotFileForTransactionPropagatesStaleBackupRemovalFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "missing.json")
+	backupDir := path + ".previous"
+	if err := os.Mkdir(backupDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, "keep"), []byte("not empty"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := snapshotFileForTransaction(path)
+	if err == nil || !strings.Contains(err.Error(), "清理过期事务备份失败") {
+		t.Fatalf("expected stale backup cleanup error, got %v", err)
+	}
+}
+
+func TestConfigTransactionCleansPreparedBackupsWhenLaterSnapshotFails(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	snapshotCalls := 0
+	transactionSnapshotFile = func(path string) ([]byte, bool, error) {
+		snapshotCalls++
+		if path == managedRouteCIDRsPath() {
+			return nil, false, errors.New("injected managed CIDR snapshot failure")
+		}
+		return snapshotFileForTransaction(path)
+	}
+	mergeCalls := 0
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
+		mergeCalls++
+		return false, nil
+	}
+
+	err := applyAgentConfigTransaction([]byte("controller-candidate"), nil, false, "")
+	if err == nil || !strings.Contains(err.Error(), "保存 managed CIDR 事务回滚点失败") {
+		t.Fatalf("expected managed CIDR snapshot failure, got %v", err)
+	}
+	if mergeCalls != 0 {
+		t.Fatalf("configuration mutation must not begin when snapshot preparation fails, got %d merge calls", mergeCalls)
+	}
+	for _, name := range []string{"smartdns.conf.previous", "config.yaml.previous"} {
+		if _, statErr := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("partial prepared backup %s should be cleaned, stat error=%v", name, statErr)
+		}
 	}
 }
