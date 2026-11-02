@@ -260,7 +260,7 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "设置已保存，但节点配置同步失败；请重试同步: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"message": "设置已保存，已授权节点配置已同步"})
+	writeJSON(w, http.StatusOK, map[string]string{"message": "设置已保存，已重新生成并保存已授权节点配置；在线 Agent 将在下次拉取时应用"})
 }
 
 func (a *App) handleListInstances(w http.ResponseWriter, r *http.Request) {
