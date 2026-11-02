@@ -1361,9 +1361,18 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 						if !ok || strings.TrimSpace(value) == "" {
 							return nil, fmt.Errorf("PROXY 分组成员必须是非空字符串")
 						}
+					if strings.EqualFold(strings.TrimSpace(value), "DIRECT") {
+
+						continue
+
+					}
+
 					if !memberSeen[value] {
+
 						memberSeen[value] = true
+
 						members = append(members, value)
+
 					}
 				}
 				current["proxies"] = members
