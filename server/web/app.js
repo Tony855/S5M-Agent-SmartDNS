@@ -571,10 +571,16 @@ createApp({
     const loadOverview = async () => {
       // The dashboard uses the authenticated browser WebSocket as its primary
       // data channel. Do not silently fall back to repeated HTTP requests.
+      // A heartbeat event may arrive while this snapshot is in flight; never
+      // let that older snapshot overwrite the newer live node status.
+      const statusRevision = agentStatusRevision;
       try {
         const data = await sendBrowserWSControl({ type: 'monitor.overview.get' });
-        overview.value = data.data || {};
-        syncServerClock(overview.value.server_time);
+        const snapshot = data.data || {};
+        syncServerClock(snapshot.server_time);
+        if (statusRevision === agentStatusRevision) {
+          overview.value = snapshot;
+        }
       } catch (e) {
         console.warn('通过实时通道读取仪表盘概览失败', e);
       }
