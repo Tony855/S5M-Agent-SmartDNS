@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,6 +105,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 	oldWait := transactionWaitSmartDNSHealthy
 	oldRestart := transactionRestartSmartDNS
 	oldWriteController := transactionWriteControllerConfig
+	oldRemoveBackup := transactionRemoveBackup
 	restore := func() {
 		smartDNSConfigPath = oldSmartPath
 		transactionMergeMihomo = oldMerge
@@ -112,6 +114,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 		transactionWaitSmartDNSHealthy = oldWait
 		transactionRestartSmartDNS = oldRestart
 		transactionWriteControllerConfig = oldWriteController
+		transactionRemoveBackup = oldRemoveBackup
 	}
 	t.Cleanup(restore)
 
@@ -235,5 +238,67 @@ func TestConfigTransactionRestoresSmartDNSAndManagedCIDRsWhenDNSHealthFails(t *t
 	}
 	if _, err := os.Stat(filepath.Join(dir, "smartdns.conf.previous")); err != nil {
 		t.Fatalf("SmartDNS rollback copy should remain available after failed transaction: %v", err)
+	}
+}
+
+
+func TestConfigTransactionReportsSmartDNSRollbackRestartFailure(t *testing.T) {
+	_, _ = setupConfigTransactionFixture(t)
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) { return true, nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionApplySmartDNS = func(data []byte, _ bool) (string, error) {
+		return "", atomicWriteFile(smartDNSConfigPath, data, 0600)
+	}
+	healthCalls := 0
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool {
+		healthCalls++
+		return false // candidate fails; rollback restart must still be attempted
+	}
+	restartCalls := 0
+	transactionRestartSmartDNS = func() error {
+		restartCalls++
+		return errors.New("injected SmartDNS restart failure")
+	}
+
+	err := applyAgentConfigTransaction([]byte("controller-candidate"), []byte("smartdns-candidate"), true, "")
+	if err == nil {
+		t.Fatal("expected rollback restart failure to be returned")
+	}
+	if !strings.Contains(err.Error(), "重启回滚后的 SmartDNS 失败") {
+		t.Fatalf("error should identify SmartDNS rollback restart failure, got: %v", err)
+	}
+	if restartCalls != 1 {
+		t.Fatalf("expected one rollback restart attempt, got %d", restartCalls)
+	}
+	if healthCalls != 1 {
+		t.Fatalf("must not probe health after restart failed, got %d probes", healthCalls)
+	}
+}
+
+func TestConfigTransactionKeepsBackupWhenCleanupFailsAfterHealthyCommit(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) { return false, nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { return true }
+	transactionWriteControllerConfig = func([]byte) error { return nil }
+
+	var cleanupAttempts int
+	transactionRemoveBackup = func(path string) error {
+		if path == smartDNSConfigPath {
+			cleanupAttempts++
+			return errors.New("injected directory sync failure")
+		}
+		return removeTransactionBackup(path)
+	}
+
+	err := applyAgentConfigTransaction([]byte("controller-candidate"), nil, false, "")
+	if err != nil {
+		t.Fatalf("healthy joint commit must not be reported as failed solely because cleanup failed: %v", err)
+	}
+	if cleanupAttempts != 1 {
+		t.Fatalf("expected SmartDNS backup cleanup attempt, got %d", cleanupAttempts)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "smartdns.conf.previous")); err != nil {
+		t.Fatalf("failed cleanup must retain SmartDNS recovery copy: %v", err)
 	}
 }
