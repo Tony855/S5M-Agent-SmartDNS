@@ -351,3 +351,43 @@ listeners:
 		})
 	}
 }
+
+
+func TestBuildSmartDNSClientRuntimeMappingsAreSharedAndDeterministic(t *testing.T) {
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModePerClient,
+		Clients: []SmartDNSClientRoute{
+			{ClientCIDR: "192.168.1.20/32", ProxyName: "node-b"},
+			{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a", ListenPort: 16008},
+		},
+	}
+	usedPorts := map[int]bool{16000: true, 16001: true, 16008: true}
+	usedNames := map[string]bool{"operator-listener": true}
+	got, err := buildSmartDNSClientRuntimeMappings(plan, usedPorts, usedNames)
+	if err != nil { t.Fatal(err) }
+	if len(got) != 2 { t.Fatalf("got %d mappings, want 2", len(got)) }
+	if got[0].ClientCIDR != "192.168.1.20/32" || got[0].ListenerPort != 16002 ||
+		got[0].ListenerName != "s5m-smartdns-16002" || got[0].ListenerAddress != "127.0.0.1" ||
+		got[0].ProxyName != "node-b" {
+		t.Fatalf("unexpected auto mapping: %#v", got[0])
+	}
+	if got[1].ClientCIDR != "192.168.1.10/32" || got[1].ListenerPort != 16008 ||
+		got[1].ListenerName != "s5m-smartdns-16008" || got[1].ProxyName != "node-a" {
+		t.Fatalf("unexpected explicit mapping: %#v", got[1])
+	}
+	// The same resolved value is suitable for both Mihomo listener creation
+	// and a downstream SmartDNS proxy-server generator; allocation is not rerun.
+	if !usedPorts[16002] || !usedPorts[16008] {
+		t.Fatalf("allocated ports were not reserved: %#v", usedPorts)
+	}
+}
+
+func TestBuildSmartDNSClientRuntimeMappingsRejectsConflictingExplicitPort(t *testing.T) {
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModePerClient,
+		Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a", ListenPort: 16000}},
+	}
+	if _, err := buildSmartDNSClientRuntimeMappings(plan, map[int]bool{16000: true}, map[string]bool{}); err == nil {
+		t.Fatal("expected explicit port collision to be rejected")
+	}
+}
