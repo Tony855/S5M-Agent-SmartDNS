@@ -1610,3 +1610,66 @@ func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDN
 	if err != nil { t.Fatal(err) }
 	if stored == nil || stored.YAML != persisted { t.Fatalf("recovery sync mutated persisted node config: %#v", stored) }
 }
+
+
+// TestLegacyHTTPAgentConfigETagTracksPersistedConfigChanges verifies that
+// conditional polling returns 304 only while the delivered YAML is unchanged.
+func TestLegacyHTTPAgentConfigETagTracksPersistedConfigChanges(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	firstYAML := "allow-lan: true\nmixed-port: 7890\nsecret: first-secret\ntun:\n  enable: false\n"
+	if err := app.store.SaveNodeConfig(code, firstYAML); err != nil {
+		t.Fatalf("save initial node config: %v", err)
+	}
+
+	request := func(etag string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/config", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+		rec := httptest.NewRecorder()
+		app.handleAgentConfig(rec, req)
+		return rec
+	}
+
+	first := request("")
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial config status = %d, want 200; body=%s", first.Code, first.Body.String())
+	}
+	firstETag := first.Header().Get("ETag")
+	if firstETag == "" || first.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("missing cache validators: ETag=%q Cache-Control=%q", firstETag, first.Header().Get("Cache-Control"))
+	}
+	if !strings.Contains(first.Body.String(), "first-secret") {
+		t.Fatalf("initial response did not contain first config: %s", first.Body.String())
+	}
+
+	unchanged := request(firstETag)
+	if unchanged.Code != http.StatusNotModified || unchanged.Body.Len() != 0 {
+		t.Fatalf("unchanged config response = status %d body %q, want empty 304", unchanged.Code, unchanged.Body.String())
+	}
+	if unchanged.Header().Get("ETag") != firstETag {
+		t.Fatalf("304 ETag = %q, want %q", unchanged.Header().Get("ETag"), firstETag)
+	}
+
+	secondYAML := strings.Replace(firstYAML, "first-secret", "second-secret", 1)
+	if err := app.store.SaveNodeConfig(code, secondYAML); err != nil {
+		t.Fatalf("save changed node config: %v", err)
+	}
+	changed := request(firstETag)
+	if changed.Code != http.StatusOK {
+		t.Fatalf("changed config status = %d, want 200; body=%s", changed.Code, changed.Body.String())
+	}
+	secondETag := changed.Header().Get("ETag")
+	if secondETag == "" || secondETag == firstETag {
+		t.Fatalf("config change did not change ETag: old=%q new=%q", firstETag, secondETag)
+	}
+	if !strings.Contains(changed.Body.String(), "second-secret") || strings.Contains(changed.Body.String(), "first-secret") {
+		t.Fatalf("changed response did not deliver the latest config: %s", changed.Body.String())
+	}
+
+	latestUnchanged := request(secondETag)
+	if latestUnchanged.Code != http.StatusNotModified || latestUnchanged.Body.Len() != 0 {
+		t.Fatalf("latest unchanged response = status %d body %q, want empty 304", latestUnchanged.Code, latestUnchanged.Body.String())
+	}
+}
