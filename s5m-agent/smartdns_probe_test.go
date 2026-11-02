@@ -673,7 +673,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 	t.Run("plaintext upstream config forces DNS fallback", func(t *testing.T) {
 		deps := good
 		deps.readConfig = func(string) ([]byte, error) {
-			return []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver 223.5.5.5\\n"), nil
+			return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 223.5.5.5\n"), nil
 		}
 		deps.restart = func() error { t.Fatal("policy-invalid config must not be restarted"); return nil }
 		status := map[string]any{}
@@ -1096,7 +1096,7 @@ func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
 }
 
 func TestValidateSmartDNSConfigFailsClosedForPerClientRoutingDirectives(t *testing.T) {
-	base := "bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
 	cases := []struct {
 		name string
 		line string
@@ -1108,7 +1108,7 @@ func TestValidateSmartDNSConfigFailsClosedForPerClientRoutingDirectives(t *testi
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := validateSmartDNSConfig([]byte(base + tc.line + "\\n")); err == nil {
+			if err := validateSmartDNSConfig([]byte(base + tc.line + "\n")); err == nil {
 				t.Fatalf("per-client directive must remain rejected until isolated DNS runtime is implemented: %s", tc.line)
 			}
 		})
