@@ -62,3 +62,58 @@ func TestApplySmartDNSSharedFallbackLeavesLegacyDocumentUntouched(t *testing.T) 
 	if got != input { t.Fatalf("legacy document changed: %q", got) }
 	if strings.TrimSpace(got) == "" { t.Fatal("empty legacy document") }
 }
+
+
+func TestApplySmartDNSSharedFallbackInsertsBeforeCustomDomainAndIPRules(t *testing.T) {
+	input := `rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - DOMAIN,controller.example.com,DIRECT
+  - DOMAIN,private.example.com,DIRECT
+  - IP-CIDR,192.0.2.0/24,DIRECT,no-resolve
+  - MATCH,DIRECT
+proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+`
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
+	got, err := applySmartDNSSharedFallback(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	rules := doc["rules"].([]any)
+	want := []string{
+		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
+		"DOMAIN,controller.example.com,DIRECT",
+		"PROCESS-NAME,smartdns,SMARTDNS-PROXY",
+		"DOMAIN,private.example.com,DIRECT",
+		"IP-CIDR,192.0.2.0/24,DIRECT,no-resolve",
+		"MATCH,DIRECT",
+	}
+	if len(rules) != len(want) { t.Fatalf("rules length = %d, want %d: %#v", len(rules), len(want), rules) }
+	for i := range want {
+		if rules[i] != want[i] { t.Errorf("rules[%d] = %#v, want %#v", i, rules[i], want[i]) }
+	}
+}
+
+func TestApplySmartDNSSharedFallbackDoesNotSkipArbitraryDomainRule(t *testing.T) {
+	input := `rules:
+  - DOMAIN,custom.example.com,DIRECT
+  - MATCH,DIRECT
+proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+`
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
+	got, err := applySmartDNSSharedFallback(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	rules := doc["rules"].([]any)
+	if rules[0] != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" || rules[1] != "DOMAIN,custom.example.com,DIRECT" {
+		t.Fatalf("custom domain rule incorrectly precedes SmartDNS routing: %#v", rules)
+	}
+}
