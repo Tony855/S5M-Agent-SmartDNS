@@ -280,6 +280,28 @@ func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
 	}
 }
 
+func TestValidateSmartDNSConfigAcceptsDomesticDoTGroupAndRejectsUnapprovedResolvers(t *testing.T) {
+	valid := []byte(`bind 127.0.0.1:6053
+bind-tcp 127.0.0.1:6053
+bind 127.0.0.1:6054 -group china-dot
+bind-tcp 127.0.0.1:6054 -group china-dot
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com
+server-tls 223.5.5.5:853 -host-name dns.alidns.com -group china-dot -exclude-default-group
+server-tls 1.12.12.12:853 -host-name dot.pub -group china-dot -exclude-default-group
+`)
+	if err := validateSmartDNSConfig(valid); err != nil {
+		t.Fatalf("valid domestic DoT group rejected: %v", err)
+	}
+	invalid := strings.Replace(string(valid), "223.5.5.5:853 -host-name dns.alidns.com", "9.9.9.9:853 -host-name dns.alidns.com", 1)
+	if err := validateSmartDNSConfig([]byte(invalid)); err == nil {
+		t.Fatal("unapproved resolver must not enter china-dot group")
+	}
+	missingTCP := strings.Replace(string(valid), "bind-tcp 127.0.0.1:6054 -group china-dot\n", "", 1)
+	if err := validateSmartDNSConfig([]byte(missingTCP)); err == nil {
+		t.Fatal("domestic listener without matching TCP bind must be rejected")
+	}
+}
+
 func TestValidateSmartDNSConfigRejectsBootstrapDependentEncryptedUpstreams(t *testing.T) {
 	cases := []struct {
 		name string
@@ -330,6 +352,10 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 		"bind-tcp 127.0.0.1:6053",
 		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
 		"server-tls 8.8.8.8:853 -host-name dns.google",
+		"bind 127.0.0.1:6054 -group china-dot",
+		"bind-tcp 127.0.0.1:6054 -group china-dot",
+		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -group china-dot -exclude-default-group",
+		"server-tls 1.12.12.12:853 -host-name dot.pub -group china-dot -exclude-default-group",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("bundled SmartDNS config missing %q", want)
