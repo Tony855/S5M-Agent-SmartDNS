@@ -44,7 +44,7 @@ dns:
 2. SmartDNS 只配置可信的 DoH/DoT 上游；不要加入普通明文 DNS `server x.x.x.x` 项。
 3. **加密不等于经过代理。** SmartDNS 进程通常会自行建立上游连接；Mihomo 的 `respect-rules` 不会自动把 SmartDNS 进程发出的连接转入代理。因此，必须通过主机策略路由/防火墙/受控网络命名空间，验证上游连接确实按预期出口发送。
 4. 禁止客户端绕过 Mihomo 直接访问外部 TCP/UDP 53；按实际平台测试 TCP DNS、IPv6 DNS 和应用内置 DoH 的绕过情况。
-5. 不要把 `MATCH,DIRECT` 误认为全局代理。SmartDNS 的 DoT/DoH 连接只有在进程规则命中且代理可用时才会经代理；没有可用代理时，加密 DNS 仍可能直连 DNS 服务商。
+5. 不要把 `MATCH,DIRECT` 误认为全局代理。共享模式可通过进程规则将 SmartDNS 的连接统一交给一个代理，但代理不可用时仍可能直连，除非另有网络层 fail-closed 限制。按客户端独立出口不能使用单一进程规则，必须依靠 SmartDNS 的客户端 IP 分组与各组命名代理，并在运行时验证。
 6. `default-nameserver` / `proxy-server-nameserver` 是 Mihomo 启动和解析代理节点域名所需的 bootstrap。当前 `default-nameserver` 与 `proxy-server-nameserver` 使用 `tls://` 加密 DNS，并以字面 IP 作为 DoT 端点，避免明文 bootstrap 和域名解析循环。Mihomo 文档明确支持 `default-nameserver` 使用加密 DNS，示例包含 `tls://`；仍需在目标 Mihomo 版本验证证书/SNI 与连接行为。不能简单把 bootstrap 指向 SmartDNS，否则会形成启动循环。
 6. 先在测试节点运行 DNS 泄漏测试、抓包并检查上游连接出口，再逐步推广。仅靠 YAML 无法保证零泄露。
 
