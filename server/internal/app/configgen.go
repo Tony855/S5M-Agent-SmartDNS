@@ -814,8 +814,12 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			if value, ok := generatedDoc["proxies"]; ok {
 				currentDoc["proxies"] = value
 			}
-			if value, ok := generatedDoc["proxy-groups"]; ok {
-				currentDoc["proxy-groups"] = value
+			mergedGroups, mergeErr := mergeManagedProxyGroupValues(currentDoc["proxy-groups"], generatedDoc["proxy-groups"])
+			if mergeErr != nil {
+				return fmt.Errorf("合并机器 %s 的自定义代理分组失败: %w", machineCode, mergeErr)
+			}
+			if len(mergedGroups) > 0 {
+				currentDoc["proxy-groups"] = mergedGroups
 			}
 			mergedRules, mergeErr := mergeManagedRuleValues(currentDoc["rules"], generatedDoc["rules"])
 			if mergeErr != nil {
