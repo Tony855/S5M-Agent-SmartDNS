@@ -462,6 +462,14 @@ func smartDNSReplayIsHealthy(path string, candidate []byte, probe func() bool) (
 func writeSmartDNSConfig(data []byte) (string, error) {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
+	return writeSmartDNSConfigLocked(data)
+}
+
+// writeSmartDNSConfigLocked performs the existing SmartDNS apply path while
+// the caller holds smartDNSConfigMu. It deliberately preserves the legacy
+// apply/rollback semantics; a coordinated Mihomo+SmartDNS transaction must
+// use transaction-owned backups and must not call this cleanup-owning path.
+func writeSmartDNSConfigLocked(data []byte) (string, error) {
 	if err := validateSmartDNSConfig(data); err != nil {
 		return "", err
 	}
