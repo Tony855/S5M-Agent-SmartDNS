@@ -10,5 +10,9 @@ services:
       - "80:80"
     volumes:
       - ./data:/data
-    # Default container has no NET_ADMIN capability or TUN device.
-    # Add docker-compose.tun.yml only when tun.enable is explicitly true.
+    # TUN is enabled by default in generated node configs; grant the required
+    # capability and device in the Agent container network namespace.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
