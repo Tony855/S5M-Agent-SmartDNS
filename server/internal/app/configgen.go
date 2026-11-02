@@ -1323,6 +1323,22 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 			if name == "PROXY" {
 				continue
 			}
+			if name == SmartDNSGroupName {
+				// The fallback group is generated on every sync. Replace a prior
+				// managed instance so membership tracks current enabled machine nodes,
+				// but never overwrite an operator-owned group with a different shape.
+				managed := false
+				for i, existing := range merged {
+					current, ok := existing.(map[string]any)
+					if !ok || current["name"] != SmartDNSGroupName { continue }
+					managed = current["type"] == "fallback" &&
+						current["url"] == "https://www.gstatic.com/generate_204"
+					if !managed { break }
+					merged[i] = raw
+					break
+				}
+				if managed { continue }
+			}
 			return nil, fmt.Errorf("proxy-group 名称冲突: %q", name)
 		}
 		seen[name] = true
