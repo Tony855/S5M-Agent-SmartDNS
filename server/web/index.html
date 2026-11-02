@@ -139,6 +139,16 @@
             </div>
           </div>
           
+          <div class="docker-controls" style="margin:10px 0 14px;flex-wrap:wrap" v-if="selectedProxyIds.length">
+            <span class="section-hint">已选择 {{ selectedProxyIds.length }} 个代理</span>
+            <el-select v-model="bulkMachineCode" filterable clearable placeholder="选择要关联的实例" style="min-width:220px">
+              <el-option v-for="code in availableMachineCodes" :key="code" :label="machineCodeOptionLabel(code)" :value="code"></el-option>
+            </el-select>
+            <el-button size="small" type="primary" :loading="bulkProxyBusy" :disabled="!bulkMachineCode" @click="bulkBindProxies">批量关联实例</el-button>
+            <el-button size="small" type="danger" :loading="bulkProxyBusy" @click="bulkDeleteProxies">批量删除</el-button>
+            <el-button size="small" @click="selectedProxyIds = []">清空选择</el-button>
+          </div>
+
           <!-- 机器码分组选项卡 -->
           <div class="group-tabs">
             <div class="group-tab" :class="{ active: activeGroup === 'ALL' }" @click="activeGroup = 'ALL'">全部节点</div>
@@ -150,7 +160,8 @@
           </div>
 
           <!-- 桌面端表格 -->
-          <el-table class="desktop-table" :data="filteredProxies" style="width: 100%" stripe v-loading="loadingProxies">
+          <el-table class="desktop-table" :data="filteredProxies" style="width: 100%" stripe v-loading="loadingProxies" @selection-change="onProxySelectionChange">
+            <el-table-column type="selection" width="48"></el-table-column>
             <el-table-column prop="id" label="ID" width="70"></el-table-column>
             <el-table-column prop="name" label="名称" min-width="140"></el-table-column>
             <el-table-column prop="type" label="类型" width="90"></el-table-column>
@@ -180,6 +191,7 @@
           <!-- 手机端卡片 -->
           <div v-loading="loadingProxies">
             <div v-for="item in filteredProxies" :key="item.id" class="proxy-mobile-card">
+              <div class="proxy-mobile-row"><div class="proxy-mobile-label">选择</div><div class="proxy-mobile-value"><el-checkbox :model-value="selectedProxyIds.includes(Number(item.id))" @change="checked => toggleMobileProxySelection(item.id, checked)">选择此代理</el-checkbox></div></div>
               <div class="proxy-mobile-row"><div class="proxy-mobile-label">名称</div><div class="proxy-mobile-value"><strong>{{ item.name }}</strong></div></div>
               <div class="proxy-mobile-row"><div class="proxy-mobile-label">类型</div><div class="proxy-mobile-value">{{ item.type }}</div></div>
               <div class="proxy-mobile-row"><div class="proxy-mobile-label">服务器</div><div class="proxy-mobile-value">{{ item.server }}:{{ item.port }}</div></div>
@@ -236,7 +248,14 @@
 
         <!-- 批量导入弹窗 -->
         <el-dialog v-model="showImport" title="批量导入代理" width="90%" style="max-width: 560px;">
-          <p class="import-note">导入内容将按行提交给后端解析。导入后如需绑定机器码，请在代理列表中编辑对应节点。</p>
+          <p class="import-note">导入时可直接选择关联实例；导入成功的代理会自动绑定到该实例。留空则只导入到主控代理列表，不自动关联。</p>
+          <el-form label-position="top">
+            <el-form-item label="导入后关联实例">
+              <el-select v-model="importMachineCode" clearable filterable placeholder="不关联（仅导入到代理列表）" style="width:100%">
+                <el-option v-for="code in availableMachineCodes" :key="code" :label="machineCodeOptionLabel(code)" :value="code"></el-option>
+              </el-select>
+            </el-form-item>
+          </el-form>
 <el-tabs v-model="importTab">
             <el-tab-pane label="文本粘贴" name="text">
               <p style="color:var(--sub);font-size:13px;margin-bottom:10px;">

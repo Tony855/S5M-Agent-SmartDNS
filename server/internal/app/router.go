@@ -124,6 +124,8 @@ func (a *App) Router(static fs.FS) http.Handler {
 		"POST /api/v1/proxies/import":              a.handleImportProxies,
 		"PUT /api/v1/proxies/{id}":                 a.handleUpdateProxy,
 		"DELETE /api/v1/proxies/{id}":              a.handleDeleteProxy,
+		"POST /api/v1/proxies/bulk-delete":        a.handleBulkDeleteProxies,
+		"POST /api/v1/proxies/bulk-bind":          a.handleBulkBindProxies,
 		"GET /api/v1/config/preview":               a.handlePreview,
 		"POST /api/v1/config/save":                 a.handleSaveConfig,
 		"POST /api/v1/config/publish":              a.handlePublish,

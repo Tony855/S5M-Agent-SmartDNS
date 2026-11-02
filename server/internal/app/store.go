@@ -510,6 +510,60 @@ func (s *Store) DeleteProxy(id int64) error {
 	return err
 }
 
+func (s *Store) DeleteProxies(ids []int64) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("未选择代理")
+	}
+	// Reject invalid and duplicate IDs before opening the transaction. A
+	// duplicate could otherwise make the response count differ from rows deleted.
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return fmt.Errorf("代理 ID 无效")
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("代理 ID %d 重复", id)
+		}
+		seen[id] = struct{}{}
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		result, err := tx.Exec(`DELETE FROM proxies WHERE id=?`, id)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("代理 ID %d 不存在，已取消整批删除", id)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) BindProxiesToMachine(ids []int64, machineCode string) error {
+	if len(ids) == 0 { return fmt.Errorf("未选择代理") }
+	tx, err := s.db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	for _, id := range ids {
+		if id <= 0 { return fmt.Errorf("代理 ID 无效") }
+		result, err := tx.Exec(`UPDATE proxies SET machine_code=? WHERE id=?`, machineCode, id)
+		if err != nil { return err }
+		affected, err := result.RowsAffected()
+		if err != nil { return err }
+		if affected == 0 { return fmt.Errorf("代理 ID %d 不存在", id) }
+	}
+	return tx.Commit()
+}
+
 func (s *Store) NextVersion() (int, error) {
 	var v int
 	err := s.db.QueryRow(`SELECT COALESCE(MAX(version),0)+1 FROM config_versions`).Scan(&v)

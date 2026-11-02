@@ -457,6 +457,38 @@ func (a *App) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "已删除"})
 }
 
+func (a *App) handleBulkDeleteProxies(w http.ResponseWriter, r *http.Request) {
+	var in struct { IDs []int64 `json:"ids"` }
+	if err := decode(r, &in); err != nil { writeErr(w, http.StatusBadRequest, "参数错误"); return }
+	if len(in.IDs) == 0 || len(in.IDs) > 500 { writeErr(w, http.StatusBadRequest, "请选择 1-500 个代理"); return }
+	if err := a.store.DeleteProxies(in.IDs); err != nil { writeErr(w, http.StatusBadRequest, "批量删除失败: "+err.Error()); return }
+	if err := a.syncAuthorizedNodeConfigs(); err != nil { writeErr(w, http.StatusInternalServerError, "代理已批量删除，但节点配置同步失败: "+err.Error()); return }
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": len(in.IDs), "message": "批量删除成功"})
+}
+
+func (a *App) handleBulkBindProxies(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []int64 `json:"ids"`
+		MachineCode string `json:"machine_code"`
+	}
+	if err := decode(r, &in); err != nil { writeErr(w, http.StatusBadRequest, "参数错误"); return }
+	in.MachineCode = strings.TrimSpace(in.MachineCode)
+	if len(in.IDs) == 0 || len(in.IDs) > 500 { writeErr(w, http.StatusBadRequest, "请选择 1-500 个代理"); return }
+	if in.MachineCode == "" || in.MachineCode == "__GLOBAL__" || len(in.MachineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(in.MachineCode) {
+		writeErr(w, http.StatusBadRequest, "请选择有效的节点实例")
+		return
+	}
+	settings, err := a.store.GetSettings()
+	if err != nil { writeErr(w, http.StatusInternalServerError, "读取实例授权失败"); return }
+	if strings.TrimSpace(settings["agent_machine_"+in.MachineCode]) == "" {
+		writeErr(w, http.StatusBadRequest, "所选实例尚未授权，不能关联代理")
+		return
+	}
+	if err := a.store.BindProxiesToMachine(in.IDs, in.MachineCode); err != nil { writeErr(w, http.StatusBadRequest, "批量关联失败: "+err.Error()); return }
+	if err := a.syncAuthorizedNodeConfigs(); err != nil { writeErr(w, http.StatusInternalServerError, "代理已关联，但节点配置同步失败: "+err.Error()); return }
+	writeJSON(w, http.StatusOK, map[string]any{"updated": len(in.IDs), "machine_code": in.MachineCode, "message": "批量关联成功"})
+}
+
 func (a *App) handlePreview(w http.ResponseWriter, r *http.Request) {
 	yml, err := a.BuildConfig()
 	if err != nil {
@@ -1730,6 +1762,7 @@ func filterDuplicateProxyImports(existing []Proxy, incoming []*Proxy) (unique []
 func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Content string `json:"content"`
+		MachineCode string `json:"machine_code"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := decode(r, &in); err != nil {
@@ -1741,8 +1774,22 @@ func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	in.MachineCode = strings.TrimSpace(in.MachineCode)
+	if in.MachineCode != "" {
+		if in.MachineCode == "__GLOBAL__" || len(in.MachineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(in.MachineCode) {
+			writeErr(w, http.StatusBadRequest, "导入关联的节点实例无效")
+			return
+		}
+		settings, err := a.store.GetSettings()
+		if err != nil { writeErr(w, http.StatusInternalServerError, "读取实例授权失败"); return }
+		if strings.TrimSpace(settings["agent_machine_"+in.MachineCode]) == "" {
+			writeErr(w, http.StatusBadRequest, "所选实例尚未授权，不能关联导入代理")
+			return
+		}
+	}
 	successCount := 0
 	proxies, failReasons := parseProxyImportContent(in.Content)
+	for _, p := range proxies { p.MachineCode = in.MachineCode }
 	existing, err := a.store.ListProxies()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "读取现有代理列表失败，未执行导入")
