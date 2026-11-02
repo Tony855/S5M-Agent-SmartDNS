@@ -2191,41 +2191,23 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				// body so operators can diagnose stale Agent builds or payload mutation.
 				return recordAgentConfigSyncFailure(fmt.Errorf("WebSocket 配置 SHA-256 不匹配，拒绝应用（收到=%s，计算=%s，字节数=%d）", strings.TrimSpace(configResponse.SHA256), configHash, len(configResponse.YAML)))
 			}
-			oldManagedRoutes := readManagedRouteCIDRs()
-			oldManagedRouteValues := make([]string, 0, len(oldManagedRoutes))
-			for cidr := range oldManagedRoutes {
-				oldManagedRouteValues = append(oldManagedRouteValues, cidr)
-			}
-			changed, applyErr := mergeConfigWithCentralURL([]byte(configResponse.YAML), cfg.CentralURL)
-			if applyErr != nil {
-				setAgentConfigSyncError("主控配置应用失败: " + applyErr.Error())
-				fmt.Printf("WebSocket 配置校验/写入失败: %s\n", safeMihomoValidationDiagnostic([]byte(applyErr.Error())))
+			smartDNSConfig, smartDNSErr := readSmartDNSFileNoFollow(smartDNSConfigPath, 8<<10)
+			if smartDNSErr != nil && !os.IsNotExist(smartDNSErr) {
+				setAgentConfigSyncError("读取现有 SmartDNS 配置失败，联合事务未启动: " + smartDNSErr.Error())
 				break
 			}
-			if changed {
-				if commitErr := persistControllerConfigAfterReload(
-					[]byte(configResponse.YAML), reloadMihomo, writeControllerConfig,
-				); commitErr != nil {
-					setAgentConfigSyncError("Mihomo 配置重载或配置哈希提交失败，已尝试回滚: " + commitErr.Error())
-					fmt.Printf("Mihomo 配置提交失败，正在回滚: %s\n", safeMihomoValidationDiagnostic([]byte(commitErr.Error())))
-					if rollbackErr := rollbackConfigAfterReloadFailure(); rollbackErr != nil {
-						return recordAgentConfigSyncFailure(fmt.Errorf("配置提交失败且回滚失败: %w", rollbackErr))
-					}
-					if stateErr := writeManagedRouteCIDRs(oldManagedRouteValues); stateErr != nil {
-						return recordAgentConfigSyncFailure(fmt.Errorf("配置已回滚，但动态主控地址记录恢复失败: %w", stateErr))
-					}
-					if retryErr := reloadMihomo(); retryErr != nil {
-						return recordAgentConfigSyncFailure(fmt.Errorf("旧配置已恢复但重载失败: %w", retryErr))
-					}
-				} else {
-					clearAgentConfigSyncError()
-					_ = os.Remove(mihomoConfigPath() + ".previous")
-					fmt.Println("WebSocket 下发的 Mihomo 配置已应用")
-				}
-
-			} else {
-				clearAgentConfigSyncError()
+			if os.IsNotExist(smartDNSErr) {
+				smartDNSConfig = nil
 			}
+			if applyErr := applyAgentConfigTransaction(
+				[]byte(configResponse.YAML), smartDNSConfig, false, cfg.CentralURL,
+			); applyErr != nil {
+				setAgentConfigSyncError("Mihomo/SmartDNS 联合配置事务失败: " + applyErr.Error())
+				fmt.Printf("WebSocket 联合配置应用失败: %s\\n", safeMihomoValidationDiagnostic([]byte(applyErr.Error())))
+				break
+			}
+			clearAgentConfigSyncError()
+			fmt.Println("WebSocket 下发的 Mihomo 配置已完成联合健康检查并提交")
 		default:
 			return recordAgentConfigSyncFailure(fmt.Errorf("未知的 WebSocket 配置响应类型: %s", configResponse.Type))
 		}
@@ -2273,10 +2255,14 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 					message = "已读取 Agent 当前 SmartDNS 配置"
 				}
 			case "configure_smartdns":
-				var configHash string
-				configHash, commandErr = writeSmartDNSConfig([]byte(cmd.Config))
+				var mihomoConfig []byte
+				mihomoConfig, commandErr = configHashSource()
 				if commandErr == nil {
-					message = "SmartDNS 配置已校验并应用，SHA-256: " + configHash
+					commandErr = applyAgentConfigTransaction(mihomoConfig, []byte(cmd.Config), true, cfg.CentralURL)
+				}
+				if commandErr == nil {
+					sum := sha256.Sum256(bytes.TrimSpace([]byte(cmd.Config)))
+					message = "SmartDNS/Mihomo 联合配置已应用并通过健康检查，SmartDNS SHA-256: " + hex.EncodeToString(sum[:])
 				}
 			default:
 				commandErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
