@@ -647,6 +647,28 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// SmartDNS routing is opt-in. An absent setting is the legacy state and
+	// must not alter existing node traffic behavior.
+	if raw := strings.TrimSpace(settings["smartdns_routing_config"]); raw != "" {
+		var routing SmartDNSRoutingConfig
+		if err := json.Unmarshal([]byte(raw), &routing); err != nil {
+			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+		}
+		if routing.Mode == SmartDNSProxyModePerClient {
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
+		}
+		refs := make([]SmartDNSProxyRef, 0, len(proxies))
+		for _, p := range proxies {
+			matches := p.MachineCode == "__GLOBAL__" || (machineCode != "" && p.MachineCode == machineCode)
+			if matches { refs = append(refs, SmartDNSProxyRef{Name: p.Name, Enabled: p.Enabled}) }
+		}
+		plan, err := BuildSmartDNSRoutingPlan(routing, refs)
+		if err != nil { return "", fmt.Errorf("SmartDNS 路由计划无效: %w", err) }
+		if plan.Mode == SmartDNSProxyModeShared {
+			yml, err = applySmartDNSSharedFallback(yml, plan)
+			if err != nil { return "", err }
+		}
+	}
 	// Controller configs keep their separate listener; Agent configs expose no explicit proxy listener.
 	if strings.TrimSpace(machineCode) != "" {
 		yml, err = normalizeAgentProxyConfig(yml)
@@ -784,6 +806,9 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			}
 			if value, ok := generatedDoc["proxies"]; ok {
 				currentDoc["proxies"] = value
+			}
+			if value, ok := generatedDoc["proxy-groups"]; ok {
+				currentDoc["proxy-groups"] = value
 			}
 			mergedRules, mergeErr := mergeManagedRuleValues(currentDoc["rules"], generatedDoc["rules"])
 			if mergeErr != nil {
@@ -1219,6 +1244,9 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	}
 	if value, ok := generatedDoc["proxies"]; ok {
 		customDoc["proxies"] = value
+	}
+	if value, ok := generatedDoc["proxy-groups"]; ok {
+		customDoc["proxy-groups"] = value
 	}
 	mergedRules, err := mergeManagedRuleValues(customDoc["rules"], generatedDoc["rules"])
 	if err != nil {
