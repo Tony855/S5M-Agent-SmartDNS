@@ -106,3 +106,62 @@ func TestDeleteProxiesRejectsInvalidIDsBeforeMutation(t *testing.T) {
 		t.Fatalf("invalid ID request deleted proxy: got=%#v err=%v", got, err)
 	}
 }
+
+
+func TestBindProxiesToMachineRejectsDuplicateIDsWithoutMutation(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-bulk-bind-duplicate.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	id := seedBulkProxy(t, store, "proxy-a", "")
+	if err := store.BindProxiesToMachine([]int64{id, id}, "node-target"); err == nil {
+		t.Fatal("expected duplicate IDs to be rejected")
+	}
+	got, err := store.GetProxy(id)
+	if err != nil { t.Fatalf("GetProxy: %v", err) }
+	if got.MachineCode != "" { t.Fatalf("duplicate request mutated proxy: machine_code=%q", got.MachineCode) }
+}
+
+func TestBindProxiesToMachineRejectsInvalidIDsBeforeMutation(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-bulk-bind-invalid.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	id := seedBulkProxy(t, store, "proxy-a", "")
+	if err := store.BindProxiesToMachine([]int64{id, 0}, "node-target"); err == nil {
+		t.Fatal("expected invalid ID to be rejected")
+	}
+	got, err := store.GetProxy(id)
+	if err != nil { t.Fatalf("GetProxy: %v", err) }
+	if got.MachineCode != "" { t.Fatalf("invalid ID request mutated proxy: machine_code=%q", got.MachineCode) }
+}
+
+func TestBindProxiesToMachineRollsBackOnMissingProxy(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-bulk-bind-missing.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	id := seedBulkProxy(t, store, "proxy-a", "")
+	if err := store.BindProxiesToMachine([]int64{id, 999999}, "node-target"); err == nil {
+		t.Fatal("expected missing proxy to abort the batch")
+	}
+	got, err := store.GetProxy(id)
+	if err != nil { t.Fatalf("GetProxy: %v", err) }
+	if got.MachineCode != "" { t.Fatalf("partial association committed: machine_code=%q", got.MachineCode) }
+}
+
+func TestBindProxiesToMachineRejectsInvalidMachineCode(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-bulk-bind-machine-code.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	id := seedBulkProxy(t, store, "proxy-a", "")
+	for _, code := range []string{"", "__GLOBAL__", "bad code", "x/y"} {
+		if err := store.BindProxiesToMachine([]int64{id}, code); err == nil {
+			t.Errorf("expected machine code %q to be rejected", code)
+		}
+	}
+	got, err := store.GetProxy(id)
+	if err != nil { t.Fatalf("GetProxy: %v", err) }
+	if got.MachineCode != "" { t.Fatalf("invalid machine code mutated proxy: machine_code=%q", got.MachineCode) }
+}
