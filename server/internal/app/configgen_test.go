@@ -558,11 +558,11 @@ func TestBuildConfigMapsDisabledCIDRToEnabledEndpoint(t *testing.T) {
 	if strings.Contains(got, "NETWORK,UDP,DIRECT") {
 		t.Fatal("不应生成全局 UDP 直连规则")
 	}
-	if !strings.Contains(got, "MATCH,REJECT") {
-		t.Fatal("严格规则模式必须以 MATCH,REJECT 收尾")
+	if !strings.Contains(got, "MATCH,PROXY") {
+		t.Fatal("规则模式必须以 MATCH,PROXY 收尾")
 	}
-	if strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatal("严格规则模式不能将未命中流量回退为 DIRECT")
+	if strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("存在可用代理时，未命中流量不能直连或拒绝")
 	}
 	for _, unwanted := range []string{"221111cdn", "^abc.*2222com"} {
 		if strings.Contains(got, unwanted) {
@@ -1034,10 +1034,10 @@ func TestBuildConfigRoutesConfiguredDoHThroughProxy(t *testing.T) {
 		"listen: 127.0.0.1:5353",
 		"fake-ip-range: 198.18.0.1/16",
 		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
-		"DOMAIN-SUFFIX,dns.alidns.com,proxy-a",
-		"DOMAIN-SUFFIX,doh.pub,proxy-a",
-		"DOMAIN-SUFFIX,dns.cloudflare.com,proxy-a",
-		"DOMAIN-SUFFIX,dns.google,proxy-a",
+		"DOMAIN-SUFFIX,dns.alidns.com,PROXY",
+		"DOMAIN-SUFFIX,doh.pub,PROXY",
+		"DOMAIN-SUFFIX,dns.cloudflare.com,PROXY",
+		"DOMAIN-SUFFIX,dns.google,PROXY",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated config missing %q:\\n%s", want, got)
@@ -1839,7 +1839,7 @@ func TestBuildConfigGeneratesSelectableProxyGroup(t *testing.T) {
 	if !ok {
 		t.Fatalf("PROXY members = %#v, want sequence", group["proxies"])
 	}
-	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588", "DIRECT"}
+	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588"}
 	if len(members) != len(want) {
 		t.Fatalf("PROXY members = %#v, want %#v", members, want)
 	}
@@ -1851,8 +1851,8 @@ func TestBuildConfigGeneratesSelectableProxyGroup(t *testing.T) {
 	if strings.Contains(got, "disabled-node") {
 		t.Fatal("disabled proxy must not be included in generated group")
 	}
-	if !strings.Contains(got, "MATCH,REJECT") {
-		t.Fatal("strict rule mode must keep rejecting unmatched traffic")
+	if !strings.Contains(got, "MATCH,PROXY") || strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("rule mode with enabled nodes must route unmatched traffic through PROXY")
 	}
 }
 
