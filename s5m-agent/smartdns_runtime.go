@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -165,34 +166,227 @@ func validateSmartDNSUpstreamEndpoint(directive, endpoint string, options []stri
 	var host string
 	switch directive {
 	case "server-tls", "server-quic":
+		var port string
 		var err error
-		host, _, err = net.SplitHostPort(endpoint)
-		if err != nil {
-			return fmt.Errorf("加密上游必须使用 IP:端口格式")
+		host, port, err = net.SplitHostPort(endpoint)
+		if err != nil || net.ParseIP(strings.Trim(host, "[]")) == nil {
+			return fmt.Errorf("加密上游必须使用字面 IP:端口格式")
+		}
+		if err := validateSmartDNSPort(port); err != nil {
+			return err
 		}
 	case "server-https":
 		u, err := url.Parse(endpoint)
-		if err != nil || u.Scheme != "https" || u.Hostname() == "" {
-			return fmt.Errorf("DoH 上游必须使用 https://IP/ 路径格式")
+		if err != nil || u.Scheme != "https" || u.Opaque != "" || u.User != nil ||
+			u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("DoH 上游必须使用不含凭据、查询参数或片段的 https://IP/ 路径格式")
 		}
 		host = u.Hostname()
+		if net.ParseIP(strings.Trim(host, "[]")) == nil {
+			return fmt.Errorf("DoH 上游地址必须是字面 IP，禁止依赖域名 Bootstrap 解析")
+		}
+		if port := u.Port(); port != "" {
+			if err := validateSmartDNSPort(port); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("不支持的加密上游类型")
 	}
 	if net.ParseIP(strings.Trim(host, "[]")) == nil {
 		return fmt.Errorf("加密上游地址必须是字面 IP，禁止依赖域名 Bootstrap 解析")
 	}
-	hasTLSName := false
-	for i := 0; i+1 < len(options); i++ {
-		if options[i] == "-host-name" && strings.TrimSpace(options[i+1]) != "" {
-			hasTLSName = true
-			break
+	tlsNameCount := 0
+	for i := 0; i < len(options); i++ {
+		if options[i] != "-host-name" {
+			continue
+		}
+		tlsNameCount++
+		if i+1 >= len(options) || !validSmartDNSTLSName(options[i+1]) {
+			return fmt.Errorf("-host-name 必须是有效 DNS 主机名，不能缺失或被解析为其他选项")
 		}
 	}
-	if !hasTLSName {
-		return fmt.Errorf("加密上游必须显式配置 -host-name 以验证 TLS 证书")
+	if tlsNameCount != 1 {
+		return fmt.Errorf("加密上游必须且只能配置一次 -host-name 以验证 TLS 证书")
 	}
 	return nil
+}
+
+func validateSmartDNSPort(value string) error {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("加密 DNS 上游端口必须是 1-65535 的数字")
+	}
+	return nil
+}
+
+var smartDNSTLSNamePattern = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.?package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+	"unicode/utf8"
+)
+
+const smartDNSConfigPath = "/data/smartdns.conf"
+const smartDNSPreflightOutputLimit = 8 << 10
+const smartDNSRestartCooldown = 30 * time.Second
+
+var errSmartDNSRestartCooldown = errors.New("SmartDNS restart is cooling down")
+
+type smartDNSRestartGate struct {
+	mu          sync.Mutex
+	lastAttempt time.Time
+}
+
+func (g *smartDNSRestartGate) TryAcquire(now time.Time, cooldown time.Duration) (bool, time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.lastAttempt.IsZero() {
+		remaining := cooldown - now.Sub(g.lastAttempt)
+		if remaining > 0 {
+			return false, remaining
+		}
+	}
+	g.lastAttempt = now
+	return true, 0
+}
+
+var smartDNSRestartLimiter smartDNSRestartGate
+
+func restartSmartDNSService() error {
+	allowed, _ := smartDNSRestartLimiter.TryAcquire(time.Now(), smartDNSRestartCooldown)
+	if !allowed {
+		return errSmartDNSRestartCooldown
+	}
+	return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
+}
+
+type boundedDiagnosticBuffer struct {
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	truncated bool
+}
+
+func (b *boundedDiagnosticBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := smartDNSPreflightOutputLimit - b.buffer.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			_, _ = b.buffer.Write(p[:remaining])
+			b.truncated = true
+		} else {
+			_, _ = b.buffer.Write(p)
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	// Report the full write as consumed: the child process must not fail just
+	// because diagnostic output is capped.
+	return len(p), nil
+}
+
+func (b *boundedDiagnosticBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func (b *boundedDiagnosticBuffer) Truncated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.truncated
+}
+
+var smartDNSConfigMu sync.Mutex
+
+func readSmartDNSConfig() ([]byte, error) {
+	smartDNSConfigMu.Lock()
+	defer smartDNSConfigMu.Unlock()
+	return readSmartDNSConfigAt(smartDNSConfigPath)
+}
+
+// readSmartDNSConfigAt opens the file without following symlinks, then validates
+// the opened descriptor rather than trusting a path-level Lstat that can race
+// with replacement of the file.
+func readSmartDNSConfigAt(path string) ([]byte, error) {
+	data, err := readSmartDNSFileNoFollow(path, 8<<10)
+	if err != nil {
+		return nil, fmt.Errorf("读取 SmartDNS 配置失败: %w", err)
+	}
+	if err := validateSmartDNSConfig(data); err != nil {
+		return nil, fmt.Errorf("当前 SmartDNS 配置不符合安全策略: %w", err)
+	}
+	return data, nil
+}
+
+// readSmartDNSFileNoFollow reads a bounded regular file without following a
+// symlink. It is also used for rollback snapshots, which must preserve bytes
+// even when an older configuration no longer passes the current policy.
+func readSmartDNSFileNoFollow(path string, maxBytes int64) ([]byte, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("SmartDNS 配置路径不是普通文件")
+	}
+	if info.Size() <= 0 || info.Size() > maxBytes {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 %d 字节", maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 || int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("SmartDNS 配置文件为空或超过 %d 字节", maxBytes)
+	}
+	return data, nil
+}
+
+// Indirect directory sync so failure handling can be exercised deterministically.
+var smartDNSDirectorySync = syncSmartDNSDirectory
+
+var smartDNSDirectiveAllowlist = map[string]bool{
+	"bind": true, "bind-tcp": true,
+	"server": true, "server-tcp": true, "server-tls": true,
+	"server-https": true, "server-quic": true,
+	"cache-size": true, "prefetch-domain": true, "serve-expired": true,
+	"log-level": true, "log-console": true, "log-syslog": true,
+	"dualstack-ip-selection": true, "rr-ttl": true, "rr-ttl-min": true,
+	"rr-ttl-max": true, "force-AAAA-SOA": true, "force-qtype-SOA": true,
+	"speed-check-mode": true, "response-mode": true,
+}
+
+var smartDNSControlChars = regexp.MustCompile("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]")
+
+)
+
+func validSmartDNSTLSName(value string) bool {
+	return len(value) <= 253 && smartDNSTLSNamePattern.MatchString(value)
 }
 
 // validateSmartDNSConfig accepts only resolver-related directives. It deliberately
