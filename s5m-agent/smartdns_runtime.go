@@ -150,7 +150,7 @@ func readSmartDNSFileNoFollow(path string, maxBytes int64) ([]byte, error) {
 var smartDNSDirectorySync = syncSmartDNSDirectory
 
 var smartDNSDirectiveAllowlist = map[string]bool{
-	"bind": true, "bind-tcp": true,
+	"bind": true, "bind-tcp": true, "group-begin": true, "group-end": true,
 	"server": true, "server-tcp": true, "server-tls": true,
 	"server-https": true, "server-quic": true,
 	"cache-size": true, "prefetch-domain": true, "serve-expired": true,
@@ -241,7 +241,9 @@ func validateSmartDNSConfig(data []byte) error {
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	usable := 0
 	bindUDP, bindTCP := false, false
+	domesticBindUDP, domesticBindTCP := false, false
 	encryptedUpstream := false
+	domesticDoTUpstreams := 0
 	for lineNo, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -259,13 +261,15 @@ func validateSmartDNSConfig(data []byte) error {
 			return fmt.Errorf("第 %d 行包含不允许的特殊内容", lineNo+1)
 		}
 		if directive == "bind" || directive == "bind-tcp" {
-			if len(fields) != 2 || fields[1] != "127.0.0.1:6053" {
-				return fmt.Errorf("第 %d 行监听地址必须保持在容器回环地址 127.0.0.1:6053", lineNo+1)
+			validPrimary := len(fields) == 2 && fields[1] == "127.0.0.1:6053"
+			validDomestic := len(fields) == 4 && fields[1] == "127.0.0.1:6054" && fields[2] == "-group" && fields[3] == "china-dot"
+			if !validPrimary && !validDomestic {
+				return fmt.Errorf("第 %d 行监听地址仅允许 127.0.0.1:6053 或绑定 china-dot 组的 127.0.0.1:6054", lineNo+1)
 			}
 			if directive == "bind" {
-				bindUDP = true
+				if validPrimary { bindUDP = true } else { domesticBindUDP = true }
 			} else {
-				bindTCP = true
+				if validPrimary { bindTCP = true } else { domesticBindTCP = true }
 			}
 		}
 		if directive == "server" || directive == "server-tcp" {
@@ -279,6 +283,21 @@ func validateSmartDNSConfig(data []byte) error {
 				return fmt.Errorf("第 %d 行加密上游无效: %w", lineNo+1, endpointErr)
 			}
 			encryptedUpstream = true
+			if directive == "server-tls" && strings.Contains(" "+strings.Join(fields[2:], " ")+" ", " -group china-dot ") {
+				endpoint := fields[1]
+				hostName := ""
+				for i := 2; i+1 < len(fields); i++ { if fields[i] == "-host-name" { hostName = fields[i+1] } }
+				allowed := map[string]string{
+					"223.5.5.5:853": "dns.alidns.com",
+					"223.6.6.6:853": "dns.alidns.com",
+					"1.12.12.12:853": "dot.pub",
+					"120.53.53.53:853": "dot.pub",
+				}
+				if allowed[endpoint] != hostName || !strings.Contains(" "+strings.Join(fields[2:], " ")+" ", " -exclude-default-group ") {
+					return fmt.Errorf("第 %d 行 china-dot 上游不在阿里云/腾讯 DoT 固定白名单中", lineNo+1)
+				}
+				domesticDoTUpstreams++
+			}
 		}
 		if strings.HasPrefix(directive, "server") && len(fields) < 2 {
 			return fmt.Errorf("第 %d 行上游 DNS 地址不能为空", lineNo+1)
@@ -293,6 +312,12 @@ func validateSmartDNSConfig(data []byte) error {
 	}
 	if !encryptedUpstream {
 		return fmt.Errorf("SmartDNS 至少需要一个加密上游（server-tls/server-https/server-quic）")
+	}
+	if domesticBindUDP != domesticBindTCP {
+		return fmt.Errorf("国内 DoT 监听必须同时配置 UDP/TCP 127.0.0.1:6054")
+	}
+	if domesticBindUDP && domesticDoTUpstreams == 0 {
+		return fmt.Errorf("启用 127.0.0.1:6054 时必须配置固定白名单 china-dot DoT 上游")
 	}
 	return nil
 }
