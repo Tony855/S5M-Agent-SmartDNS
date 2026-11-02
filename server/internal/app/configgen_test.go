@@ -394,7 +394,7 @@ rules:
 			"CUSTOM-MANUAL",
 			"PROXY",
 			"DOMAIN-SUFFIX,custom-node.example,DIRECT",
-			"MATCH,REJECT",
+			"MATCH,PROXY",
 		} {
 			if !strings.Contains(got.YAML, want) {
 				t.Errorf("attempt %d: synced YAML lost or omitted %q:\n%s", attempt, want, got.YAML)
@@ -851,14 +851,14 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 				}
 			}
 			if tt.mode == "rule" {
-				if strings.Contains(got, "MATCH,proxy-a") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "GEOIP,CN,DIRECT") {
-					t.Errorf("rule mode must reject unmatched traffic and must not add implicit proxy/direct fallback:\\n%s", got)
+				if !strings.Contains(got, "MATCH,PROXY") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "MATCH,REJECT") {
+					t.Errorf("rule mode must route unmatched traffic through PROXY:\\n%s", got)
 				}
-				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,REJECT") {
-					t.Errorf("controller bypass must appear before terminal reject rule:\\n%s", got)
+				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,PROXY") {
+					t.Errorf("controller bypass must appear before terminal proxy rule:\\n%s", got)
 				}
-				if strings.Index(got, "PROCESS-NAME,smartdns,proxy-a") > strings.Index(got, "MATCH,REJECT") {
-					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal reject:\\n%s", got)
+				if strings.Index(got, "PROCESS-NAME,smartdns,proxy-a") > strings.Index(got, "MATCH,PROXY") {
+					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal proxy rule:\\n%s", got)
 				}
 			}
 		})
