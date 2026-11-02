@@ -148,6 +148,50 @@ func buildSmartDNSClientRuntimeMappings(plan SmartDNSRoutingPlan, usedPorts map[
 	return mappings, nil
 }
 
+
+ 
+// applySmartDNSPerClientListenersWithMappings returns the exact assignments
+// serialized into Mihomo. SmartDNS generation must consume this returned slice;
+// it must not allocate listener ports a second time.
+func applySmartDNSPerClientListenersWithMappings(document string, plan SmartDNSRoutingPlan) (string, []SmartDNSClientRuntimeMapping, error) {
+	updated, err := applySmartDNSPerClientListeners(document, plan)
+	if err != nil {
+		return "", nil, err
+	}
+	if plan.Mode != SmartDNSProxyModePerClient {
+		return updated, nil, nil
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(updated), &root); err != nil {
+		return "", nil, fmt.Errorf("解析已生成的 Mihomo Listener 配置失败: %w", err)
+	}
+	listeners, ok := root["listeners"].([]any)
+	if !ok || len(listeners) < len(plan.Clients) {
+		return "", nil, fmt.Errorf("生成后的 Mihomo Listener 数量不足")
+	}
+	managed := listeners[len(listeners)-len(plan.Clients):]
+	mappings := make([]SmartDNSClientRuntimeMapping, 0, len(plan.Clients))
+	for i, raw := range managed {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return "", nil, fmt.Errorf("生成的 Mihomo Listener %d 格式无效", i)
+		}
+		name, nameOK := item["name"].(string)
+		address, addressOK := item["listen"].(string)
+		proxy, proxyOK := item["proxy"].(string)
+		port, portOK := item["port"].(int)
+		if !nameOK || !addressOK || !proxyOK || !portOK {
+			return "", nil, fmt.Errorf("生成的 Mihomo Listener %d 缺少有效映射字段", i)
+		}
+		mappings = append(mappings, SmartDNSClientRuntimeMapping{
+			ClientCIDR: plan.Clients[i].ClientCIDR,
+			ProxyName: proxy, ListenerName: name,
+			ListenerAddress: address, ListenerPort: port,
+		})
+	}
+	return updated, mappings, nil
+}
+
 // applySmartDNSPerClientListeners creates one loopback-only SOCKS listener per
 // client mapping. Each listener is pinned directly to the selected Mihomo
 // outbound; it never traverses the global rules or a shared proxy group.
