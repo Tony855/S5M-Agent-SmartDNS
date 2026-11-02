@@ -2,7 +2,6 @@ package app
 
 import (
 	"strings"
-	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
