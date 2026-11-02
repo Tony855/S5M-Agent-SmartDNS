@@ -661,6 +661,8 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 		applySharedFallback = true
 	}
 	if applySharedFallback {
+		routing.Mode = strings.ToLower(strings.TrimSpace(routing.Mode))
+		routing.Strategy = strings.ToLower(strings.TrimSpace(routing.Strategy))
 		if routing.Mode == "" {
 			routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
 		}
@@ -669,7 +671,8 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 		}
 		refs := make([]SmartDNSProxyRef, 0, len(proxies))
 		for _, p := range proxies {
-			matches := p.MachineCode == "__GLOBAL__" || (machineCode != "" && p.MachineCode == machineCode)
+			machine := strings.TrimSpace(p.MachineCode)
+			matches := machine == "__GLOBAL__" || (machineCode != "" && machine == machineCode)
 			if matches { refs = append(refs, SmartDNSProxyRef{Name: p.Name, Enabled: p.Enabled}) }
 		}
 		hasEnabledProxy := false
@@ -686,6 +689,10 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 				yml, err = applySmartDNSSharedFallback(yml, plan)
 			}
 			if err != nil { return "", err }
+		} else {
+			if _, planErr := BuildSmartDNSRoutingPlan(routing, refs); planErr != nil {
+				return "", fmt.Errorf("SmartDNS 路由计划无效: %w", planErr)
+			}
 		}
 	}
 	// Controller configs keep their separate listener; Agent configs expose no explicit proxy listener.
