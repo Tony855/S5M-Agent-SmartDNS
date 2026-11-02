@@ -256,3 +256,59 @@ rules: [MATCH,DIRECT]
 		})
 	}
 }
+
+
+func TestApplySmartDNSPerClientListenersRejectsInvalidAndDuplicateClientCIDRs(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+rules: [MATCH,DIRECT]
+`
+	cases := []struct {
+		name string
+		cidrs []string
+	}{
+		{name: "invalid CIDR", cidrs: []string{"not-a-cidr"}},
+		{name: "duplicate canonical CIDR", cidrs: []string{"192.168.1.1/24", "192.168.1.0/24"}},
+		{name: "duplicate IPv6 CIDR", cidrs: []string{"2001:db8::1/64", "2001:db8::/64"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clients := make([]SmartDNSClientRoute, 0, len(tc.cidrs))
+			for _, cidr := range tc.cidrs {
+				clients = append(clients, SmartDNSClientRoute{ClientCIDR: cidr, ProxyName: "node-a"})
+			}
+			plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModePerClient, ProxyNames: []string{"node-a"}, Clients: clients}
+			if _, err := applySmartDNSPerClientListeners(input, plan); err == nil {
+				t.Fatal("expected invalid or duplicate client CIDR to be rejected")
+			}
+		})
+	}
+}
+
+func TestApplySmartDNSPerClientListenersAcceptsDistinctCanonicalCIDRs(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+rules: [MATCH,DIRECT]
+`
+	plan := SmartDNSRoutingPlan{
+			Mode: SmartDNSProxyModePerClient,
+			ProxyNames: []string{"node-a"},
+			Clients: []SmartDNSClientRoute{
+			{ClientCIDR: "192.168.1.1/32", ProxyName: "node-a"},
+			{ClientCIDR: "192.168.1.2/32", ProxyName: "node-a"},
+		},
+	}
+	got, err := applySmartDNSPerClientListeners(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	if gotListeners := len(doc["listeners"].([]any)); gotListeners != 2 {
+		t.Fatalf("got %d listeners, want 2", gotListeners)
+	}
+}
