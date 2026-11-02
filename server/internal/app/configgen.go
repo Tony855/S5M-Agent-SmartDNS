@@ -1285,7 +1285,14 @@ func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
 			return nil, fmt.Errorf("自定义规则必须是非空字符串")
 		}
 		rule = strings.TrimSpace(rule)
-		if strings.HasPrefix(strings.ToUpper(rule), "MATCH,") || seen[rule] {
+		upper := strings.ToUpper(rule)
+		parts := strings.Split(rule, ",")
+		isSmartDNSProcessRule := len(parts) >= 2 &&
+			strings.EqualFold(strings.TrimSpace(parts[0]), "PROCESS-NAME") &&
+			strings.EqualFold(strings.TrimSpace(parts[1]), "smartdns")
+		if strings.HasPrefix(upper, "MATCH,") || isSmartDNSProcessRule || seen[rule] {
+			// The generated SmartDNS process route is authoritative. Do not
+			// append stale custom rules such as PROCESS-NAME,smartdns,REJECT.
 			continue
 		}
 		merged = append(merged, rule)
