@@ -1709,3 +1709,53 @@ func TestBrowserEventsWebSocketMessageLimitExceedsNodeYAMLAndKeepsAgentLimit(t *
 		t.Fatalf("browser WebSocket limit (%d) must exceed Agent limit (%d)", browserEventsMaxMessageBytes, agentWSMaxMessageBytes)
 	}
 }
+
+
+func TestBrowserEventsWebSocketAcceptsLargeMessageAndStaysConnected(t *testing.T) {
+	app, _, _ := websocketTestApp(t)
+	if err := app.store.CreateUser("browser-ws-admin", "test-hash", "admin"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	const ticket = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	app.browserTickets = map[string]browserWSTicket{
+		ticket: {Username: "browser-ws-admin", ExpiresAt: time.Now().Add(time.Minute)},
+	}
+	server := httptest.NewServer(http.HandlerFunc(app.handleBrowserEventsWebSocket))
+	defer server.Close()
+
+	origin := "http" + server.URL[len("http"):]
+	header := http.Header{"Origin": []string{origin}}
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):]+"/?ticket="+ticket, header)
+	if err != nil {
+		t.Fatalf("dial browser WebSocket: err=%v response=%v", err, response)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var welcome map[string]any
+	if err := conn.ReadJSON(&welcome); err != nil || welcome["type"] != "connected" {
+		t.Fatalf("read connected event: payload=%#v err=%v", welcome, err)
+	}
+
+	largePayload := strings.Repeat("x", 64<<10) // 64 KiB, four times the former limit.
+	if err := conn.WriteJSON(browserControlMessage{Type: "unsupported.smoke", RequestID: "large", ConfigYAML: largePayload}); err != nil {
+		t.Fatalf("write 64 KiB browser message: %v", err)
+	}
+	var largeResult map[string]any
+	if err := conn.ReadJSON(&largeResult); err != nil {
+		t.Fatalf("read response to 64 KiB message (connection likely closed by read limit): %v", err)
+	}
+	if largeResult["type"] != "request.result" || largeResult["request_id"] != "large" {
+		t.Fatalf("unexpected large-message response: %#v", largeResult)
+	}
+
+	if err := conn.WriteJSON(browserControlMessage{Type: "unsupported.smoke", RequestID: "after-large"}); err != nil {
+		t.Fatalf("write follow-up message after large message: %v", err)
+	}
+	var followup map[string]any
+	if err := conn.ReadJSON(&followup); err != nil {
+		t.Fatalf("WebSocket did not remain connected after large message: %v", err)
+	}
+	if followup["type"] != "request.result" || followup["request_id"] != "after-large" {
+		t.Fatalf("unexpected follow-up response: %#v", followup)
+	}
+}
