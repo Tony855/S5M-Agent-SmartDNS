@@ -1696,3 +1696,16 @@ func TestLegacyHTTPAgentConfigETagTracksPersistedConfigChanges(t *testing.T) {
 		t.Fatalf("latest unchanged response = status %d body %q, want empty 304", latestUnchanged.Code, latestUnchanged.Body.String())
 	}
 }
+
+
+func TestBrowserEventsWebSocketMessageLimitExceedsNodeYAMLAndKeepsAgentLimit(t *testing.T) {
+	if browserEventsMaxMessageBytes != 4<<20 {
+		t.Fatalf("browser WebSocket message limit = %d, want 4 MiB", browserEventsMaxMessageBytes)
+	}
+	if agentWSMaxMessageBytes != 16<<10 {
+		t.Fatalf("Agent WebSocket message limit = %d, want 16 KiB", agentWSMaxMessageBytes)
+	}
+	if browserEventsMaxMessageBytes <= agentWSMaxMessageBytes {
+		t.Fatalf("browser WebSocket limit (%d) must exceed Agent limit (%d)", browserEventsMaxMessageBytes, agentWSMaxMessageBytes)
+	}
+}
