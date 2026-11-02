@@ -153,7 +153,7 @@ var smartDNSDirectiveAllowlist = map[string]bool{
 	"bind": true, "bind-tcp": true,
 	"server": true, "server-tcp": true, "server-tls": true,
 	"server-https": true, "server-quic": true,
-	"cache-size": true, "prefetch-domain": true, "serve-expired": true,
+	"cache-size": true, "cache-persist": true, "cache-file": true, "cache-checkpoint-time": true, "prefetch-domain": true, "serve-expired": true,
 	"log-level": true, "log-console": true, "log-syslog": true,
 	"dualstack-ip-selection": true, "rr-ttl": true, "rr-ttl-min": true,
 	"rr-ttl-max": true, "force-AAAA-SOA": true, "force-qtype-SOA": true,
@@ -254,6 +254,15 @@ func validateSmartDNSConfig(data []byte) error {
 			return fmt.Errorf("第 %d 行配置格式无效", lineNo+1)
 		}
 		directive := fields[0]
+		if directive == "cache-persist" && (len(fields) != 2 || fields[1] != "yes") {
+			return fmt.Errorf("第 %d 行 cache-persist 仅允许 yes", lineNo+1)
+		}
+		if directive == "cache-file" && (len(fields) != 2 || fields[1] != "/data/smartdns.cache") {
+			return fmt.Errorf("第 %d 行 cache-file 仅允许 /data/smartdns.cache", lineNo+1)
+		}
+		if directive == "cache-checkpoint-time" && (len(fields) != 2 || fields[1] != "3600") {
+			return fmt.Errorf("第 %d 行 cache-checkpoint-time 仅允许 3600 秒", lineNo+1)
+		}
 		if !smartDNSDirectiveAllowlist[directive] {
 			return fmt.Errorf("第 %d 行不允许配置指令 %q", lineNo+1, directive)
 		}
