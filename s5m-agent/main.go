@@ -632,6 +632,14 @@ func mergeConfig(agentYml []byte) (bool, error) {
 func mergeConfigWithCentralURL(agentYml []byte, centralURL string) (bool, error) {
 	mihomoConfigApplyMu.Lock()
 	defer mihomoConfigApplyMu.Unlock()
+	return mergeConfigWithCentralURLLocked(agentYml, centralURL)
+}
+
+// mergeConfigWithCentralURLLocked applies the controller configuration while
+// the caller holds mihomoConfigApplyMu. The public wrapper above preserves the
+// original serialization contract; coordinated transactions acquire both
+// configuration locks first and call this lock-held variant directly.
+func mergeConfigWithCentralURLLocked(agentYml []byte, centralURL string) (bool, error) {
 	mainPath := mihomoConfigPath()
 	previousPath := mainPath + ".previous"
 	nextCfg, err := validateMihomoConfigYAML(agentYml)
