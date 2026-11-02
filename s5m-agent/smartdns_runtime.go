@@ -416,7 +416,7 @@ func validateSmartDNSConfig(data []byte) error {
 		if !smartDNSDirectiveAllowlist[directive] {
 			return fmt.Errorf("第 %d 行不允许配置指令 %q", lineNo+1, directive)
 		}
-		if strings.ContainsAny(line, "`$") {
+		if strings.Contains(line, "$") || strings.ContainsRune(line, rune(96)) {
 			return fmt.Errorf("第 %d 行包含不允许的特殊内容", lineNo+1)
 		}
 		if directive == "bind" || directive == "bind-tcp" {
