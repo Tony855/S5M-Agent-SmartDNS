@@ -1475,6 +1475,7 @@ func TestHandleUpdateSettingsReportsNodeSyncFailureAfterPersistingSettings(t *te
 
 	if err := store.UpdateSettings(map[string]string{
 		"agent_machine_node-a": "authorized-token",
+		"agent_mihomo_secret_node-a": "test-secret",
 	}); err != nil {
 		t.Fatalf("seed Agent authorization: %v", err)
 	}
