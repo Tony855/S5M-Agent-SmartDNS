@@ -1652,6 +1652,22 @@ func TestLegacyHTTPAgentConfigETagTracksPersistedConfigChanges(t *testing.T) {
 		t.Fatalf("304 ETag = %q, want %q", unchanged.Header().Get("ETag"), firstETag)
 	}
 
+	for _, validator := range []struct {
+		name string
+		value string
+	}{
+		{name: "wildcard", value: "*"},
+		{name: "weak", value: "W/" + firstETag},
+		{name: "list", value: `"some-other-config", ` + firstETag},
+	} {
+		t.Run("if-none-match-"+validator.name, func(t *testing.T) {
+			response := request(validator.value)
+			if response.Code != http.StatusNotModified || response.Body.Len() != 0 {
+				t.Fatalf("validator %q response = status %d body %q, want empty 304", validator.value, response.Code, response.Body.String())
+			}
+		})
+	}
+
 	secondYAML := strings.Replace(firstYAML, "first-secret", "second-secret", 1)
 	if err := app.store.SaveNodeConfig(code, secondYAML); err != nil {
 		t.Fatalf("save changed node config: %v", err)
