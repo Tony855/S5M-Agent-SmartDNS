@@ -286,8 +286,8 @@ bind-tcp 127.0.0.1:6053
 bind 127.0.0.1:6054 -group china-dot
 bind-tcp 127.0.0.1:6054 -group china-dot
 server-tls 1.1.1.1:853 -host-name cloudflare-dns.com
-server-tls 223.5.5.5:853 -host-name dns.alidns.com -group china-dot -exclude-default-group
-server-tls 1.12.12.12:853 -host-name dot.pub -group china-dot -exclude-default-group
+server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
 `)
 	if err := validateSmartDNSConfig(valid); err != nil {
 		t.Fatalf("valid domestic DoT group rejected: %v", err)
@@ -354,8 +354,8 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 		"server-tls 8.8.8.8:853 -host-name dns.google",
 		"bind 127.0.0.1:6054 -group china-dot",
 		"bind-tcp 127.0.0.1:6054 -group china-dot",
-		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -group china-dot -exclude-default-group",
-		"server-tls 1.12.12.12:853 -host-name dot.pub -group china-dot -exclude-default-group",
+		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
+		"server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("bundled SmartDNS config missing %q", want)
