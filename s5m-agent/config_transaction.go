@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path/filepath"\n\t"time"
 )
 
 // snapshotFileForTransaction preserves the exact previous bytes and whether
