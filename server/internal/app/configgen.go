@@ -769,6 +769,7 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 	}
 	const prefix = "agent_machine_"
 	configs := make(map[string]string)
+	expectedConfigs := make(map[string]string)
 	for key, token := range settings {
 		if !strings.HasPrefix(key, prefix) || strings.TrimSpace(token) == "" {
 			continue
@@ -787,6 +788,11 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 		if err != nil {
 			return fmt.Errorf("读取机器 %s 的独立配置失败: %w", machineCode, err)
 		}
+		expectedYAML := ""
+		if existing != nil {
+			expectedYAML = existing.YAML
+		}
+		expectedConfigs[machineCode] = expectedYAML
 		if existing != nil && strings.TrimSpace(existing.YAML) != "" {
 			var currentDoc, generatedDoc map[string]any
 			if err := yaml.Unmarshal([]byte(existing.YAML), &currentDoc); err != nil {
@@ -834,7 +840,7 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 		}
 		configs[machineCode] = generated
 	}
-	if err := a.store.SaveNodeConfigs(configs); err != nil {
+	if err := a.store.SaveNodeConfigsIfUnchanged(expectedConfigs, configs); err != nil {
 		return fmt.Errorf("批量保存节点配置失败: %w", err)
 	}
 	return nil
