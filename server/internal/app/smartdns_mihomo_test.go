@@ -116,3 +116,81 @@ proxies:
 		t.Fatalf("custom domain rule incorrectly precedes SmartDNS routing: %#v", rules)
 	}
 }
+
+
+func TestApplySmartDNSPerClientListenersPinsLoopbackSOCKSToExactOutbound(t *testing.T) {
+	input := `proxies:
+  - name: Mihomo-IPv6-24580
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+  - name: Mihomo-IPv6-24581
+    type: socks5
+    server: 192.0.2.11
+    port: 1080
+listeners: []
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - MATCH,DIRECT
+`
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModePerClient,
+		ProxyNames: []string{"Mihomo-IPv6-24580", "Mihomo-IPv6-24581"},
+		Clients: []SmartDNSClientRoute{
+			{ClientCIDR: "192.168.18.23/32", ProxyName: "Mihomo-IPv6-24580", ListenPort: 16080},
+			{ClientCIDR: "192.168.18.33/32", ProxyName: "Mihomo-IPv6-24581", ListenPort: 16081},
+		},
+	}
+	got, err := applySmartDNSPerClientListeners(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	listeners := doc["listeners"].([]any)
+	if len(listeners) != 2 { t.Fatalf("got %d listeners, want 2", len(listeners)) }
+	for i, want := range []struct{ port int; proxy string }{
+		{16080, "Mihomo-IPv6-24580"}, {16081, "Mihomo-IPv6-24581"},
+	} {
+		item := listeners[i].(map[string]any)
+		if item["type"] != "socks" || item["listen"] != "127.0.0.1" ||
+			item["udp"] != true || item["proxy"] != want.proxy ||
+			item["port"] != want.port {
+			t.Fatalf("listener %d is not isolated as expected: %#v", i, item)
+		}
+	}
+	rules := doc["rules"].([]any)
+	if rules[0] != "DOMAIN-SUFFIX,v2net.cc,DIRECT" || rules[1] != "MATCH,DIRECT" {
+		t.Fatalf("existing routing rules were modified: %#v", rules)
+	}
+}
+
+func TestApplySmartDNSPerClientListenersRejectsUnknownProxyAndPortCollision(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+listeners:
+  - name: existing
+    type: socks
+    listen: 127.0.0.1
+    port: 16080
+    proxy: node-a
+rules: [MATCH,DIRECT]
+`
+	cases := []struct{name string; plan SmartDNSRoutingPlan}{
+		{"unknown outbound", SmartDNSRoutingPlan{Mode:SmartDNSProxyModePerClient, ProxyNames:[]string{"missing"}, Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"missing",ListenPort:16081}}}},
+		{"port collision", SmartDNSRoutingPlan{Mode:SmartDNSProxyModePerClient, ProxyNames:[]string{"node-a"}, Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a",ListenPort:16080}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name,func(t *testing.T){
+			if _,err:=applySmartDNSPerClientListeners(input,tc.plan);err==nil { t.Fatal("expected validation failure") }
+		})
+	}
+}
+
+func TestApplySmartDNSPerClientListenersLeavesLegacyUntouched(t *testing.T) {
+	input := "rules:\\n  - MATCH,DIRECT\\n"
+	got, err := applySmartDNSPerClientListeners(input, SmartDNSRoutingPlan{Mode:"legacy"})
+	if err != nil { t.Fatal(err) }
+	if got != input { t.Fatalf("legacy document changed: %q", got) }
+}
