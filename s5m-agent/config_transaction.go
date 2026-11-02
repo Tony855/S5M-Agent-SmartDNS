@@ -27,10 +27,40 @@ func snapshotFileForTransaction(path string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if err := atomicWriteFile(path+".previous", data, 0600); err != nil {
+	if err := writeTransactionBackupPreservingPrior(path+".previous", data, atomicWriteFile); err != nil {
 		return nil, false, err
 	}
 	return data, true, nil
+}
+
+// writeTransactionBackupPreservingPrior keeps an existing recovery sidecar
+// intact if writing its replacement fails at any point, including after rename
+// but before the containing-directory fsync completes.
+func writeTransactionBackupPreservingPrior(path string, data []byte, write func(string, []byte, os.FileMode) error) error {
+	previous, readErr := os.ReadFile(path)
+	previousExists := readErr == nil
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return fmt.Errorf("读取已有事务备份失败: %w", readErr)
+	}
+	if err := write(path, data, 0600); err != nil {
+		var restoreErr error
+		if previousExists {
+			restoreErr = atomicWriteFile(path, previous, 0600)
+		} else {
+			restoreErr = os.Remove(path)
+			if os.IsNotExist(restoreErr) {
+				restoreErr = nil
+			}
+			if restoreErr == nil {
+				restoreErr = syncTransactionDirectory(filepath.Dir(path))
+			}
+		}
+		if restoreErr != nil {
+			return fmt.Errorf("写入事务备份失败: %v；恢复原备份副本失败: %w", err, restoreErr)
+		}
+		return err
+	}
+	return nil
 }
 
 func syncTransactionDirectory(path string) error {
