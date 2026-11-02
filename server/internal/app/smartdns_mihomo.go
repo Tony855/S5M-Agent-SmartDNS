@@ -74,17 +74,21 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		// Never skip arbitrary operator DOMAIN/IP-CIDR rules: doing so could let
 		// a broad custom rule shadow the explicit SmartDNS egress policy.
 		insertAt := 0
+		// Only treat a directly following DOMAIN rule as the controller bypass
+		// when the generated v2net.cc suffix bypass is present. An arbitrary
+		// operator DOMAIN rule at the beginning must not be mistaken for it.
+		controllerBypassPrefix := false
 		if insertAt < len(rules) {
 			if rule, ok := rules[insertAt].(string); ok &&
 				strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rule)), "DOMAIN-SUFFIX,V2NET.CC,DIRECT") {
 				insertAt++
+				controllerBypassPrefix = true
 			}
 		}
-		if insertAt < len(rules) {
+		if controllerBypassPrefix && insertAt < len(rules) {
 			if rule, ok := rules[insertAt].(string); ok {
 				upper := strings.ToUpper(strings.TrimSpace(rule))
-				if strings.HasPrefix(upper, "DOMAIN,") && strings.HasSuffix(upper, ",DIRECT") ||
-					strings.HasPrefix(upper, "IP-CIDR,") && strings.Contains(upper, ",DIRECT") {
+				if strings.HasPrefix(upper, "DOMAIN,") && strings.HasSuffix(upper, ",DIRECT") {
 					insertAt++
 				}
 			}
