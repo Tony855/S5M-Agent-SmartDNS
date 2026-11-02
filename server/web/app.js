@@ -253,6 +253,34 @@ createApp({
       }
     };
 
+    const updateDashboardAgentStatus = (code, status, lastSeen) => {
+      const current = overview.value || {};
+      const nodes = Array.isArray(current.remote_nodes) ? current.remote_nodes.slice() : [];
+      const index = nodes.findIndex(node => String(node.machine_code || '') === String(code));
+      if (index < 0) return;
+      const previous = nodes[index] || {};
+      const healthy = status.mihomo_api_healthy === true || status.mihomo_healthy === true;
+      nodes.splice(index, 1, {
+        ...previous,
+        hostname: String(status.hostname || previous.hostname || ''),
+        online: true,
+        healthy,
+        mihomo_api_online: healthy,
+        mihomo_version: status.mihomo_version || previous.mihomo_version || '',
+        connections: Math.max(0, Number(status.connections) || 0),
+        downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
+        uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
+        downloadTotal: Math.max(0, Number(status.download_total) || Number(previous.downloadTotal) || 0),
+        uploadTotal: Math.max(0, Number(status.upload_total) || Number(previous.uploadTotal) || 0),
+        last_seen: lastSeen,
+        updated_at: new Date(lastSeen * 1000).toISOString(),
+        last_error: String(status.last_error || '')
+      });
+      const online = nodes.filter(node => node.online === true).length;
+      const mihomoHealthy = nodes.filter(node => node.online === true && node.healthy === true).length;
+      overview.value = { ...current, remote_nodes: nodes, agent_online: online, remote_online: online, mihomo_healthy: mihomoHealthy, remote_mihomo_healthy: mihomoHealthy };
+    };
+
     const startStaleStatusTimer = () => {
       if (staleStatusTimer !== null) return;
       staleStatusTimer = setInterval(() => {
@@ -260,10 +288,27 @@ createApp({
         agentEntries.value = agentEntries.value.map(item => {
           const age = now - (Number(item.last_seen) || 0);
           if (item.online && (age < 0 || age >= 90)) {
-            return { ...item, online: false, mihomoRunning: false, runtimeMessage: '运行状态已记录，但心跳已超时；当前 Mihomo 状态未知' };
+            return { ...item, online: false, mihomoRunning: false, mihomoApiHealthy: false, runtimeMessage: '运行状态已记录，但心跳已超时；当前 Mihomo 状态未知' };
           }
           return item;
         });
+        const current = overview.value || {};
+        if (Array.isArray(current.remote_nodes)) {
+          let changed = false;
+          const nodes = current.remote_nodes.map(node => {
+            const age = now - (Number(node.last_seen) || 0);
+            if (node.online === true && (age < 0 || age >= 90)) {
+              changed = true;
+              return { ...node, online: false, healthy: false, mihomo_api_online: false, uploadSpeed: 0, downloadSpeed: 0 };
+            }
+            return node;
+          });
+          if (changed) {
+            const online = nodes.filter(node => node.online === true).length;
+            const mihomoHealthy = nodes.filter(node => node.online === true && node.healthy === true).length;
+            overview.value = { ...current, remote_nodes: nodes, agent_online: online, remote_online: online, mihomo_healthy: mihomoHealthy, remote_mihomo_healthy: mihomoHealthy };
+          }
+        }
       }, 5000);
     };
 
@@ -329,6 +374,7 @@ createApp({
             return;
           }
           if (message.type === 'agent.status.updated' && message.machine_code) {
+            agentStatusRevision++;
             const code = String(message.machine_code);
             const status = message.status && typeof message.status === 'object' ? message.status : {};
             const receivedAt = Number(message.last_seen) || Math.floor(Date.now() / 1000);
@@ -339,6 +385,7 @@ createApp({
               down: Math.max(0, Number(status.download_speed) || 0),
               conns: Math.max(0, Number(status.connections) || 0)
             };
+            updateDashboardAgentStatus(code, status, receivedAt);
             const index = agentEntries.value.findIndex(item => item.code === code);
             if (index >= 0) {
               const previous = agentEntries.value[index];
@@ -1125,12 +1172,15 @@ createApp({
 
     const agentRefreshing = ref(false);
     let agentBindingRevision = 0;
+    let agentStatusRevision = 0;
     const loadAgentsData = async () => {
       // Never overlap instance requests. Once data exists, refresh silently so
       // the current list and expanded cards remain mounted while the request runs.
       if (agentLoading.value || agentRefreshing.value) return;
       const revocationRevision = agentBindingRevision;
+      const statusRevision = agentStatusRevision;
       let retryAfterRevocation = false;
+      let retryAfterStatusEvent = false;
       const hasExistingData = agentEntries.value.length > 0;
       if (hasExistingData) agentRefreshing.value = true;
       else agentLoading.value = true;
@@ -1197,6 +1247,10 @@ createApp({
           // A revoke event arrived while this snapshot was loading. Discard it
           // and fetch a fresh authoritative snapshot after releasing the lock.
           retryAfterRevocation = true;
+        } else if (statusRevision !== agentStatusRevision) {
+          // A live heartbeat arrived while this snapshot was in flight. Its
+          // newer status must not be overwritten by the older list response.
+          retryAfterStatusEvent = true;
         } else {
           agentEntries.value = list;
           await loadMachineProxyModes(list);
@@ -1212,7 +1266,7 @@ createApp({
       } finally {
         agentLoading.value = false;
         agentRefreshing.value = false;
-        if (retryAfterRevocation) {
+        if (retryAfterRevocation || retryAfterStatusEvent) {
           Promise.resolve().then(() => loadAgentsData());
         }
       }
