@@ -1874,14 +1874,12 @@ func TestBuildConfigRejectsMihomoReservedProxyNames(t *testing.T) {
 func TestBuildConfigRejectsUnsafeProxyNames(t *testing.T) {
 	unsafe := []string{"node,other", "node\nMATCH,PROXY", "node\x00name", "node\tname"}
 	for _, name := range unsafe {
-		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
-			_, err := buildConfigFromProxies([]Proxy{{
-				Name: name, Type: "socks5", Server: "192.0.2.10", Port: 1080,
-				MachineCode: "__GLOBAL__", Enabled: true,
-			}}, "", "test-secret")
-			if err == nil || !strings.Contains(err.Error(), "代理名称不能包含逗号或控制字符") {
-				t.Fatalf("unsafe proxy name should be rejected, got %v", err)
-			}
-		})
+		_, err := buildConfigFromProxies([]Proxy{{
+			Name: name, Type: "socks5", Server: "192.0.2.10", Port: 1080,
+			MachineCode: "__GLOBAL__", Enabled: true,
+		}}, "", "test-secret")
+		if err == nil || !strings.Contains(err.Error(), "代理名称不能包含逗号或控制字符") {
+			t.Errorf("unsafe proxy name %q should be rejected, got %v", name, err)
+		}
 	}
 }
