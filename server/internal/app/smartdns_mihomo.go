@@ -70,17 +70,24 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 			// because DNS was expected to follow destination geography. Shared
 		// SmartDNS mode explicitly selects one DNS egress group, so add its rule
 		// after the controller/domain bypasses and before client/terminal rules.
+		// Only the generated controller bypasses may precede this process rule.
+		// Never skip arbitrary operator DOMAIN/IP-CIDR rules: doing so could let
+		// a broad custom rule shadow the explicit SmartDNS egress policy.
 		insertAt := 0
-		for insertAt < len(rules) {
-			rule, ok := rules[insertAt].(string)
-			if !ok { break }
-			upper := strings.ToUpper(strings.TrimSpace(rule))
-			if strings.HasPrefix(upper, "DOMAIN-SUFFIX,V2NET.CC,") ||
-				strings.HasPrefix(upper, "DOMAIN,") || strings.HasPrefix(upper, "IP-CIDR,") {
+		if insertAt < len(rules) {
+			if rule, ok := rules[insertAt].(string); ok &&
+				strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rule)), "DOMAIN-SUFFIX,V2NET.CC,DIRECT") {
 				insertAt++
-				continue
 			}
-			break
+		}
+		if insertAt < len(rules) {
+			if rule, ok := rules[insertAt].(string); ok {
+				upper := strings.ToUpper(strings.TrimSpace(rule))
+				if strings.HasPrefix(upper, "DOMAIN,") && strings.HasSuffix(upper, ",DIRECT") ||
+					strings.HasPrefix(upper, "IP-CIDR,") && strings.Contains(upper, ",DIRECT") {
+					insertAt++
+				}
+			}
 		}
 		rules = append(rules, nil)
 		copy(rules[insertAt+1:], rules[insertAt:])
