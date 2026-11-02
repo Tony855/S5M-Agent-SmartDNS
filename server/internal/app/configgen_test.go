@@ -181,6 +181,27 @@ tun:
 	}
 }
 
+func TestNormalizeAgentProxyConfigRoutesChinaDomainsToDomesticDoT(t *testing.T) {
+	input := `secret: test-secret
+dns:
+  nameserver-policy:
+    "geosite:cn": 9.9.9.9
+    "+.internal": 10.0.0.1
+`
+	got, err := normalizeAgentProxyConfig(input)
+	if err != nil { t.Fatalf("normalizeAgentProxyConfig: %v", err) }
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(got), &root); err != nil { t.Fatal(err) }
+	dns := root["dns"].(map[string]any)
+	policy := dns["nameserver-policy"].(map[string]any)
+	if policy["geosite:cn"] != "127.0.0.1:6054" {
+		t.Fatalf("geosite:cn policy = %#v, want domestic SmartDNS listener; YAML:\n%s", policy["geosite:cn"], got)
+	}
+	if policy["+.internal"] != "10.0.0.1" {
+		t.Fatalf("custom nameserver policy was not preserved: %#v", policy)
+	}
+}
+ 
 func TestNormalizeAgentProxyConfigIsIdempotent(t *testing.T) {
 	input := `allow-lan: true
 mixed-port: 7890
