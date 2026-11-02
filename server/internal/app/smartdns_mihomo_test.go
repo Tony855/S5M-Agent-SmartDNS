@@ -312,3 +312,42 @@ rules: [MATCH,DIRECT]
 		t.Fatalf("got %d listeners, want 2", gotListeners)
 	}
 }
+
+
+func TestApplySmartDNSPerClientListenersRejectsDuplicateExistingListenerNamesAndPorts(t *testing.T) {
+	base := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+listeners:
+`
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModePerClient,
+		ProxyNames: []string{"node-a"},
+		Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a"}},
+	}
+	cases := []struct {
+		name string
+		listeners string
+	}{
+		{name: "duplicate names", listeners: `  - name: duplicate
+    port: 15001
+  - name: duplicate
+    port: 15002
+`},
+		{name: "duplicate ports", listeners: `  - name: listener-a
+    port: 15001
+  - name: listener-b
+    port: 15001
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := base + tc.listeners + "rules: [MATCH,DIRECT]\n"
+			if _, err := applySmartDNSPerClientListeners(input, plan); err == nil {
+				t.Fatal("expected duplicate existing listener metadata to be rejected")
+			}
+		})
+	}
+}
