@@ -102,6 +102,9 @@ createApp({
     const importText = ref('');
     const importing = ref(false);
     const importMachineCode = ref('');
+    const selectedProxyIds = ref([]);
+    const bulkMachineCode = ref('');
+    const bulkProxyBusy = ref(false);
 
     // ======== 分组管理逻辑 ========
     const activeGroup = ref('ALL');
@@ -752,6 +755,52 @@ createApp({
       savingProxy.value = false;
     };
 
+    const onProxySelectionChange = (rows) => { selectedProxyIds.value = (rows || []).map(row => Number(row.id)).filter(id => Number.isInteger(id) && id > 0); };
+    const toggleMobileProxySelection = (id, checked) => {
+      const next = new Set(selectedProxyIds.value);
+      if (checked) next.add(Number(id)); else next.delete(Number(id));
+      selectedProxyIds.value = Array.from(next);
+    };
+    const bulkDeleteProxies = async () => {
+      const ids = selectedProxyIds.value.slice();
+      if (!ids.length || bulkProxyBusy.value) return;
+      try { await ElementPlus.ElMessageBox.confirm('确定批量删除已选择的 ' + ids.length + ' 个代理？删除后会从关联实例配置中同步移除。', '确认批量删除', { type: 'warning', confirmButtonText: '删除 ' + ids.length + ' 个', cancelButtonText: '取消' }); }
+      catch (_) { return; }
+      bulkProxyBusy.value = true;
+      try {
+        const response = await api('/api/v1/proxies/bulk-delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+        if (!response.ok) throw new Error(await parseErr(response));
+        const data = await response.json();
+        selectedProxyIds.value = [];
+        await loadProxies();
+        showMsg(data.message || ('已删除 ' + (data.deleted || ids.length) + ' 个代理'), 'success');
+      } catch (e) {
+        const message = e.message || '批量删除失败';
+        if (message.includes('已批量删除')) { selectedProxyIds.value = []; await loadProxies(); showMsg(message + '，请在配置管理重试同步。', 'warning'); }
+        else showMsg(message, 'error');
+      } finally { bulkProxyBusy.value = false; }
+    };
+    const bulkBindProxies = async () => {
+      const ids = selectedProxyIds.value.slice();
+      const machineCode = String(bulkMachineCode.value || '').trim();
+      if (!ids.length) return showMsg('请先选择代理', 'warning');
+      if (!machineCode) return showMsg('请先选择要关联的实例', 'warning');
+      if (bulkProxyBusy.value) return;
+      bulkProxyBusy.value = true;
+      try {
+        const response = await api('/api/v1/proxies/bulk-bind', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, machine_code: machineCode }) });
+        if (!response.ok) throw new Error(await parseErr(response));
+        const data = await response.json();
+        selectedProxyIds.value = [];
+        await loadProxies();
+        showMsg(data.message || ('已将 ' + ids.length + ' 个代理关联到 ' + machineCode), 'success');
+      } catch (e) {
+        const message = e.message || '批量关联失败';
+        if (message.includes('已关联')) { selectedProxyIds.value = []; await loadProxies(); showMsg(message + '，请在配置管理重试同步。', 'warning'); }
+        else showMsg(message, 'error');
+      } finally { bulkProxyBusy.value = false; }
+    };
+
     const deleteProxy = async (row) => {
       if (!row.id) return showMsg('该节点无 id，无法删除', 'warning');
       if (!confirm('确定删除节点 "' + (row.name || row.proxy_name || row.id) + '" ？')) return;
@@ -1017,7 +1066,7 @@ createApp({
         const response = await api('/api/v1/proxies/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content })
+          body: JSON.stringify({ content, machine_code: importMachineCode.value || '' })
         });
         if (!response.ok) throw new Error(await parseErr(response));
         const data = await response.json();
@@ -1589,7 +1638,7 @@ createApp({
       mainMihomoStatus, loadMainMihomoStatus,
       proxyDialog, proxyForm, savingProxy,
       machineProxyModes, savingMachineProxyMode, saveMachineProxyMode,
-      showImport, importTab, importText, importing, importMachineCode,
+      showImport, importTab, importText, importing, importMachineCode, selectedProxyIds, bulkMachineCode, bulkProxyBusy, onProxySelectionChange, toggleMobileProxySelection, bulkDeleteProxies, bulkBindProxies,
       switchPage, doLogin, logout, loadOverview,
       updateKernel, recoverMihomoUpdateTask, loadProxies, openCreateProxy, openEditProxy, saveProxy, deleteProxy, importProxies, handleFileUpload,
       loadAgentsData, generateAgentToken, deleteAgent, safeCopy,
