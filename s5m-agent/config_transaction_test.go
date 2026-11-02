@@ -437,3 +437,49 @@ func TestConfigTransactionsSerializeBothConfigurationLocks(t *testing.T) {
 		t.Fatalf("expected two serialized merge calls, got %d", mergeCalls)
 	}
 }
+
+
+func TestWriteTransactionBackupPreservingPriorRestoresPreviousSidecarAfterPostRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json.previous")
+	previous := []byte("previous recovery point")
+	candidate := []byte("new snapshot")
+	if err := os.WriteFile(path, previous, 0600); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected directory fsync failure after rename")
+	err := writeTransactionBackupPreservingPrior(path, candidate, func(path string, data []byte, mode os.FileMode) error {
+		if err := atomicWriteFile(path, data, mode); err != nil {
+			return err
+		}
+		return injected
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected post-rename failure, got %v", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read restored prior sidecar: %v", readErr)
+	}
+	if !bytes.Equal(got, previous) {
+		t.Fatalf("prior sidecar was not restored: got %q want %q", got, previous)
+	}
+}
+
+func TestWriteTransactionBackupPreservingPriorRemovesNewSidecarAfterFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "first-install.previous")
+	injected := errors.New("injected post-rename failure")
+	err := writeTransactionBackupPreservingPrior(path, []byte("candidate"), func(path string, data []byte, mode os.FileMode) error {
+		if err := atomicWriteFile(path, data, mode); err != nil {
+			return err
+		}
+		return injected
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected post-rename failure, got %v", err)
+	}
+	if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("new sidecar must be removed after failed snapshot, stat error=%v", statErr)
+	}
+}
