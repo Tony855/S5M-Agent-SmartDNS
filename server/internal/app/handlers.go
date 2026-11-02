@@ -1762,6 +1762,7 @@ func filterDuplicateProxyImports(existing []Proxy, incoming []*Proxy) (unique []
 func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Content string `json:"content"`
+		MachineCode string `json:"machine_code"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := decode(r, &in); err != nil {
@@ -1773,8 +1774,22 @@ func (a *App) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	in.MachineCode = strings.TrimSpace(in.MachineCode)
+	if in.MachineCode != "" {
+		if in.MachineCode == "__GLOBAL__" || len(in.MachineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(in.MachineCode) {
+			writeErr(w, http.StatusBadRequest, "导入关联的节点实例无效")
+			return
+		}
+		settings, err := a.store.GetSettings()
+		if err != nil { writeErr(w, http.StatusInternalServerError, "读取实例授权失败"); return }
+		if strings.TrimSpace(settings["agent_machine_"+in.MachineCode]) == "" {
+			writeErr(w, http.StatusBadRequest, "所选实例尚未授权，不能关联导入代理")
+			return
+		}
+	}
 	successCount := 0
 	proxies, failReasons := parseProxyImportContent(in.Content)
+	for _, p := range proxies { p.MachineCode = in.MachineCode }
 	existing, err := a.store.ListProxies()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "读取现有代理列表失败，未执行导入")
