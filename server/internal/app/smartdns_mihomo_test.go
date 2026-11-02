@@ -361,7 +361,7 @@ func TestBuildSmartDNSClientRuntimeMappingsAreSharedAndDeterministic(t *testing.
 			{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a", ListenPort: 16008},
 		},
 	}
-	usedPorts := map[int]bool{16000: true, 16001: true, 16008: true}
+	usedPorts := map[int]bool{16000: true, 16001: true}
 	usedNames := map[string]bool{"operator-listener": true}
 	got, err := buildSmartDNSClientRuntimeMappings(plan, usedPorts, usedNames)
 	if err != nil { t.Fatal(err) }
