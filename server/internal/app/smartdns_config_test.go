@@ -48,6 +48,7 @@ func TestBuildSmartDNSPerClientConfigRejectsUnsafeMappings(t *testing.T) {
 		{name: "invalid CIDR", edit: func(m *SmartDNSClientRuntimeMapping) { m.ClientCIDR = "not-a-cidr" }},
 		{name: "missing proxy", edit: func(m *SmartDNSClientRuntimeMapping) { m.ProxyName = "" }},
 		{name: "missing listener name", edit: func(m *SmartDNSClientRuntimeMapping) { m.ListenerName = "" }},
+		{name: "listener name and port mismatch", edit: func(m *SmartDNSClientRuntimeMapping) { m.ListenerName = "s5m-smartdns-16001" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
