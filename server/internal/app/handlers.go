@@ -2661,7 +2661,7 @@ func (a *App) handleRetryNodeConfigSync(w http.ResponseWriter, _ *http.Request) 
 func agentIfNoneMatch(values []string, currentETag string) bool {
 	for _, value := range values {
 		for i := 0; i < len(value); {
-			for i < len(value) && (value[i] == ' ' || value[i] == '\\t' || value[i] == ',') {
+			for i < len(value) && (value[i] == ' ' || value[i] == '\t' || value[i] == ',') {
 				i++
 			}
 			if i >= len(value) {
@@ -2669,7 +2669,7 @@ func agentIfNoneMatch(values []string, currentETag string) bool {
 			}
 			if value[i] == '*' {
 				i++
-				for i < len(value) && (value[i] == ' ' || value[i] == '\\t') {
+				for i < len(value) && (value[i] == ' ' || value[i] == '\t') {
 					i++
 				}
 				if i == len(value) || value[i] == ',' {
@@ -2706,7 +2706,7 @@ func agentIfNoneMatch(values []string, currentETag string) bool {
 			}
 			i++
 			candidate := value[start:i]
-			for i < len(value) && (value[i] == ' ' || value[i] == '\\t') {
+			for i < len(value) && (value[i] == ' ' || value[i] == '\t') {
 				i++
 			}
 			if (i == len(value) || value[i] == ',') && candidate == currentETag {
