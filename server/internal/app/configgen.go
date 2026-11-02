@@ -647,6 +647,28 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// SmartDNS routing is opt-in. An absent setting is the legacy state and
+	// must not alter existing node traffic behavior.
+	if raw := strings.TrimSpace(settings["smartdns_routing_config"]); raw != "" {
+		var routing SmartDNSRoutingConfig
+		if err := json.Unmarshal([]byte(raw), &routing); err != nil {
+			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+		}
+		if routing.Mode == SmartDNSProxyModePerClient {
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
+		}
+		refs := make([]SmartDNSProxyRef, 0, len(proxies))
+		for _, p := range proxies {
+			matches := p.MachineCode == "__GLOBAL__" || (machineCode != "" && p.MachineCode == machineCode)
+			if matches { refs = append(refs, SmartDNSProxyRef{Name: p.Name, Enabled: p.Enabled}) }
+		}
+		plan, err := BuildSmartDNSRoutingPlan(routing, refs)
+		if err != nil { return "", fmt.Errorf("SmartDNS 路由计划无效: %w", err) }
+		if plan.Mode == SmartDNSProxyModeShared {
+			yml, err = applySmartDNSSharedFallback(yml, plan)
+			if err != nil { return "", err }
+		}
+	}
 	// Controller configs keep their separate listener; Agent configs expose no explicit proxy listener.
 	if strings.TrimSpace(machineCode) != "" {
 		yml, err = normalizeAgentProxyConfig(yml)
@@ -747,6 +769,7 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 	}
 	const prefix = "agent_machine_"
 	configs := make(map[string]string)
+	expectedConfigs := make(map[string]string)
 	for key, token := range settings {
 		if !strings.HasPrefix(key, prefix) || strings.TrimSpace(token) == "" {
 			continue
@@ -765,6 +788,11 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 		if err != nil {
 			return fmt.Errorf("读取机器 %s 的独立配置失败: %w", machineCode, err)
 		}
+		expectedYAML := ""
+		if existing != nil {
+			expectedYAML = existing.YAML
+		}
+		expectedConfigs[machineCode] = expectedYAML
 		if existing != nil && strings.TrimSpace(existing.YAML) != "" {
 			var currentDoc, generatedDoc map[string]any
 			if err := yaml.Unmarshal([]byte(existing.YAML), &currentDoc); err != nil {
@@ -784,6 +812,9 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			}
 			if value, ok := generatedDoc["proxies"]; ok {
 				currentDoc["proxies"] = value
+			}
+			if value, ok := generatedDoc["proxy-groups"]; ok {
+				currentDoc["proxy-groups"] = value
 			}
 			mergedRules, mergeErr := mergeManagedRuleValues(currentDoc["rules"], generatedDoc["rules"])
 			if mergeErr != nil {
@@ -809,7 +840,7 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 		}
 		configs[machineCode] = generated
 	}
-	if err := a.store.SaveNodeConfigs(configs); err != nil {
+	if err := a.store.SaveNodeConfigsIfUnchanged(expectedConfigs, configs); err != nil {
 		return fmt.Errorf("批量保存节点配置失败: %w", err)
 	}
 	return nil
@@ -1199,6 +1230,43 @@ func mergeManagedRuleValues(customValue, generatedValue any) ([]any, error) {
 	return merged, nil
 }
 
+func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error) {
+	var custom, generated []any
+	if customValue != nil {
+		var ok bool
+		custom, ok = customValue.([]any)
+		if !ok { return nil, fmt.Errorf("自定义 proxy-groups 必须是数组") }
+	}
+	if generatedValue != nil {
+		var ok bool
+		generated, ok = generatedValue.([]any)
+		if !ok { return nil, fmt.Errorf("生成的 proxy-groups 必须是数组") }
+	}
+	merged := make([]any, 0, len(custom)+len(generated))
+	seen := make(map[string]bool, len(custom)+len(generated))
+	for _, raw := range custom {
+		group, ok := raw.(map[string]any)
+		if !ok { return nil, fmt.Errorf("自定义 proxy-groups 项必须是对象") }
+		name, ok := group["name"].(string)
+		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("自定义 proxy-group 名称不能为空") }
+		name = strings.TrimSpace(name)
+		if seen[name] { return nil, fmt.Errorf("自定义 proxy-group 名称重复: %q", name) }
+		seen[name] = true
+		merged = append(merged, raw)
+	}
+	for _, raw := range generated {
+		group, ok := raw.(map[string]any)
+		if !ok { return nil, fmt.Errorf("生成的 proxy-groups 项必须是对象") }
+		name, ok := group["name"].(string)
+		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("生成的 proxy-group 名称不能为空") }
+		name = strings.TrimSpace(name)
+		if seen[name] { return nil, fmt.Errorf("proxy-group 名称冲突: %q", name) }
+		seen[name] = true
+		merged = append(merged, raw)
+	}
+	return merged, nil
+}
+
 func mergeManagedProxySections(customYAML, generatedYAML string) (string, error) {
 	var customDoc map[string]any
 	if err := yaml.Unmarshal([]byte(customYAML), &customDoc); err != nil {
@@ -1219,6 +1287,13 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	}
 	if value, ok := generatedDoc["proxies"]; ok {
 		customDoc["proxies"] = value
+	}
+	mergedGroups, err := mergeManagedProxyGroupValues(customDoc["proxy-groups"], generatedDoc["proxy-groups"])
+	if err != nil {
+		return "", fmt.Errorf("合并代理组失败: %w", err)
+	}
+	if len(mergedGroups) > 0 {
+		customDoc["proxy-groups"] = mergedGroups
 	}
 	mergedRules, err := mergeManagedRuleValues(customDoc["rules"], generatedDoc["rules"])
 	if err != nil {

@@ -213,15 +213,54 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		switch strings.TrimSpace(mode) {
 		case "global", "split", "rule", "return", "game":
 		default:
-			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、rule、return 或 game")
+			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、split、rule、return 或 game")
 			return
+		}
+	}
+	if raw, ok := in["smartdns_routing_config"]; ok {
+		var cfg SmartDNSRoutingConfig
+		if strings.TrimSpace(raw) == "" {
+			// Empty value explicitly removes the opt-in setting and restores legacy behavior.
+			in["smartdns_routing_config"] = ""
+		} else {
+			if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 路由设置必须是有效 JSON: "+err.Error())
+				return
+			}
+			if cfg.Mode == SmartDNSProxyModePerClient {
+				writeErr(w, http.StatusBadRequest, "按客户端独立出口尚未完成隔离 DNS 运行时，暂不允许启用")
+				return
+			}
+			if cfg.Mode != SmartDNSProxyModeShared {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 模式必须是 shared；留空可恢复旧行为")
+				return
+			}
+			if cfg.Strategy != "" && cfg.Strategy != SmartDNSDefaultStrategy {
+				writeErr(w, http.StatusBadRequest, "当前 SmartDNS 统一代理策略仅支持 fallback")
+				return
+			}
+			cfg.Strategy = SmartDNSDefaultStrategy
+			normalized, err := json.Marshal(cfg)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 路由设置无法序列化")
+				return
+			}
+			in["smartdns_routing_config"] = string(normalized)
 		}
 	}
 	if err := a.store.UpdateSettings(in); err != nil {
 		writeErr(w, http.StatusInternalServerError, "设置保存失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"message": "设置已保存"})
+	// Routing and other shared settings affect generated Agent YAML. Refresh
+	// every authorized node's cached configuration before reporting success.
+	// A failure is explicit: the setting is persisted, but one or more node
+	// configurations may still be stale and require a retry.
+	if err := a.syncAuthorizedNodeConfigs(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "设置已保存，但节点配置同步失败；请重试同步: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "设置已保存，已重新生成并保存已授权节点配置；在线 Agent 将在下次拉取时应用"})
 }
 
 func (a *App) handleListInstances(w http.ResponseWriter, r *http.Request) {
@@ -1880,7 +1919,7 @@ func (a *App) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	etag := fmt.Sprintf("\"%x\"", sum[:])
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "no-cache")
-	if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+	if agentIfNoneMatch(r.Header.Values("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -2614,4 +2653,67 @@ func (a *App) handleRetryNodeConfigSync(w http.ResponseWriter, _ *http.Request) 
 		"ok":      true,
 		"message": "已重新生成并保存所有已授权节点的配置；在线 Agent 将在下次拉取时应用",
 	})
+}
+
+
+// agentIfNoneMatch implements the weak comparison required by If-None-Match
+// for GET requests. Commas inside a quoted opaque-tag are not list separators.
+func agentIfNoneMatch(values []string, currentETag string) bool {
+	for _, value := range values {
+		for i := 0; i < len(value); {
+			for i < len(value) && (value[i] == ' ' || value[i] == '\t' || value[i] == ',') {
+				i++
+			}
+			if i >= len(value) {
+				break
+			}
+			if value[i] == '*' {
+				i++
+				for i < len(value) && (value[i] == ' ' || value[i] == '\t') {
+					i++
+				}
+				if i == len(value) || value[i] == ',' {
+					return true
+				}
+				continue
+			}
+
+			weak := false
+			if strings.HasPrefix(value[i:], "W/") {
+				weak = true
+				i += 2
+			}
+			if i >= len(value) || value[i] != '"' {
+				for i < len(value) && value[i] != ',' {
+					i++
+				}
+				continue
+			}
+			start := i
+			i++
+			for i < len(value) && value[i] != '"' {
+				// entity-tag opaque characters exclude controls and DEL.
+				if value[i] < 0x21 || value[i] == 0x7f {
+					break
+				}
+				i++
+			}
+			if i >= len(value) || value[i] != '"' {
+				for i < len(value) && value[i] != ',' {
+					i++
+				}
+				continue
+			}
+			i++
+			candidate := value[start:i]
+			for i < len(value) && (value[i] == ' ' || value[i] == '\t') {
+				i++
+			}
+			if (i == len(value) || value[i] == ',') && candidate == currentETag {
+				_ = weak // GET If-None-Match uses weak comparison for both forms.
+				return true
+			}
+		}
+	}
+	return false
 }

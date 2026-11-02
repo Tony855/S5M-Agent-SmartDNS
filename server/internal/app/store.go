@@ -685,6 +685,48 @@ func (s *Store) SaveNodeConfigs(configs map[string]string) error {
 	return nil
 }
 
+// SaveNodeConfigsIfUnchanged atomically refreshes a batch only when every row
+// still matches the snapshot used to generate it. Any concurrent manual edit
+// aborts the entire batch instead of being overwritten by stale generated YAML.
+func (s *Store) SaveNodeConfigsIfUnchanged(expected, configs map[string]string) error {
+	if len(configs) != len(expected) {
+		return fmt.Errorf("节点配置快照与候选数量不一致")
+	}
+	if len(configs) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(configs))
+	for machineCode := range configs {
+		if strings.TrimSpace(machineCode) == "" {
+			return fmt.Errorf("机器码不能为空")
+		}
+		if _, ok := expected[machineCode]; !ok {
+			return fmt.Errorf("机器 %s 缺少配置快照", machineCode)
+		}
+		keys = append(keys, machineCode)
+	}
+	sort.Strings(keys)
+	tx, err := s.db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO node_configs(machine_code,yaml_text,updated_at) VALUES(?,?,?)
+		ON CONFLICT(machine_code) DO UPDATE SET yaml_text=excluded.yaml_text,updated_at=excluded.updated_at
+		WHERE node_configs.yaml_text=?`)
+	if err != nil { return err }
+	defer stmt.Close()
+	now := time.Now().Format(time.RFC3339)
+	for _, machineCode := range keys {
+		result, err := stmt.Exec(machineCode, configs[machineCode], now, expected[machineCode])
+		if err != nil { return fmt.Errorf("刷新机器 %s 的配置失败: %w", machineCode, err) }
+		affected, err := result.RowsAffected()
+		if err != nil { return err }
+		if affected != 1 {
+			return fmt.Errorf("机器 %s 的配置在同步期间已被修改；已取消本次批量同步，请重试", machineCode)
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) SaveNodeConfigIfEmpty(machineCode, yamlText string) error {
 	_, err := s.db.Exec(`INSERT INTO node_configs(machine_code,yaml_text,updated_at)
                 VALUES(?,?,?)
