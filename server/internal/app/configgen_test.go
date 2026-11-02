@@ -1734,3 +1734,74 @@ rules:
 		t.Fatalf("expected reserved proxy-group collision error, got %v", err)
 	}
 }
+
+
+func TestPerClientListenerMustBeAppliedAfterAgentNormalization(t *testing.T) {
+	input := `mixed-port: 7890
+proxies:
+  - name: node-a-egress
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+listeners:
+  - name: stale-listener
+    type: socks
+    listen: 0.0.0.0
+    port: 19080
+`
+	normalized, err := normalizeAgentProxyConfig(input)
+	if err != nil { t.Fatalf("normalize Agent config: %v", err) }
+	var before map[string]any
+	if err := yaml.Unmarshal([]byte(normalized), &before); err != nil { t.Fatalf("decode normalized YAML: %v", err) }
+	if _, exists := before["listeners"]; exists { t.Fatal("normalizer must remove untrusted/pre-existing listeners before managed listeners are generated") }
+
+	plan, err := BuildSmartDNSRoutingPlan(
+		SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.50.10/32", ProxyName: "node-a-egress", ListenPort: 19081}}},
+		[]SmartDNSProxyRef{{Name: "node-a-egress", Enabled: true}},
+	)
+	if err != nil { t.Fatalf("build per-client plan: %v", err) }
+	final, err := applySmartDNSPerClientListeners(normalized, plan)
+	if err != nil { t.Fatalf("apply managed per-client listener after normalization: %v", err) }
+	var after map[string]any
+	if err := yaml.Unmarshal([]byte(final), &after); err != nil { t.Fatalf("decode final YAML: %v", err) }
+	listeners, ok := after["listeners"].([]any)
+	if !ok || len(listeners) != 1 { t.Fatalf("managed listener missing after normalization: %#v", after["listeners"]) }
+	listener, ok := listeners[0].(map[string]any)
+	if !ok { t.Fatalf("listener has unexpected type: %#v", listeners[0]) }
+	if listener["listen"] != "127.0.0.1" || listener["port"] != 19081 || listener["proxy"] != "node-a-egress" || listener["udp"] != true {
+		t.Fatalf("per-client listener is not isolated/pinned: %#v", listener)
+	}
+}
+
+func TestBuildConfigForMachineFailsClosedForPerClientRouting(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-per-client-fail-closed.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	routing, err := json.Marshal(SmartDNSRoutingConfig{
+		Mode: SmartDNSProxyModePerClient,
+		Clients: []SmartDNSClientRoute{{
+			ClientCIDR: "192.168.50.10/32",
+			ProxyName:  "node-a-egress",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal routing config: %v", err)
+	}
+	if err := store.UpdateSettings(map[string]string{
+		"smartdns_routing_config": string(routing),
+		"agent_machine_node-a":    "token-a",
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	app := &App{store: store}
+	for _, machineCode := range []string{"", "node-a"} {
+		_, err := app.BuildConfigForMachine(machineCode)
+		if err == nil || !strings.Contains(err.Error(), "尚未接入隔离 DNS 运行时") {
+			t.Errorf("BuildConfigForMachine(%q) must fail closed for per-client routing, got %v", machineCode, err)
+		}
+	}
+}

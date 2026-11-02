@@ -673,7 +673,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 	t.Run("plaintext upstream config forces DNS fallback", func(t *testing.T) {
 		deps := good
 		deps.readConfig = func(string) ([]byte, error) {
-			return []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver 223.5.5.5\\n"), nil
+			return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver 223.5.5.5\n"), nil
 		}
 		deps.restart = func() error { t.Fatal("policy-invalid config must not be restarted"); return nil }
 		status := map[string]any{}
@@ -1048,5 +1048,136 @@ func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T)
 	message, _ := status["smartdns_last_error"].(string)
 	if !strings.Contains(message, "备用 DNS") || !strings.Contains(message, "冷却期") {
 		t.Fatalf("fallback/cooldown diagnostic missing: %q", message)
+	}
+}
+
+
+func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "zero DoT port", line: "server-tls 1.1.1.1:0 -host-name cloudflare-dns.com"},
+		{name: "out of range DoT port", line: "server-tls 1.1.1.1:65536 -host-name cloudflare-dns.com"},
+		{name: "nonnumeric DoT port", line: "server-tls 1.1.1.1:https -host-name cloudflare-dns.com"},
+		{name: "missing TLS name value", line: "server-tls 1.1.1.1:853 -host-name"},
+		{name: "TLS name parsed as option", line: "server-tls 1.1.1.1:853 -host-name -group"},
+		{name: "invalid TLS name", line: "server-tls 1.1.1.1:853 -host-name bad_name.example"},
+		{name: "duplicate TLS name", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -host-name dns.google"},
+		{name: "DoH userinfo", line: "server-https https://user:pass@1.1.1.1/dns-query -host-name cloudflare-dns.com"},
+		{name: "DoH query string", line: "server-https https://1.1.1.1/dns-query?token=secret -host-name cloudflare-dns.com"},
+		{name: "DoH fragment", line: "server-https https://1.1.1.1/dns-query#fragment -host-name cloudflare-dns.com"},
+		{name: "invalid DoH port", line: "server-https https://1.1.1.1:70000/dns-query -host-name cloudflare-dns.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + tc.line + "\n")
+			if err := validateSmartDNSConfig(config); err == nil {
+				t.Fatalf("unsafe encrypted upstream accepted: %s", tc.line)
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
+	cases := []string{
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"server-https https://1.1.1.1:443/dns-query -host-name dns.google",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+	}
+	for _, line := range cases {
+		t.Run(line, func(t *testing.T) {
+			config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n" + line + "\n")
+			if err := validateSmartDNSConfig(config); err != nil {
+				t.Fatalf("valid encrypted upstream rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSConfigFailsClosedForPerClientRoutingDirectives(t *testing.T) {
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "proxy-server SOCKS mapping", line: "proxy-server socks5://127.0.0.1:16000 -name s5m-client-a"},
+		{name: "client CIDR group match", line: "group-match -client-ip 192.168.1.10/32 -g s5m-client-a"},
+		{name: "group scope", line: "group-begin s5m-client-a"},
+		{name: "group end", line: "group-end"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateSmartDNSConfig([]byte(base + tc.line + "\n")); err == nil {
+				t.Fatalf("per-client directive must remain rejected until isolated DNS runtime is implemented: %s", tc.line)
+			}
+		})
+	}
+}
+
+
+func TestBackupSmartDNSConfigRestoresPriorSidecarAfterPostRenameSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "smartdns.conf")
+	backupPath := livePath + ".previous"
+	if err := os.WriteFile(livePath, []byte("live config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prior := []byte("prior recovery point")
+	if err := os.WriteFile(backupPath, prior, 0600); err != nil {
+		t.Fatal(err)
+	}
+	originalSync := smartDNSDirectorySync
+	calls := 0
+	smartDNSDirectorySync = func(path string) error {
+		calls++
+		if calls == 1 {
+			return os.ErrInvalid
+		}
+		return originalSync(path)
+	}
+	defer func() { smartDNSDirectorySync = originalSync }()
+
+	_, _, err := backupSmartDNSConfig(livePath, backupPath)
+	if err == nil {
+		t.Fatal("expected injected post-rename directory sync failure")
+	}
+	got, readErr := os.ReadFile(backupPath)
+	if readErr != nil {
+		t.Fatalf("read prior backup after failure: %v", readErr)
+	}
+	if !bytes.Equal(got, prior) {
+		t.Fatalf("prior SmartDNS backup overwritten: got %q want %q", got, prior)
+	}
+	live, readErr := os.ReadFile(livePath)
+	if readErr != nil || string(live) != "live config" {
+		t.Fatalf("live SmartDNS config changed: %q, err=%v", live, readErr)
+	}
+}
+
+func TestBackupSmartDNSConfigRemovesNewSidecarAfterPostRenameSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "smartdns.conf")
+	backupPath := livePath + ".previous"
+	if err := os.WriteFile(livePath, []byte("live config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	originalSync := smartDNSDirectorySync
+	calls := 0
+	smartDNSDirectorySync = func(path string) error {
+		calls++
+		if calls == 1 {
+			return os.ErrInvalid
+		}
+		return originalSync(path)
+	}
+	defer func() { smartDNSDirectorySync = originalSync }()
+
+	_, _, err := backupSmartDNSConfig(livePath, backupPath)
+	if err == nil {
+		t.Fatal("expected injected post-rename directory sync failure")
+	}
+	if _, statErr := os.Lstat(backupPath); !os.IsNotExist(statErr) {
+		t.Fatalf("failed first-install snapshot left sidecar behind, stat error=%v", statErr)
 	}
 }

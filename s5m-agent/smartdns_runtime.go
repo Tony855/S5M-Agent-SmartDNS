@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,7 +23,7 @@ import (
 	"unicode/utf8"
 )
 
-const smartDNSConfigPath = "/data/smartdns.conf"
+var smartDNSConfigPath = "/data/smartdns.conf"
 const smartDNSPreflightOutputLimit = 8 << 10
 const smartDNSRestartCooldown = 30 * time.Second
 
@@ -165,35 +166,67 @@ func validateSmartDNSUpstreamEndpoint(directive, endpoint string, options []stri
 	var host string
 	switch directive {
 	case "server-tls", "server-quic":
+		var port string
 		var err error
-		host, _, err = net.SplitHostPort(endpoint)
-		if err != nil {
-			return fmt.Errorf("加密上游必须使用 IP:端口格式")
+		host, port, err = net.SplitHostPort(endpoint)
+		if err != nil || net.ParseIP(strings.Trim(host, "[]")) == nil {
+			return fmt.Errorf("加密上游必须使用字面 IP:端口格式")
+		}
+		if err := validateSmartDNSPort(port); err != nil {
+			return err
 		}
 	case "server-https":
 		u, err := url.Parse(endpoint)
-		if err != nil || u.Scheme != "https" || u.Hostname() == "" {
-			return fmt.Errorf("DoH 上游必须使用 https://IP/ 路径格式")
+		if err != nil || u.Scheme != "https" || u.Opaque != "" || u.User != nil ||
+			u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("DoH 上游必须使用不含凭据、查询参数或片段的 https://IP/ 路径格式")
 		}
 		host = u.Hostname()
+		if net.ParseIP(strings.Trim(host, "[]")) == nil {
+			return fmt.Errorf("DoH 上游地址必须是字面 IP，禁止依赖域名 Bootstrap 解析")
+		}
+		if port := u.Port(); port != "" {
+			if err := validateSmartDNSPort(port); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("不支持的加密上游类型")
 	}
 	if net.ParseIP(strings.Trim(host, "[]")) == nil {
 		return fmt.Errorf("加密上游地址必须是字面 IP，禁止依赖域名 Bootstrap 解析")
 	}
-	hasTLSName := false
-	for i := 0; i+1 < len(options); i++ {
-		if options[i] == "-host-name" && strings.TrimSpace(options[i+1]) != "" {
-			hasTLSName = true
-			break
+	tlsNameCount := 0
+	for i := 0; i < len(options); i++ {
+		if options[i] != "-host-name" {
+			continue
+		}
+		tlsNameCount++
+		if i+1 >= len(options) || !validSmartDNSTLSName(options[i+1]) {
+			return fmt.Errorf("-host-name 必须是有效 DNS 主机名，不能缺失或被解析为其他选项")
 		}
 	}
-	if !hasTLSName {
-		return fmt.Errorf("加密上游必须显式配置 -host-name 以验证 TLS 证书")
+	if tlsNameCount != 1 {
+		return fmt.Errorf("加密上游必须且只能配置一次 -host-name 以验证 TLS 证书")
 	}
 	return nil
 }
+
+func validateSmartDNSPort(value string) error {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("加密 DNS 上游端口必须是 1-65535 的数字")
+	}
+	return nil
+}
+
+var smartDNSTLSNamePattern = regexp.MustCompile("(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.?$")
+
+func validSmartDNSTLSName(value string) bool {
+	return len(value) <= 253 && smartDNSTLSNamePattern.MatchString(value)
+}
+
+
 
 // validateSmartDNSConfig accepts only resolver-related directives. It deliberately
 // rejects include/plugin/exec-style directives so a remote config cannot load
@@ -222,7 +255,7 @@ func validateSmartDNSConfig(data []byte) error {
 		if !smartDNSDirectiveAllowlist[directive] {
 			return fmt.Errorf("第 %d 行不允许配置指令 %q", lineNo+1, directive)
 		}
-		if strings.ContainsAny(line, "`$") {
+		if strings.Contains(line, "$") || strings.ContainsRune(line, rune(96)) {
 			return fmt.Errorf("第 %d 行包含不允许的特殊内容", lineNo+1)
 		}
 		if directive == "bind" || directive == "bind-tcp" {
@@ -429,6 +462,22 @@ func smartDNSReplayIsHealthy(path string, candidate []byte, probe func() bool) (
 func writeSmartDNSConfig(data []byte) (string, error) {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
+	return writeSmartDNSConfigLocked(data)
+}
+
+// writeSmartDNSConfigLocked performs the existing SmartDNS apply path while
+// the caller holds smartDNSConfigMu. It deliberately preserves the legacy
+// apply/rollback semantics; a coordinated Mihomo+SmartDNS transaction must
+// use transaction-owned backups and must not call this cleanup-owning path.
+func writeSmartDNSConfigLocked(data []byte) (string, error) {
+	return writeSmartDNSConfigLockedWithBackupCleanup(data, true)
+}
+
+// writeSmartDNSConfigLockedWithBackupCleanup applies SmartDNS while the caller
+// holds smartDNSConfigMu. A coordinated transaction passes false so its
+// rollback copy remains available until the joint Mihomo+SmartDNS health check
+// has succeeded. The legacy wrapper retains its original cleanup behavior.
+func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool) (string, error) {
 	if err := validateSmartDNSConfig(data); err != nil {
 		return "", err
 	}
@@ -604,12 +653,14 @@ func writeSmartDNSConfig(data []byte) (string, error) {
 		newPID, pidErr := exec.Command("pidof", "smartdns").Output()
 		if pidErr == nil && len(bytes.TrimSpace(newPID)) > 0 && !bytes.Equal(bytes.TrimSpace(newPID), oldPID) && probeSmartDNSDNS() {
 			sum := sha256.Sum256(bytes.TrimSpace(data))
-			if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
-				// The new configuration is already proven healthy. Keep the backup
-				// for manual recovery and do not report an applied config as failed.
-				fmt.Printf("SmartDNS: 无法清理旧配置备份: %v\n", err)
-			} else {
-				_ = smartDNSDirectorySync(filepath.Dir(livePath))
+			if cleanupBackup {
+				if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+					// The new configuration is already proven healthy. Keep the backup
+					// for manual recovery and do not report an applied config as failed.
+					fmt.Printf("SmartDNS: 无法清理旧配置备份: %v\n", err)
+				} else {
+					_ = smartDNSDirectorySync(filepath.Dir(livePath))
+				}
 			}
 			return hex.EncodeToString(sum[:]), nil
 		}
@@ -657,7 +708,9 @@ func backupSmartDNSConfig(livePath, backupPath string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if err := writeSmartDNSFileAtomically(backupPath, oldData, 0600); err != nil {
+	if err := writeTransactionBackupPreservingPrior(backupPath, oldData, func(path string, data []byte, mode os.FileMode) error {
+		return writeSmartDNSFileAtomically(path, data, mode)
+	}); err != nil {
 		return nil, false, err
 	}
 	return oldData, true, nil
