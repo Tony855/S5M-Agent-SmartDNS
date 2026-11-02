@@ -2095,3 +2095,48 @@ rules:
 		t.Fatalf("stale custom proxy inventory was not replaced by generated nodes: %#v", doc["proxies"])
 	}
 }
+
+
+func TestMergeManagedRuleValuesDropsStaleSmartDNSRejectRule(t *testing.T) {
+	generated := []any{"PROCESS-NAME,smartdns,SMARTDNS-PROXY", "MATCH,PROXY"}
+	custom := []any{"PROCESS-NAME,smartdns,REJECT", "DOMAIN,custom.example,DIRECT", "MATCH,REJECT"}
+	got, err := mergeManagedRuleValues(custom, generated)
+	if err != nil { t.Fatalf("merge managed SmartDNS rules: %v", err) }
+	count := 0
+	for _, raw := range got {
+		if strings.HasPrefix(raw.(string), "PROCESS-NAME,smartdns,") {
+			count++
+			if raw != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { t.Fatalf("stale SmartDNS route survived: %#v", raw) }
+		}
+	}
+	if count != 1 { t.Fatalf("expected one managed SmartDNS process rule, got %#v", got) }
+	if got[len(got)-1] != "MATCH,PROXY" { t.Fatalf("generated terminal policy was not retained: %#v", got) }
+}
+
+func TestMergeManagedProxySectionsRejectsDuplicateTopLevelRulesKey(t *testing.T) {
+	custom := `rules:
+  - DOMAIN,first.example,DIRECT
+rules:
+  - DOMAIN,second.example,DIRECT
+`
+	generated := `proxies: []
+proxy-groups: []
+rules:
+  - MATCH,PROXY
+`
+	if _, err := mergeManagedProxySections(custom, generated); err == nil {
+		t.Fatal("duplicate top-level rules keys must be rejected instead of silently selecting one")
+	}
+}
+
+func TestGeneratedNodeConfigDefaultsTUNEnabled(t *testing.T) {
+	got, err := buildConfigFromProxies([]Proxy{{
+		Name: "node-a", Type: "socks5", Server: "192.0.2.10", Port: 1080,
+		MachineCode: "__GLOBAL__", Enabled: true,
+	}}, "", "test-secret")
+	if err != nil { t.Fatalf("build node config: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	tun := doc["tun"].(map[string]any)
+	if tun["enable"] != true { t.Fatalf("generated TUN default = %#v, want true", tun["enable"]) }
+}
