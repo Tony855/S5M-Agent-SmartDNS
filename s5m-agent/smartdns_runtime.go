@@ -226,7 +226,7 @@ func validSmartDNSTLSName(value string) bool {
 	return len(value) <= 253 && smartDNSTLSNamePattern.MatchString(value)
 }
 
-var smartDNSControlChars = regexp.MustCompile("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]")
+
 
 // validateSmartDNSConfig accepts only resolver-related directives. It deliberately
 // rejects include/plugin/exec-style directives so a remote config cannot load
