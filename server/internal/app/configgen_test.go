@@ -1582,3 +1582,90 @@ func TestSmartDNSProcessRoutingRuleOmittedWithoutUsableProxy(t *testing.T) {
 	}
 }
 
+
+
+func TestSmartDNSSharedFallbackPipelineKeepsMachineProxyScopeAndClientRules(t *testing.T) {
+	proxies := []Proxy{
+		{Name: "global-egress", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: "__GLOBAL__", Enabled: true},
+		{Name: "node-a-egress", Type: "socks5", Server: "192.0.2.11", Port: 1081, MachineCode: "node-a", Enabled: true, SourceCIDR: "192.168.18.23/32"},
+		{Name: "node-b-private", Type: "socks5", Server: "192.0.2.12", Port: 1082, MachineCode: "node-b", Enabled: true},
+		{Name: "disabled-node-a", Type: "socks5", Server: "192.0.2.13", Port: 1083, MachineCode: "node-a", Enabled: false},
+	}
+	const machine = "node-a"
+	generated, err := buildConfigFromProxiesWithMode(proxies, machine, "test-secret", "rule", "controller.example.com")
+	if err != nil { t.Fatalf("generate machine config: %v", err) }
+
+	refs := make([]SmartDNSProxyRef, 0, len(proxies))
+	for _, p := range proxies {
+		if p.MachineCode == "__GLOBAL__" || p.MachineCode == machine {
+			refs = append(refs, SmartDNSProxyRef{Name: p.Name, Enabled: p.Enabled})
+		}
+	}
+	plan, err := BuildSmartDNSRoutingPlan(SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}, refs)
+	if err != nil { t.Fatalf("build routing plan: %v", err) }
+	withSmartDNS, err := applySmartDNSSharedFallback(generated, plan)
+	if err != nil { t.Fatalf("apply shared fallback: %v", err) }
+
+	custom := `mixed-port: 7890
+dns:
+  enable: true
+rules:
+  - DOMAIN,custom.example.com,DIRECT
+`
+	merged, err := mergeManagedProxySections(custom, withSmartDNS)
+	if err != nil { t.Fatalf("merge managed sections: %v", err) }
+
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(merged), &doc); err != nil { t.Fatalf("decode merged config: %v", err) }
+	rawGroups, ok := doc["proxy-groups"].([]any)
+	if !ok { t.Fatalf("proxy-groups missing after merge: %#v", doc["proxy-groups"]) }
+	var smartGroup map[string]any
+	for _, raw := range rawGroups {
+		group, ok := raw.(map[string]any)
+		if ok && group["name"] == SmartDNSGroupName { smartGroup = group }
+	}
+	if smartGroup == nil { t.Fatalf("SmartDNS fallback group missing after custom YAML merge: %#v", rawGroups) }
+	groupNames := smartGroup["proxies"].([]any)
+	if len(groupNames) != 2 || groupNames[0] != "global-egress" || groupNames[1] != "node-a-egress" {
+		t.Fatalf("fallback group must contain only enabled global + node-a proxies in deterministic order: %#v", groupNames)
+	}
+	proxyNames := map[string]bool{}
+	for _, raw := range doc["proxies"].([]any) {
+		proxy := raw.(map[string]any)
+		proxyNames[proxy["name"].(string)] = true
+	}
+	for _, name := range groupNames {
+		if !proxyNames[name.(string)] { t.Errorf("fallback references proxy absent from generated proxies: %v", name) }
+	}
+	if proxyNames["node-b-private"] || proxyNames["disabled-node-a"] { t.Fatalf("machine config leaked foreign or disabled proxy: %#v", proxyNames) }
+
+	rules := doc["rules"].([]any)
+	smartIndex, sourceIndex, customIndex, terminalIndex := -1, -1, -1, -1
+	for i, raw := range rules {
+		rule := raw.(string)
+		if rule == "PROCESS-NAME,smartdns,"+SmartDNSGroupName { smartIndex = i }
+		if rule == "SRC-IP-CIDR,192.168.18.23/32,node-a-egress" { sourceIndex = i }
+		if rule == "DOMAIN,custom.example.com,DIRECT" { customIndex = i }
+		if strings.HasPrefix(rule, "MATCH,") { terminalIndex = i }
+	}
+	if smartIndex < 0 || sourceIndex < 0 || customIndex < 0 || terminalIndex < 0 {
+		t.Fatalf("expected SmartDNS, client, custom and terminal rules: %#v", rules)
+	}
+	if smartIndex >= sourceIndex || sourceIndex >= customIndex || customIndex >= terminalIndex {
+		t.Fatalf("rule priority/order changed: smart=%d source=%d custom=%d terminal=%d rules=%#v", smartIndex, sourceIndex, customIndex, terminalIndex, rules)
+	}
+}
+
+func TestSmartDNSSharedFallbackPipelineFailsClosedWithoutMachineProxy(t *testing.T) {
+	proxies := []Proxy{
+		{Name: "node-b-only", Type: "socks5", Server: "192.0.2.20", Port: 1080, MachineCode: "node-b", Enabled: true},
+	}
+	generated, err := buildConfigFromProxiesWithMode(proxies, "node-a", "test-secret", "rule", "")
+	if err != nil { t.Fatalf("base config generation: %v", err) }
+	_, err = BuildSmartDNSRoutingPlan(
+		SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy},
+		[]SmartDNSProxyRef{{Name: proxies[0].Name, Enabled: proxies[0].Enabled}},
+	)
+	if err == nil { t.Fatal("shared SmartDNS must fail closed when the target machine has no enabled proxy") }
+	_ = generated
+}
