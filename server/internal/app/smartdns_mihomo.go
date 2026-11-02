@@ -140,18 +140,48 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 		if !ok { return "", fmt.Errorf("Mihomo proxies 包含无效项目") }
 		if name, ok := p["name"].(string); ok { existingProxies[name] = true }
 	}
-	listeners, _ := root["listeners"].([]any)
+	var listeners []any
+	if rawListeners, exists := root["listeners"]; exists {
+		var ok bool
+		listeners, ok = rawListeners.([]any)
+		if !ok {
+			return "", fmt.Errorf("Mihomo listeners 必须是数组，拒绝覆盖现有配置")
+		}
+	}
 	usedPorts := make(map[int]bool, len(listeners))
 	usedNames := make(map[string]bool, len(listeners))
-	for _, raw := range listeners {
+	for index, raw := range listeners {
 		item, ok := raw.(map[string]any)
-		if !ok { return "", fmt.Errorf("Mihomo listeners 包含无效项目") }
-		if name, ok := item["name"].(string); ok { usedNames[name] = true }
-		switch port := item["port"].(type) {
-		case int: usedPorts[port] = true
-		case int64: usedPorts[int(port)] = true
-		case uint64: usedPorts[int(port)] = true
-		case float64: usedPorts[int(port)] = true
+		if !ok {
+			return "", fmt.Errorf("Mihomo listeners 第 %d 项不是对象", index)
+		}
+		if name, exists := item["name"]; exists {
+			value, ok := name.(string)
+			if !ok || strings.TrimSpace(value) == "" {
+				return "", fmt.Errorf("Mihomo listeners 第 %d 项名称无效", index)
+			}
+			usedNames[value] = true
+		}
+		if rawPort, exists := item["port"]; exists {
+			var port int
+			switch value := rawPort.(type) {
+			case int:
+				port = value
+			case int64:
+				port = int(value)
+			case uint64:
+				if value > 65535 { return "", fmt.Errorf("Mihomo listeners 第 %d 项端口越界", index) }
+				port = int(value)
+			case float64:
+				if value != float64(int(value)) { return "", fmt.Errorf("Mihomo listeners 第 %d 项端口不是整数", index) }
+				port = int(value)
+			default:
+				return "", fmt.Errorf("Mihomo listeners 第 %d 项端口类型无效", index)
+			}
+			if port < 1 || port > 65535 {
+				return "", fmt.Errorf("Mihomo listeners 第 %d 项端口越界", index)
+			}
+			usedPorts[port] = true
 		}
 	}
 	for _, client := range plan.Clients {
