@@ -1674,3 +1674,63 @@ func TestSmartDNSSharedFallbackPipelineFailsClosedWithoutMachineProxy(t *testing
 	)
 	if err == nil { t.Fatal("shared SmartDNS must fail closed when the target machine has no enabled proxy") }
 }
+
+
+func TestMergeManagedProxySectionsPreservesCustomGroupsAndAddsSmartDNSFallback(t *testing.T) {
+	custom := `proxy-groups:
+  - name: MANUAL-SELECT
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - DOMAIN,custom.example.com,DIRECT
+`
+	generated := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies:
+      - node-a
+    url: https://www.gstatic.com/generate_204
+    interval: 60
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("merge proxy groups: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	groups := doc["proxy-groups"].([]any)
+	if len(groups) != 2 { t.Fatalf("expected custom + managed groups, got %#v", groups) }
+	names := map[string]bool{}
+	for _, raw := range groups { names[raw.(map[string]any)["name"].(string)] = true }
+	if !names["MANUAL-SELECT"] || !names[SmartDNSGroupName] { t.Fatalf("custom or SmartDNS group lost: %#v", names) }
+}
+
+func TestMergeManagedProxySectionsRejectsReservedSmartDNSGroupCollision(t *testing.T) {
+	custom := `proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - MATCH,DIRECT
+`
+	generated := `proxies: []
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies:
+      - node-a
+rules:
+  - MATCH,REJECT
+`
+	if _, err := mergeManagedProxySections(custom, generated); err == nil || !strings.Contains(err.Error(), "名称冲突") {
+		t.Fatalf("expected reserved proxy-group collision error, got %v", err)
+	}
+}
