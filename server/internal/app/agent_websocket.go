@@ -979,7 +979,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		a.agentHeartbeatAt[machineCode] = receivedAt.UnixNano()
 		a.agentWSMu.Unlock()
-		a.publishBrowserEvent(map[string]any{"type": "agent.status.updated", "machine_code": machineCode, "last_seen": receivedAt.Unix(), "status": msg.Status})
+		a.publishBrowserEvent(map[string]any{"type": "agent.status.updated", "machine_code": machineCode, "last_seen": receivedAt.Unix(), "server_time": time.Now().Unix(), "status": msg.Status})
 		_ = conn.SetReadDeadline(time.Now().Add(agentWSHeartbeatTTL))
 		if err := writeAgentWSJSON(conn, machineCode, map[string]any{
 			"type": "heartbeat.ack",

@@ -789,6 +789,9 @@ func TestHandleGetAgentsExposesPendingAndCompletedCommandState(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	node := payload[machineCode]
+	if serverTime, ok := node["server_time"].(float64); !ok || serverTime <= 0 {
+		t.Fatalf("server_time = %#v, want positive authoritative Unix timestamp", node["server_time"])
+	}
 	if node["token_configured"] != true {
 		t.Fatalf("token_configured = %#v, want true for an authorized Agent", node["token_configured"])
 	}
@@ -901,6 +904,9 @@ func TestHandleOverviewUsesDashboardRemoteAgentFieldNames(t *testing.T) {
 	var payload map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode overview: %v", err)
+	}
+	if serverTime, ok := payload["server_time"].(float64); !ok || serverTime <= 0 {
+		t.Fatalf("server_time = %#v, want positive authoritative Unix timestamp", payload["server_time"])
 	}
 	for key, want := range map[string]float64{
 		"remote_node_total":     1,
