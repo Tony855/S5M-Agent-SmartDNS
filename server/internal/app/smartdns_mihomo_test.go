@@ -194,3 +194,35 @@ func TestApplySmartDNSPerClientListenersLeavesLegacyUntouched(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if got != input { t.Fatalf("legacy document changed: %q", got) }
 }
+
+
+func TestApplySmartDNSPerClientListenersAutoPortSkipsExistingListener(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+listeners:
+  - name: operator-listener
+    type: socks
+    listen: 127.0.0.1
+    port: 16000
+rules: [MATCH,DIRECT]
+`
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModePerClient,
+		ProxyNames: []string{"node-a"},
+		Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a"}},
+	}
+	got, err := applySmartDNSPerClientListeners(input, plan)
+	if err != nil { t.Fatalf("auto port should skip occupied port: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	listeners := doc["listeners"].([]any)
+	if len(listeners) != 2 { t.Fatalf("got %d listeners, want 2", len(listeners)) }
+	managed := listeners[1].(map[string]any)
+	if managed["port"] != 16001 { t.Fatalf("auto port = %#v, want 16001", managed["port"]) }
+	if managed["listen"] != "127.0.0.1" || managed["proxy"] != "node-a" || managed["udp"] != true {
+		t.Fatalf("managed listener is not loopback-only and pinned: %#v", managed)
+	}
+}
