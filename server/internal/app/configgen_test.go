@@ -1772,3 +1772,36 @@ listeners:
 		t.Fatalf("per-client listener is not isolated/pinned: %#v", listener)
 	}
 }
+
+func TestBuildConfigForMachineFailsClosedForPerClientRouting(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-per-client-fail-closed.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	routing, err := json.Marshal(SmartDNSRoutingConfig{
+		Mode: SmartDNSProxyModePerClient,
+		Clients: []SmartDNSClientRoute{{
+			ClientCIDR: "192.168.50.10/32",
+			ProxyName:  "node-a-egress",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal routing config: %v", err)
+	}
+	if err := store.UpdateSettings(map[string]string{
+		"smartdns_routing_config": string(routing),
+		"agent_machine_node-a":    "token-a",
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	app := &App{store: store}
+	for _, machineCode := range []string{"", "node-a"} {
+		_, err := app.BuildConfigForMachine(machineCode)
+		if err == nil || !strings.Contains(err.Error(), "尚未接入隔离 DNS 运行时") {
+			t.Errorf("BuildConfigForMachine(%q) must fail closed for per-client routing, got %v", machineCode, err)
+		}
+	}
+}
