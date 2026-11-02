@@ -1136,7 +1136,7 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	case "split":
 		// Legacy split mode keeps its historical proxy fallback for existing records.
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
+			rules = append(rules, "MATCH,PROXY")
 		} else {
 			rules = append(rules, "MATCH,DIRECT")
 		}
@@ -1287,7 +1287,14 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 		name, ok := group["name"].(string)
 		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("生成的 proxy-group 名称不能为空") }
 		name = strings.TrimSpace(name)
-		if seen[name] { return nil, fmt.Errorf("proxy-group 名称冲突: %q", name) }
+		if seen[name] {
+			// PROXY is the managed default group. A same-named operator group
+			// explicitly overrides it; this also keeps repeated node sync idempotent.
+			if name == "PROXY" {
+				continue
+			}
+			return nil, fmt.Errorf("proxy-group 名称冲突: %q", name)
+		}
 		seen[name] = true
 		merged = append(merged, raw)
 	}
