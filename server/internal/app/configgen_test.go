@@ -846,7 +846,7 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 					t.Errorf("return mode must proxy CN and send non-CN traffic direct:\\n%s", got)
 				}
 				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "GEOIP,CN,PROXY") ||
-					strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "GEOIP,CN,proxy-a") {
+					strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "GEOIP,CN,PROXY") {
 					t.Errorf("controller/domain bypasses must precede the CN proxy rule:\\n%s", got)
 				}
 			}
