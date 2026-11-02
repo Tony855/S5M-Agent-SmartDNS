@@ -356,6 +356,9 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 		"bind-tcp 127.0.0.1:6054 -group china-dot",
 		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
 		"server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group",
+		"cache-persist yes",
+		"cache-file /data/smartdns.cache",
+		"cache-checkpoint-time 3600",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("bundled SmartDNS config missing %q", want)
