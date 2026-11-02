@@ -159,7 +159,12 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 			return "", fmt.Errorf("客户端 %s 指向的代理 %q 未出现在当前 Mihomo 配置中", client.ClientCIDR, client.ProxyName)
 		}
 		port := client.ListenPort
-		if port == 0 { port = 16000 + i }
+		if port == 0 {
+			// Auto-assigned ports must skip operator-owned listeners instead of
+			// failing on the first deterministic slot. Keep allocation stable.
+			port = 16000
+			for port <= 65535 && usedPorts[port] { port++ }
+		}
 		if port < 1024 || port > 65535 || usedPorts[port] {
 			return "", fmt.Errorf("客户端 %s 的 Mihomo SOCKS 监听端口 %d 无效或已占用", client.ClientCIDR, port)
 		}
