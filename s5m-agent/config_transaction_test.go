@@ -133,7 +133,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 func TestConfigTransactionRestoresAllSnapshotsWhenMihomoReloadFails(t *testing.T) {
 	dir, _ := setupConfigTransactionFixture(t)
 	reloadCalls := 0
-	transactionMergeMihomo = func(_, _ []byte) (bool, error) {
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
 		if err := atomicWriteFile(mihomoConfigPath(), []byte("candidate-mihomo"), 0600); err != nil {
 			return false, err
 		}
