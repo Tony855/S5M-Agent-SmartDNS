@@ -150,7 +150,7 @@ func readSmartDNSFileNoFollow(path string, maxBytes int64) ([]byte, error) {
 var smartDNSDirectorySync = syncSmartDNSDirectory
 
 var smartDNSDirectiveAllowlist = map[string]bool{
-	"bind": true, "bind-tcp": true, "group-begin": true, "group-end": true,
+	"bind": true, "bind-tcp": true,
 	"server": true, "server-tcp": true, "server-tls": true,
 	"server-https": true, "server-quic": true,
 	"cache-size": true, "prefetch-domain": true, "serve-expired": true,
