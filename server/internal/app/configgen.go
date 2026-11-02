@@ -48,6 +48,8 @@ dns:
         - tls://223.6.6.6
     nameserver:
         - 127.0.0.1:6053
+    nameserver-policy:
+        "geosite:cn": 127.0.0.1:6054
     fallback:
         - https://dns.cloudflare.com/dns-query
         - https://dns.google/dns-query
@@ -298,6 +300,27 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "geoip-code"},
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "CN"})
 	}
+
+	// Route mainland China domains to the dedicated SmartDNS DoT listener.
+	// This listener is pinned to the china-dot group (AliDNS/Tencent DoT only);
+	// it is deliberately separate from the shared/default SmartDNS upstream.
+	nameserverPolicy := mappingValue(dns, "nameserver-policy")
+	if nameserverPolicy == nil || nameserverPolicy.Kind != yaml.MappingNode {
+		nameserverPolicy = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		found := false
+		for i := 0; i+1 < len(dns.Content); i += 2 {
+			if dns.Content[i].Value == "nameserver-policy" {
+				dns.Content[i+1] = nameserverPolicy
+				found = true
+				break
+			}
+		}
+		if !found {
+			dns.Content = append(dns.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver-policy"}, nameserverPolicy)
+		}
+	}
+	setScalar(nameserverPolicy, "geosite:cn", "127.0.0.1:6054", "!!str")
 
 	// Exclude private/local ranges from TUN route capture and also exclude literal
 	// proxy endpoint IPs so TUN cannot recursively route its own upstream transport.

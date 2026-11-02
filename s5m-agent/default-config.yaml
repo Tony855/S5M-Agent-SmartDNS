@@ -35,6 +35,8 @@ dns:
     - tls://223.6.6.6
   nameserver:
     - 127.0.0.1:6053
+  nameserver-policy:
+    "geosite:cn": 127.0.0.1:6054
   fallback:
     - https://dns.cloudflare.com/dns-query
     - https://dns.google/dns-query
