@@ -351,3 +351,89 @@ func TestConfigTransactionCleansPreparedBackupsWhenLaterSnapshotFails(t *testing
 		}
 	}
 }
+
+
+func TestConfigTransactionRestoresPartialMihomoMutationWhenMergeReturnsError(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
+		if err := atomicWriteFile(mihomoConfigPath(), []byte("partially-written-mihomo"), 0600); err != nil {
+			return false, err
+		}
+		if err := atomicWriteFile(managedRouteCIDRsPath(), []byte("partially-written-cidrs"), 0600); err != nil {
+			return false, err
+		}
+		return false, errors.New("injected managed CIDR write failure after Mihomo update")
+	}
+	reloadCalls := 0
+	transactionReloadMihomo = func() error { reloadCalls++; return nil }
+	transactionRestartSmartDNS = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { return true }
+
+	err := applyAgentConfigTransaction([]byte("candidate-controller"), nil, false, "")
+	if err == nil || !strings.Contains(err.Error(), "应用 Mihomo 配置失败") {
+		t.Fatalf("expected merge failure, got %v", err)
+	}
+	for name, want := range map[string][]byte{
+		"config.yaml":                 []byte("old-mihomo"),
+		"controller-route-cidrs.json": []byte("[\\"192.0.2.10/32\\"]"),
+		"controller-config.yaml":      []byte("old-controller-hash"),
+		"smartdns.conf":               []byte("old-smartdns"),
+	} {
+		got, readErr := os.ReadFile(filepath.Join(dir, name))
+		if readErr != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%s not restored: got=%q err=%v want=%q", name, got, readErr, want)
+		}
+	}
+	if reloadCalls != 1 {
+		t.Fatalf("expected one reload to validate restored Mihomo config, got %d", reloadCalls)
+	}
+}
+
+func TestConfigTransactionsSerializeBothConfigurationLocks(t *testing.T) {
+	_, _ = setupConfigTransactionFixture(t)
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondEntered := make(chan struct{})
+	var mergeCalls int
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
+		mergeCalls++
+		if mergeCalls == 1 {
+			close(firstEntered)
+			<-releaseFirst
+		} else {
+			close(secondEntered)
+		}
+		return false, nil
+	}
+	transactionReloadMihomo = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { return true }
+	transactionWriteControllerConfig = func([]byte) error { return nil }
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- applyAgentConfigTransaction([]byte("first"), nil, false, "") }()
+	<-firstEntered
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- applyAgentConfigTransaction([]byte("second"), nil, false, "") }()
+
+	select {
+	case <-secondEntered:
+		close(releaseFirst)
+		t.Fatal("second transaction entered merge while first transaction still held configuration locks")
+	case <-time.After(40 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first transaction failed: %v", err)
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second transaction did not proceed after first released locks")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second transaction failed: %v", err)
+	}
+	if mergeCalls != 2 {
+		t.Fatalf("expected two serialized merge calls, got %d", mergeCalls)
+	}
+}
