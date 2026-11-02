@@ -2022,3 +2022,76 @@ rules:
 		t.Fatalf("new health-check options were not refreshed: %#v", group)
 	}
 }
+
+
+func TestMergeManagedProxySectionsInjectsGeneratedNodesIntoCustomPROXYGroup(t *testing.T) {
+	custom := `mode: rule
+proxies:
+  - name: stale-custom-node
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - DOMAIN-SUFFIX,example.com,PROXY
+  - MATCH,REJECT
+`
+	generated := `mode: rule
+proxies:
+  - name: Mihomo-IPv6-24587
+    type: vmess
+    server: 192.0.2.20
+    port: 24587
+  - name: Mihomo-IPv6-24588
+    type: vmess
+    server: 192.0.2.20
+    port: 24588
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - Mihomo-IPv6-24587
+      - Mihomo-IPv6-24588
+      - DIRECT
+rules:
+  - DOMAIN-SUFFIX,example.com,PROXY
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil {
+		t.Fatalf("merge generated proxy group members: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatalf("decode merged config: %v", err)
+	}
+	groups, ok := doc["proxy-groups"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("expected one PROXY group, got %#v", doc["proxy-groups"])
+	}
+	group, ok := groups[0].(map[string]any)
+	if !ok || group["name"] != "PROXY" || group["type"] != "select" {
+		t.Fatalf("operator PROXY group options were not preserved: %#v", groups[0])
+	}
+	members, ok := group["proxies"].([]any)
+	if !ok {
+		t.Fatalf("PROXY members are not a sequence: %#v", group["proxies"])
+	}
+	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588", "DIRECT"}
+	if len(members) != len(want) {
+		t.Fatalf("PROXY members = %#v, want %#v", members, want)
+	}
+	for i, name := range want {
+		if members[i] != name {
+			t.Errorf("PROXY member[%d] = %#v, want %q", i, members[i], name)
+		}
+	}
+	proxies, ok := doc["proxies"].([]any)
+	if !ok || len(proxies) != 2 {
+		t.Fatalf("stale custom proxy inventory was not replaced by generated nodes: %#v", doc["proxies"])
+	}
+}
