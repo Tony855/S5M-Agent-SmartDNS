@@ -284,7 +284,7 @@ createApp({
     const startStaleStatusTimer = () => {
       if (staleStatusTimer !== null) return;
       staleStatusTimer = setInterval(() => {
-        const now = Math.floor(Date.now() / 1000);
+        const now = Math.floor(serverNowSeconds());
         agentEntries.value = agentEntries.value.map(item => {
           const age = now - (Number(item.last_seen) || 0);
           if (item.online && (age < 0 || age >= 90)) {
@@ -377,7 +377,8 @@ createApp({
             agentStatusRevision++;
             const code = String(message.machine_code);
             const status = message.status && typeof message.status === 'object' ? message.status : {};
-            const receivedAt = Number(message.last_seen) || Math.floor(Date.now() / 1000);
+            syncServerClock(message.server_time);
+            const receivedAt = Number(message.last_seen) || Math.floor(serverNowSeconds());
             // Live telemetry is authoritative while WebSocket is connected.
             // HTTP is only used for initial/reconnect snapshots, not polling.
             traffic.value = {
@@ -573,6 +574,7 @@ createApp({
       try {
         const data = await sendBrowserWSControl({ type: 'monitor.overview.get' });
         overview.value = data.data || {};
+        syncServerClock(overview.value.server_time);
       } catch (e) {
         console.warn('通过实时通道读取仪表盘概览失败', e);
       }
@@ -1173,6 +1175,12 @@ createApp({
     const agentRefreshing = ref(false);
     let agentBindingRevision = 0;
     let agentStatusRevision = 0;
+    let serverClockOffsetMs = 0;
+    const serverNowSeconds = () => (Date.now() + serverClockOffsetMs) / 1000;
+    const syncServerClock = (serverTime) => {
+      const value = Number(serverTime) || 0;
+      if (value > 0) serverClockOffsetMs = value * 1000 - Date.now();
+    };
     const loadAgentsData = async () => {
       // Never overlap instance requests. Once data exists, refresh silently so
       // the current list and expanded cards remain mounted while the request runs.
@@ -1188,7 +1196,9 @@ createApp({
       try {
         const result = await sendBrowserWSControl({ type: 'agents.list.get' });
         const data = result.data || {};
-        const now = Math.floor(Date.now() / 1000);
+        const firstAgent = Object.values(data).find(item => item && Number(item.server_time) > 0);
+        if (firstAgent) syncServerClock(firstAgent.server_time);
+        const now = Math.floor(serverNowSeconds());
         const list = [];
         Object.keys(data || {}).forEach(code => {
           const item = data[code] || {};
