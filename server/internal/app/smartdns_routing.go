@@ -92,6 +92,7 @@ func BuildSmartDNSRoutingPlan(cfg SmartDNSRoutingConfig, proxies []SmartDNSProxy
 	}
 
 	seen := make(map[string]bool, len(cfg.Clients))
+	networks := make([]*net.IPNet, 0, len(cfg.Clients))
 	ports := make(map[int]bool, len(cfg.Clients))
 	for i, route := range cfg.Clients {
 		route.ClientCIDR = strings.TrimSpace(route.ClientCIDR)
@@ -103,6 +104,12 @@ func BuildSmartDNSRoutingPlan(cfg SmartDNSRoutingConfig, proxies []SmartDNSProxy
 		if err != nil { return SmartDNSRoutingPlan{}, fmt.Errorf("第 %d 条客户端 CIDR 无效: %w", i+1, err) }
 		route.ClientCIDR = network.String()
 		if seen[route.ClientCIDR] { return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段重复映射: %s", route.ClientCIDR) }
+		for _, existing := range networks {
+			if network.Contains(existing.IP) || existing.Contains(network.IP) {
+				return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段存在重叠映射: %s 与 %s", route.ClientCIDR, existing.String())
+			}
+		}
+		networks = append(networks, network)
 		seen[route.ClientCIDR] = true
 		if !available[route.ProxyName] { return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段 %s 引用了不存在或已禁用的代理 %q", route.ClientCIDR, route.ProxyName) }
 		if route.ListenPort < 0 || route.ListenPort > 65535 { return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段 %s 的 DNS 监听端口无效", route.ClientCIDR) }
