@@ -9,13 +9,13 @@
 - SmartDNS 健康检查同时执行本机 UDP 和 TCP DNS A 查询；只有进程、配置策略和两种查询均正常时，主控才将 Agent 的普通 `dns.nameserver` 切换到 `127.0.0.1:6053`。
 - SmartDNS 不健康时，下一次 Agent WebSocket 配置同步自动恢复节点原有 `dns.nameserver`；运行时切换不写回节点持久配置。
 - SmartDNS 默认使用 Cloudflare/Google 的 DNS-over-TLS 上游，连接端点使用字面 IP 和明确 TLS 主机名，避免 Bootstrap DNS 递归。
-- 共享出口模式下，Mihomo 可使用 `find-process-mode: strict` 和 `PROCESS-NAME,smartdns,<代理名>` 为整个 SmartDNS 进程选择同一个出口；这不能区分客户端，不能用于按客户端独立出口。按客户端模式必须由 SmartDNS 的 `group-match -client-ip` 选择独立组，并让各组的加密上游通过各自命名的 SOCKS5 `proxy-server` 出口。Agent 当前仍拒绝这些尚未接入完整运行时的指令。
+- Agent 默认生成独立的 `SMARTDNS-PROXY` fallback 组，成员仅为当前机器绑定节点和全局节点中已启用的代理；通过 `PROCESS-NAME,smartdns,SMARTDNS-PROXY` 路由 SmartDNS 的全部上游连接。组内每 30 秒主动探测 HTTPS 204 健康地址，优先使用列表中第一个健康节点；节点失效时自动切换到下一个健康节点。组不包含 `DIRECT`，全部代理不可用时 SmartDNS 上游连接失败关闭，不会直连泄漏。普通 `PROXY` 手动选择组不受影响。按客户端独立出口仍需 SmartDNS 的客户端 IP 分组与隔离运行时，当前不自动启用。显式设置空的 `smartdns_routing_config` 可恢复旧版路由行为。
 - TUN 同时劫持 UDP/TCP 53；默认只排除本地/私有网段和代理节点出口地址，不再把公共 bootstrap DNS 地址自动加入 `route-exclude-address`，避免强制它们绕过 TUN。
 - SmartDNS 不健康时，自动回退的普通 DNS 上游改为 Cloudflare/Google DoH，而不是自动降级到明文 UDP DNS。
 - Agent 拒绝明文 SmartDNS 上游 `server` / `server-tcp`，并在下发配置前做语法预检；配置替换失败会恢复旧文件、重启旧服务并重新验证 UDP/TCP。
 
 
-共享模式：客户端 → Mihomo DNS（Fake-IP / TUN 劫持）→ SmartDNS（127.0.0.1:6053）→ 单一共享加密 DNS 出口。按客户端模式需要 SmartDNS 根据客户端源 IP 分组，并由每组使用独立 SOCKS5 代理；该运行时尚未开放。
+默认共享故障切换模式：客户端 → Mihomo DNS（Fake-IP / TUN 劫持）→ SmartDNS（127.0.0.1:6053）→ SMARTDNS-PROXY fallback → 当前机器可用的已启用代理节点。该组与普通 PROXY 选择组相互独立。无可用代理时，SmartDNS 进程规则指向 REJECT。
 
 SmartDNS 示例配置见 `smartdns-cache.conf.example`。请按安装包版本核对指令兼容性。
 
