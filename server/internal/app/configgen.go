@@ -63,6 +63,7 @@ tun:
         - 'any:53'
         - 'tcp://any:53'
 proxies:__PROXIES__
+proxy-groups:__PROXY_GROUPS__
 rules:__RULES__`
 
 type proxyOut struct {
@@ -813,8 +814,12 @@ func (a *App) syncAuthorizedNodeConfigs() error {
 			if value, ok := generatedDoc["proxies"]; ok {
 				currentDoc["proxies"] = value
 			}
-			if value, ok := generatedDoc["proxy-groups"]; ok {
-				currentDoc["proxy-groups"] = value
+			mergedGroups, mergeErr := mergeManagedProxyGroupValues(currentDoc["proxy-groups"], generatedDoc["proxy-groups"])
+			if mergeErr != nil {
+				return fmt.Errorf("合并机器 %s 的自定义代理分组失败: %w", machineCode, mergeErr)
+			}
+			if len(mergedGroups) > 0 {
+				currentDoc["proxy-groups"] = mergedGroups
 			}
 			mergedRules, mergeErr := mergeManagedRuleValues(currentDoc["rules"], generatedDoc["rules"])
 			if mergeErr != nil {
@@ -1025,6 +1030,24 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		proxiesYAML = "\n" + indent(string(b), "    ")
 	}
 
+	// Expose every eligible node through one selectable group. DIRECT remains
+	// available as an explicit fallback, matching the operator-facing template.
+	groupProxies := make([]string, 0, len(outs)+1)
+	for _, proxy := range outs {
+		groupProxies = append(groupProxies, proxy.Name)
+	}
+	groupProxies = append(groupProxies, "DIRECT")
+	proxyGroups := []map[string]any{{
+		"name": "PROXY",
+		"type": "select",
+		"proxies": groupProxies,
+	}}
+	groupBytes, err := yaml.Marshal(proxyGroups)
+	if err != nil {
+		return "", fmt.Errorf("序列化代理分组失败: %w", err)
+	}
+	proxyGroupsYAML := "\n" + indent(string(groupBytes), "    ")
+
 	rules := []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT"}
 	// Keep Agent-to-controller HTTPS/WebSocket traffic direct under TUN strict-route.
 	if controllerHost != "" {
@@ -1106,14 +1129,14 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	switch routingMode {
 	case "global":
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
+			rules = append(rules, "MATCH,PROXY")
 		} else {
 			rules = append(rules, "MATCH,DIRECT")
 		}
 	case "split":
 		// Legacy split mode keeps its historical proxy fallback for existing records.
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
+			rules = append(rules, "MATCH,PROXY")
 		} else {
 			rules = append(rules, "MATCH,DIRECT")
 		}
@@ -1125,14 +1148,17 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		// mainland egress proxy; destinations outside CN go direct.
 		// Explicit controller and v2net.cc bypasses above remain higher priority.
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("GEOIP,CN,%s", firstProxy))
+			rules = append(rules, "GEOIP,CN,PROXY")
 		} else {
 			// Without a mainland egress, reject CN traffic rather than leak it direct.
 			rules = append(rules, "GEOIP,CN,REJECT")
 		}
 		rules = append(rules, "MATCH,DIRECT")
 	case "game":
-		gameProxy := firstProxy
+		gameProxy := ""
+		if firstProxy != "" {
+			gameProxy = "PROXY"
+		}
 		if gameProxy != "" {
 			for _, domain := range []string{"steampowered.com", "steamcommunity.com", "steamcontent.com", "epicgames.com", "playstation.net", "playstation.com", "xboxlive.com", "xbox.com", "battle.net", "blizzard.com", "riotgames.com", "leagueoflegends.com", "valorant.com", "ea.com"} {
 				rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, gameProxy))
@@ -1151,6 +1177,7 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	}
 	out := strings.Replace(baseTemplate, "__S5M_MIHOMO_SECRET__", secret, 1)
 	out = strings.Replace(out, "__PROXIES__", proxiesYAML, 1)
+	out = strings.Replace(out, "__PROXY_GROUPS__", proxyGroupsYAML, 1)
 	out = strings.Replace(out, "__RULES__", rulesYAML, 1)
 	return out, nil
 }
@@ -1260,7 +1287,14 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 		name, ok := group["name"].(string)
 		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("生成的 proxy-group 名称不能为空") }
 		name = strings.TrimSpace(name)
-		if seen[name] { return nil, fmt.Errorf("proxy-group 名称冲突: %q", name) }
+		if seen[name] {
+			// PROXY is the managed default group. A same-named operator group
+			// explicitly overrides it; this also keeps repeated node sync idempotent.
+			if name == "PROXY" {
+				continue
+			}
+			return nil, fmt.Errorf("proxy-group 名称冲突: %q", name)
+		}
 		seen[name] = true
 		merged = append(merged, raw)
 	}

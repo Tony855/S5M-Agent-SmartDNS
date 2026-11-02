@@ -348,6 +348,11 @@ tun:
 dns:
   enable: true
   listen: 127.0.0.1:5353
+proxy-groups:
+  - name: CUSTOM-MANUAL
+    type: select
+    proxies:
+      - DIRECT
 proxies:
   - name: stale-proxy
     type: socks5
@@ -386,6 +391,8 @@ rules:
 			"enable: false",
 			"listen: 127.0.0.1:5353",
 			"managed-proxy",
+			"CUSTOM-MANUAL",
+			"PROXY",
 			"DOMAIN-SUFFIX,custom-node.example,DIRECT",
 			"MATCH,REJECT",
 		} {
@@ -814,11 +821,11 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 		mode string
 		want []string
 	}{
-		{mode: "global", want: []string{"MATCH,proxy-a", "DOMAIN,controller.example.com,DIRECT"}},
-		{mode: "split", want: []string{"MATCH,proxy-a"}},
+		{mode: "global", want: []string{"MATCH,PROXY", "DOMAIN,controller.example.com,DIRECT"}},
+		{mode: "split", want: []string{"MATCH,PROXY"}},
 		{mode: "rule", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "PROCESS-NAME,smartdns,proxy-a", "MATCH,REJECT"}},
-		{mode: "return", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "GEOIP,CN,proxy-a", "MATCH,DIRECT"}},
-		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,proxy-a", "MATCH,DIRECT"}},
+		{mode: "return", want: []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT", "DOMAIN,controller.example.com,DIRECT", "GEOIP,CN,PROXY", "MATCH,DIRECT"}},
+		{mode: "game", want: []string{"DOMAIN-SUFFIX,steampowered.com,PROXY", "MATCH,DIRECT"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
@@ -838,8 +845,8 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 				if strings.Contains(got, "GEOIP,CN,DIRECT") || strings.Contains(got, "MATCH,proxy-a") {
 					t.Errorf("return mode must proxy CN and send non-CN traffic direct:\\n%s", got)
 				}
-				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "GEOIP,CN,proxy-a") ||
-					strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "GEOIP,CN,proxy-a") {
+				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "GEOIP,CN,PROXY") ||
+					strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "GEOIP,CN,PROXY") {
 					t.Errorf("controller/domain bypasses must precede the CN proxy rule:\\n%s", got)
 				}
 			}
@@ -1803,5 +1810,48 @@ func TestBuildConfigForMachineFailsClosedForPerClientRouting(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "尚未接入隔离 DNS 运行时") {
 			t.Errorf("BuildConfigForMachine(%q) must fail closed for per-client routing, got %v", machineCode, err)
 		}
+	}
+}
+
+func TestBuildConfigGeneratesSelectableProxyGroup(t *testing.T) {
+	proxies := []Proxy{
+		{Name: "Mihomo-IPv6-24587", Type: "vmess", Server: "192.0.2.10", Port: 24587, MachineCode: "__GLOBAL__", Enabled: true},
+		{Name: "Mihomo-IPv6-24588", Type: "vmess", Server: "192.0.2.10", Port: 24588, MachineCode: "__GLOBAL__", Enabled: true},
+		{Name: "disabled-node", Type: "vmess", Server: "192.0.2.10", Port: 24589, MachineCode: "__GLOBAL__", Enabled: false},
+	}
+	got, err := buildConfigFromProxies(proxies, "", "test-secret")
+	if err != nil {
+		t.Fatalf("buildConfigFromProxies: %v", err)
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil {
+		t.Fatalf("decode generated config: %v", err)
+	}
+	groups, ok := config["proxy-groups"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("proxy-groups = %#v, want one generated group", config["proxy-groups"])
+	}
+	group, ok := groups[0].(map[string]any)
+	if !ok || group["name"] != "PROXY" || group["type"] != "select" {
+		t.Fatalf("generated group = %#v, want PROXY select group", groups[0])
+	}
+	members, ok := group["proxies"].([]any)
+	if !ok {
+		t.Fatalf("PROXY members = %#v, want sequence", group["proxies"])
+	}
+	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588", "DIRECT"}
+	if len(members) != len(want) {
+		t.Fatalf("PROXY members = %#v, want %#v", members, want)
+	}
+	for i, name := range want {
+		if members[i] != name {
+			t.Errorf("PROXY member[%d] = %#v, want %q", i, members[i], name)
+		}
+	}
+	if strings.Contains(got, "disabled-node") {
+		t.Fatal("disabled proxy must not be included in generated group")
+	}
+	if !strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("strict rule mode must keep rejecting unmatched traffic")
 	}
 }
