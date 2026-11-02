@@ -112,7 +112,13 @@ func BuildSmartDNSRoutingPlan(cfg SmartDNSRoutingConfig, proxies []SmartDNSProxy
 		networks = append(networks, network)
 		seen[route.ClientCIDR] = true
 		if !available[route.ProxyName] { return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段 %s 引用了不存在或已禁用的代理 %q", route.ClientCIDR, route.ProxyName) }
-		if route.ListenPort < 0 || route.ListenPort > 65535 { return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段 %s 的 DNS 监听端口无效", route.ClientCIDR) }
+		// Zero requests deterministic auto-allocation. Explicit ports must be
+		// unprivileged because the generated Mihomo SOCKS listener is managed
+		// by the Agent and must obey the same range as the YAML synthesizer.
+		if route.ListenPort < 0 || route.ListenPort > 65535 ||
+			(route.ListenPort > 0 && route.ListenPort < 1024) {
+			return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段 %s 的 Mihomo SOCKS 监听端口必须为 0（自动分配）或 1024-65535", route.ClientCIDR)
+		}
 		if route.ListenPort != 0 {
 			if ports[route.ListenPort] { return SmartDNSRoutingPlan{}, fmt.Errorf("SmartDNS 监听端口重复: %d", route.ListenPort) }
 			ports[route.ListenPort] = true
