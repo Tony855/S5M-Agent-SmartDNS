@@ -63,6 +63,7 @@ tun:
         - 'any:53'
         - 'tcp://any:53'
 proxies:__PROXIES__
+proxy-groups:__PROXY_GROUPS__
 rules:__RULES__`
 
 type proxyOut struct {
@@ -1025,6 +1026,24 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		proxiesYAML = "\n" + indent(string(b), "    ")
 	}
 
+	// Expose every eligible node through one selectable group. DIRECT remains
+	// available as an explicit fallback, matching the operator-facing template.
+	groupProxies := make([]string, 0, len(outs)+1)
+	for _, proxy := range outs {
+		groupProxies = append(groupProxies, proxy.Name)
+	}
+	groupProxies = append(groupProxies, "DIRECT")
+	proxyGroups := []map[string]any{{
+		"name": "PROXY",
+		"type": "select",
+		"proxies": groupProxies,
+	}}
+	groupBytes, err := yaml.Marshal(proxyGroups)
+	if err != nil {
+		return "", fmt.Errorf("序列化代理分组失败: %w", err)
+	}
+	proxyGroupsYAML := "\n" + indent(string(groupBytes), "    ")
+
 	rules := []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT"}
 	// Keep Agent-to-controller HTTPS/WebSocket traffic direct under TUN strict-route.
 	if controllerHost != "" {
@@ -1106,7 +1125,7 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	switch routingMode {
 	case "global":
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("MATCH,%s", firstProxy))
+			rules = append(rules, "MATCH,PROXY")
 		} else {
 			rules = append(rules, "MATCH,DIRECT")
 		}
@@ -1125,14 +1144,17 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		// mainland egress proxy; destinations outside CN go direct.
 		// Explicit controller and v2net.cc bypasses above remain higher priority.
 		if firstProxy != "" {
-			rules = append(rules, fmt.Sprintf("GEOIP,CN,%s", firstProxy))
+			rules = append(rules, "GEOIP,CN,PROXY")
 		} else {
 			// Without a mainland egress, reject CN traffic rather than leak it direct.
 			rules = append(rules, "GEOIP,CN,REJECT")
 		}
 		rules = append(rules, "MATCH,DIRECT")
 	case "game":
-		gameProxy := firstProxy
+		gameProxy := ""
+		if firstProxy != "" {
+			gameProxy = "PROXY"
+		}
 		if gameProxy != "" {
 			for _, domain := range []string{"steampowered.com", "steamcommunity.com", "steamcontent.com", "epicgames.com", "playstation.net", "playstation.com", "xboxlive.com", "xbox.com", "battle.net", "blizzard.com", "riotgames.com", "leagueoflegends.com", "valorant.com", "ea.com"} {
 				rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, gameProxy))
@@ -1151,6 +1173,7 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	}
 	out := strings.Replace(baseTemplate, "__S5M_MIHOMO_SECRET__", secret, 1)
 	out = strings.Replace(out, "__PROXIES__", proxiesYAML, 1)
+	out = strings.Replace(out, "__PROXY_GROUPS__", proxyGroupsYAML, 1)
 	out = strings.Replace(out, "__RULES__", rulesYAML, 1)
 	return out, nil
 }
