@@ -49,6 +49,8 @@ on:
       - "s5m-agent/*_test.go"
       - "s5m-agent/smartdns_runtime.go"
       - "source/**"
+      - "scripts/s5m-deploy.sh"
+      - "scripts/deploy-agent.sh"
       - "s5m-agent/go.mod"
       - "s5m-agent/go.sum"
       - "s5m-agent/index.html"
