@@ -285,15 +285,18 @@ func validateSmartDNSConfig(data []byte) error {
 			encryptedUpstream = true
 			if directive == "server-tls" && strings.Contains(" "+strings.Join(fields[2:], " ")+" ", " -group china-dot ") {
 				endpoint := fields[1]
-				hostName := ""
-				for i := 2; i+1 < len(fields); i++ { if fields[i] == "-host-name" { hostName = fields[i+1] } }
+				hostName, verifyName := "", ""
+				for i := 2; i+1 < len(fields); i++ {
+					if fields[i] == "-host-name" { hostName = fields[i+1] }
+					if fields[i] == "-tls-host-verify" { verifyName = fields[i+1] }
+				}
 				allowed := map[string]string{
 					"223.5.5.5:853": "dns.alidns.com",
 					"223.6.6.6:853": "dns.alidns.com",
 					"1.12.12.12:853": "dot.pub",
 					"120.53.53.53:853": "dot.pub",
 				}
-				if allowed[endpoint] != hostName || !strings.Contains(" "+strings.Join(fields[2:], " ")+" ", " -exclude-default-group ") {
+				if allowed[endpoint] != hostName || allowed[endpoint] != verifyName || !strings.Contains(" "+strings.Join(fields[2:], " ")+" ", " -exclude-default-group ") {
 					return fmt.Errorf("第 %d 行 china-dot 上游不在阿里云/腾讯 DoT 固定白名单中", lineNo+1)
 				}
 				domesticDoTUpstreams++
