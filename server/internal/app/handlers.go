@@ -213,8 +213,39 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		switch strings.TrimSpace(mode) {
 		case "global", "split", "rule", "return", "game":
 		default:
-			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、rule、return 或 game")
+			writeErr(w, http.StatusBadRequest, "代理模式必须是 global、split、rule、return 或 game")
 			return
+		}
+	}
+	if raw, ok := in["smartdns_routing_config"]; ok {
+		var cfg SmartDNSRoutingConfig
+		if strings.TrimSpace(raw) == "" {
+			// Empty value explicitly removes the opt-in setting and restores legacy behavior.
+			in["smartdns_routing_config"] = ""
+		} else {
+			if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 路由设置必须是有效 JSON: "+err.Error())
+				return
+			}
+			if cfg.Mode == SmartDNSProxyModePerClient {
+				writeErr(w, http.StatusBadRequest, "按客户端独立出口尚未完成隔离 DNS 运行时，暂不允许启用")
+				return
+			}
+			if cfg.Mode != SmartDNSProxyModeShared {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 模式必须是 shared；留空可恢复旧行为")
+				return
+			}
+			if cfg.Strategy != "" && cfg.Strategy != SmartDNSDefaultStrategy {
+				writeErr(w, http.StatusBadRequest, "当前 SmartDNS 统一代理策略仅支持 fallback")
+				return
+			}
+			cfg.Strategy = SmartDNSDefaultStrategy
+			normalized, err := json.Marshal(cfg)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 路由设置无法序列化")
+				return
+			}
+			in["smartdns_routing_config"] = string(normalized)
 		}
 	}
 	if err := a.store.UpdateSettings(in); err != nil {
