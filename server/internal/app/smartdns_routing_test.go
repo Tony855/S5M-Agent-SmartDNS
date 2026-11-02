@@ -1,6 +1,6 @@
 package app
 
-import "testing"
+import ("testing"; "fmt")
 
 func TestBuildSmartDNSRoutingPlanLegacyIsNonMutating(t *testing.T) {
 	got, err := BuildSmartDNSRoutingPlan(SmartDNSRoutingConfig{}, nil)
@@ -63,4 +63,29 @@ func TestBuildSmartDNSRoutingPlanRejectsInvalidMappings(t *testing.T) {
 func TestBuildSmartDNSRoutingPlanRejectsDisabledProxy(t *testing.T) {
 	cfg:=SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.1.2/32",ProxyName:"node-a"}}}
 	if _,err:=BuildSmartDNSRoutingPlan(cfg,[]SmartDNSProxyRef{{Name:"node-a",Enabled:false}});err==nil { t.Fatal("disabled proxy must not be a DNS egress") }
+}
+
+
+func TestBuildSmartDNSRoutingPlanRejectsPrivilegedListenerPorts(t *testing.T) {
+	for _, port := range []int{1, 53, 1023} {
+		t.Run(fmt.Sprintf("port-%d", port), func(t *testing.T) {
+			cfg := SmartDNSRoutingConfig{
+				Mode: SmartDNSProxyModePerClient,
+				Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a", ListenPort: port}},
+			}
+			if _, err := BuildSmartDNSRoutingPlan(cfg, []SmartDNSProxyRef{{Name: "node-a", Enabled: true}}); err == nil {
+				t.Fatalf("privileged port %d must be rejected", port)
+			}
+		})
+	}
+}
+
+func TestBuildSmartDNSRoutingPlanAcceptsMinimumUnprivilegedListenerPort(t *testing.T) {
+	cfg := SmartDNSRoutingConfig{
+		Mode: SmartDNSProxyModePerClient,
+		Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.1.10/32", ProxyName: "node-a", ListenPort: 1024}},
+	}
+	if _, err := BuildSmartDNSRoutingPlan(cfg, []SmartDNSProxyRef{{Name: "node-a", Enabled: true}}); err != nil {
+		t.Fatalf("port 1024 should be accepted: %v", err)
+	}
 }
