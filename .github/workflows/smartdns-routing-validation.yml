@@ -12,6 +12,7 @@ on:
     branches: [main]
     paths:
       - "server/**"
+      - "s5m-agent/**"
       - ".github/workflows/smartdns-routing-validation.yml"
 
 permissions:
