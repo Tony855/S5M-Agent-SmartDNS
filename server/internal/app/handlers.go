@@ -2657,18 +2657,60 @@ func (a *App) handleRetryNodeConfigSync(w http.ResponseWriter, _ *http.Request) 
 
 
 // agentIfNoneMatch implements the weak comparison required by If-None-Match
-// for GET requests. It also accepts wildcard and comma-separated validators.
+// for GET requests. Commas inside a quoted opaque-tag are not list separators.
 func agentIfNoneMatch(values []string, currentETag string) bool {
 	for _, value := range values {
-		for _, candidate := range strings.Split(value, ",") {
-			candidate = strings.TrimSpace(candidate)
-			if candidate == "*" {
-				return true
+		for i := 0; i < len(value); {
+			for i < len(value) && (value[i] == ' ' || value[i] == '\\t' || value[i] == ',') {
+				i++
 			}
-			if strings.HasPrefix(candidate, "W/") {
-				candidate = strings.TrimSpace(strings.TrimPrefix(candidate, "W/"))
+			if i >= len(value) {
+				break
 			}
-			if candidate == currentETag {
+			if value[i] == '*' {
+				i++
+				for i < len(value) && (value[i] == ' ' || value[i] == '\\t') {
+					i++
+				}
+				if i == len(value) || value[i] == ',' {
+					return true
+				}
+				continue
+			}
+
+			weak := false
+			if strings.HasPrefix(value[i:], "W/") {
+				weak = true
+				i += 2
+			}
+			if i >= len(value) || value[i] != '"' {
+				for i < len(value) && value[i] != ',' {
+					i++
+				}
+				continue
+			}
+			start := i
+			i++
+			for i < len(value) && value[i] != '"' {
+				// entity-tag opaque characters exclude controls and DEL.
+				if value[i] < 0x21 || value[i] == 0x7f {
+					break
+				}
+				i++
+			}
+			if i >= len(value) || value[i] != '"' {
+				for i < len(value) && value[i] != ',' {
+					i++
+				}
+				continue
+			}
+			i++
+			candidate := value[start:i]
+			for i < len(value) && (value[i] == ' ' || value[i] == '\\t') {
+				i++
+			}
+			if (i == len(value) || value[i] == ',') && candidate == currentETag {
+				_ = weak // GET If-None-Match uses weak comparison for both forms.
 				return true
 			}
 		}
