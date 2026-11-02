@@ -224,7 +224,7 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(agentYAML), &agentConfig); err != nil {
 		t.Fatalf("decode generated Agent config: %v", err)
 	}
-	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != false {
+	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != true {
 		t.Errorf("new Agent config must enable TUN by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
 	}
 	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
