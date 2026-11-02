@@ -1919,7 +1919,7 @@ func (a *App) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	etag := fmt.Sprintf("\"%x\"", sum[:])
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "no-cache")
-	if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+	if agentIfNoneMatch(r.Header.Values("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -2653,4 +2653,25 @@ func (a *App) handleRetryNodeConfigSync(w http.ResponseWriter, _ *http.Request) 
 		"ok":      true,
 		"message": "已重新生成并保存所有已授权节点的配置；在线 Agent 将在下次拉取时应用",
 	})
+}
+
+
+// agentIfNoneMatch implements the weak comparison required by If-None-Match
+// for GET requests. It also accepts wildcard and comma-separated validators.
+func agentIfNoneMatch(values []string, currentETag string) bool {
+	for _, value := range values {
+		for _, candidate := range strings.Split(value, ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "*" {
+				return true
+			}
+			if strings.HasPrefix(candidate, "W/") {
+				candidate = strings.TrimSpace(strings.TrimPrefix(candidate, "W/"))
+			}
+			if candidate == currentETag {
+				return true
+			}
+		}
+	}
+	return false
 }
