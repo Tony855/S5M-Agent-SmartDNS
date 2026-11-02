@@ -35,6 +35,7 @@ on:
       - "server/internal/app/smartdns_*.go"
       - "server/internal/app/smartdns_*_test.go"
       - "scripts/tests/proxy-import-parser.test.js"
+      - "scripts/tests/mihomo-fallback-runtime.py"
       - "server/web/index.html"
       - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
@@ -70,6 +71,7 @@ on:
       - "server/internal/app/smartdns_*_test.go"
       - "server/internal/app/smartdns_*.go"
       - "scripts/tests/proxy-import-parser.test.js"
+      - "scripts/tests/mihomo-fallback-runtime.py"
       - "server/web/index.html"
       - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
@@ -237,6 +239,10 @@ jobs:
             /usr/local/bin/mihomo -v
             /usr/sbin/smartdns -h >/dev/null 2>&1 || true
           '
+
+      - name: Test Mihomo fallback runtime failover
+        timeout-minutes: 3
+        run: python3 scripts/tests/mihomo-fallback-runtime.py s5m-agent-smartdns:test
 
       - name: Test Agent, Mihomo and SmartDNS startup plus UDP/TCP DNS
         shell: bash
