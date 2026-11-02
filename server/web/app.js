@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, onMounted, onUnmounted, computed, watch } = Vue;
+const { createApp, ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } = Vue;
 
 createApp({
   setup() {
@@ -103,6 +103,8 @@ createApp({
     const importing = ref(false);
     const importMachineCode = ref('');
     const selectedProxyIds = ref([]);
+    const proxyTableRef = ref(null);
+    const allFilteredProxiesSelected = computed(() => filteredProxies.value.length > 0 && filteredProxies.value.every(row => selectedProxyIds.value.includes(Number(row.id))));
     const bulkMachineCode = ref('');
     const bulkProxyBusy = ref(false);
 
@@ -755,11 +757,40 @@ createApp({
       savingProxy.value = false;
     };
 
-    const onProxySelectionChange = (rows) => { selectedProxyIds.value = (rows || []).map(row => Number(row.id)).filter(id => Number.isInteger(id) && id > 0); };
+    const visibleProxyIds = () => new Set(filteredProxies.value.map(row => Number(row.id)).filter(id => Number.isInteger(id) && id > 0));
+    const onProxySelectionChange = (rows) => {
+      const visibleIds = visibleProxyIds();
+      const next = new Set(selectedProxyIds.value.filter(id => !visibleIds.has(Number(id))));
+      (rows || []).forEach(row => {
+        const id = Number(row.id);
+        if (Number.isInteger(id) && id > 0) next.add(id);
+      });
+      selectedProxyIds.value = Array.from(next);
+    };
+    const syncDesktopProxySelection = () => {
+      nextTick(() => {
+        const table = proxyTableRef.value;
+        if (!table) return;
+        table.clearSelection();
+        const selected = new Set(selectedProxyIds.value.map(Number));
+        filteredProxies.value.forEach(row => {
+          if (selected.has(Number(row.id))) table.toggleRowSelection(row, true);
+        });
+      });
+    };
+    const toggleSelectAllFilteredProxies = () => {
+      const visibleIds = visibleProxyIds();
+      const next = new Set(selectedProxyIds.value);
+      const shouldSelect = !allFilteredProxiesSelected.value;
+      visibleIds.forEach(id => shouldSelect ? next.add(id) : next.delete(id));
+      selectedProxyIds.value = Array.from(next);
+      syncDesktopProxySelection();
+    };
     const toggleMobileProxySelection = (id, checked) => {
       const next = new Set(selectedProxyIds.value);
       if (checked) next.add(Number(id)); else next.delete(Number(id));
       selectedProxyIds.value = Array.from(next);
+      syncDesktopProxySelection();
     };
     const bulkDeleteProxies = async () => {
       const ids = selectedProxyIds.value.slice();
@@ -1638,7 +1669,7 @@ createApp({
       mainMihomoStatus, loadMainMihomoStatus,
       proxyDialog, proxyForm, savingProxy,
       machineProxyModes, savingMachineProxyMode, saveMachineProxyMode,
-      showImport, importTab, importText, importing, importMachineCode, selectedProxyIds, bulkMachineCode, bulkProxyBusy, onProxySelectionChange, toggleMobileProxySelection, bulkDeleteProxies, bulkBindProxies,
+      showImport, importTab, importText, importing, importMachineCode, selectedProxyIds, proxyTableRef, allFilteredProxiesSelected, toggleSelectAllFilteredProxies, bulkMachineCode, bulkProxyBusy, onProxySelectionChange, toggleMobileProxySelection, bulkDeleteProxies, bulkBindProxies,
       switchPage, doLogin, logout, loadOverview,
       updateKernel, recoverMihomoUpdateTask, loadProxies, openCreateProxy, openEditProxy, saveProxy, deleteProxy, importProxies, handleFileUpload,
       loadAgentsData, generateAgentToken, deleteAgent, safeCopy,
