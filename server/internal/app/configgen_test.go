@@ -1805,3 +1805,46 @@ func TestBuildConfigForMachineFailsClosedForPerClientRouting(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildConfigGeneratesSelectableProxyGroup(t *testing.T) {
+	proxies := []Proxy{
+		{Name: "Mihomo-IPv6-24587", Type: "vmess", Server: "192.0.2.10", Port: 24587, MachineCode: "__GLOBAL__", Enabled: true},
+		{Name: "Mihomo-IPv6-24588", Type: "vmess", Server: "192.0.2.10", Port: 24588, MachineCode: "__GLOBAL__", Enabled: true},
+		{Name: "disabled-node", Type: "vmess", Server: "192.0.2.10", Port: 24589, MachineCode: "__GLOBAL__", Enabled: false},
+	}
+	got, err := buildConfigFromProxies(proxies, "", "test-secret")
+	if err != nil {
+		t.Fatalf("buildConfigFromProxies: %v", err)
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil {
+		t.Fatalf("decode generated config: %v", err)
+	}
+	groups, ok := config["proxy-groups"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("proxy-groups = %#v, want one generated group", config["proxy-groups"])
+	}
+	group, ok := groups[0].(map[string]any)
+	if !ok || group["name"] != "PROXY" || group["type"] != "select" {
+		t.Fatalf("generated group = %#v, want PROXY select group", groups[0])
+	}
+	members, ok := group["proxies"].([]any)
+	if !ok {
+		t.Fatalf("PROXY members = %#v, want sequence", group["proxies"])
+	}
+	want := []string{"Mihomo-IPv6-24587", "Mihomo-IPv6-24588", "DIRECT"}
+	if len(members) != len(want) {
+		t.Fatalf("PROXY members = %#v, want %#v", members, want)
+	}
+	for i, name := range want {
+		if members[i] != name {
+			t.Errorf("PROXY member[%d] = %#v, want %q", i, members[i], name)
+		}
+	}
+	if strings.Contains(got, "disabled-node") {
+		t.Fatal("disabled proxy must not be included in generated group")
+	}
+	if !strings.Contains(got, "MATCH,REJECT") {
+		t.Fatal("strict rule mode must keep rejecting unmatched traffic")
+	}
+}
