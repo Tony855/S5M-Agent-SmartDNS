@@ -134,30 +134,41 @@ jobs:
           ! grep -q '回国模式（大陆直连' server/web/index.html
 
       - name: Validate default and opt-in TUN deployment permissions
+        shell: bash
         run: |
-          docker compose -f s5m-agent/docker-compose.yml config --quiet
-          docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config --quiet
+          set -Eeuo pipefail
+          check() {
+            local name="$1"; shift
+            if "$@"; then
+              echo "PASS: $name"
+            else
+              echo "::error title=TUN validation failed::$name"
+              return 1
+            fi
+          }
+          check "default Compose syntax" docker compose -f s5m-agent/docker-compose.yml config --quiet
+          check "TUN Compose syntax" docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config --quiet
           default_compose="$(docker compose -f s5m-agent/docker-compose.yml config)"
           tun_compose="$(docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config)"
-          ! grep -Eq 'NET_ADMIN|/dev/net/tun' <<<"$default_compose"
-          grep -q 'NET_ADMIN' <<<"$tun_compose"
-          grep -q '/dev/net/tun:/dev/net/tun' <<<"$tun_compose"
-          grep -q 'enable: false' s5m-agent/default-config.yaml
-          grep -q 'enable: false' s5m-agent/smartdns/default-config-smartdns.yaml
-          bash -n scripts/s5m-deploy.sh
-          grep -q 'ENABLE_TUN=.*:-0' scripts/s5m-deploy.sh
-          grep -q 'TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)' scripts/s5m-deploy.sh
-          grep -q 'ENABLE_TUN=1.*缺少字符设备' scripts/s5m-deploy.sh
-          grep -q 'config_uses_tun' scripts/s5m-deploy.sh
-          grep -q 'tun.enable=true' scripts/s5m-deploy.sh
-          grep -q 'config_uses_tun' scripts/deploy-agent.sh
-          grep -q 'tun.enable=true' scripts/deploy-agent.sh
-          grep -q 'BACKUP_NAME=.*rollback' scripts/s5m-deploy.sh
-          grep -q 'docker rename "$CONTAINER" "$BACKUP_NAME"' scripts/s5m-deploy.sh
-          grep -q 'restore_previous()' scripts/s5m-deploy.sh
-          grep -q 'NEW_STARTED=1' scripts/s5m-deploy.sh
-          grep -q 'DEPLOY_OK=1' scripts/s5m-deploy.sh
-          grep -q '等待 Agent 容器启动检查' scripts/s5m-deploy.sh
+          check "default Compose has no TUN permissions" bash -c '! grep -Eq "NET_ADMIN|/dev/net/tun" <<<"$1"' _ "$default_compose"
+          check "TUN overlay adds NET_ADMIN" grep -q NET_ADMIN <<<"$tun_compose"
+          check "TUN overlay mounts tun device" grep -q '/dev/net/tun:/dev/net/tun' <<<"$tun_compose"
+          check "default Mihomo config disables TUN" grep -q 'enable: false' s5m-agent/default-config.yaml
+          check "default SmartDNS config disables TUN" grep -q 'enable: false' s5m-agent/smartdns/default-config-smartdns.yaml
+          check "s5m-deploy shell syntax" bash -n scripts/s5m-deploy.sh
+          check "s5m-deploy defaults TUN off" grep -q 'ENABLE_TUN=.*:-0' scripts/s5m-deploy.sh
+          check "s5m-deploy grants TUN only on opt-in" grep -Fq 'TUN_ARGS+=(--cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun)' scripts/s5m-deploy.sh
+          check "s5m-deploy checks missing tun device" grep -Fq 'ENABLE_TUN=1' scripts/s5m-deploy.sh
+          check "s5m-deploy detects existing TUN config" grep -q 'config_uses_tun' scripts/s5m-deploy.sh
+          check "standalone deploy shell syntax" bash -n scripts/deploy-agent.sh
+          check "standalone deploy detects existing TUN config" grep -q 'config_uses_tun' scripts/deploy-agent.sh
+          check "standalone deploy blocks TUN downgrade" grep -q 'tun.enable=true' scripts/deploy-agent.sh
+          check "rollback keeps previous container" grep -q 'BACKUP_NAME=.*rollback' scripts/s5m-deploy.sh
+          check "rollback renames previous container" grep -Fq 'docker rename "$CONTAINER" "$BACKUP_NAME"' scripts/s5m-deploy.sh
+          check "rollback restore function exists" grep -q 'restore_previous()' scripts/s5m-deploy.sh
+          check "new container tracked for rollback" grep -q 'NEW_STARTED=1' scripts/s5m-deploy.sh
+          check "deployment success gate exists" grep -q 'DEPLOY_OK=1' scripts/s5m-deploy.sh
+          check "container startup wait exists" grep -q '等待 Agent 容器启动检查' scripts/s5m-deploy.sh
       - name: Test deployment rollback fault injection
         run: bash scripts/tests/deploy-rollback-faults.sh
 
