@@ -391,3 +391,44 @@ func TestBuildSmartDNSClientRuntimeMappingsRejectsConflictingExplicitPort(t *tes
 		t.Fatal("expected explicit port collision to be rejected")
 	}
 }
+
+
+func TestApplySmartDNSPerClientListenersReturnsExactMappingsForSmartDNS(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+listeners:
+  - name: occupied
+    type: socks
+    listen: 127.0.0.1
+    port: 16000
+rules: [MATCH,DIRECT]
+`
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModePerClient,
+		ProxyNames: []string{"node-a"},
+		Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.1.0/24", ProxyName: "node-a"}},
+	}
+	mihomo, mappings, err := applySmartDNSPerClientListenersWithMappings(input, plan)
+	if err != nil { t.Fatal(err) }
+	if len(mappings) != 1 { t.Fatalf("got %d mappings, want 1", len(mappings)) }
+	if mappings[0].ListenerPort != 16001 || mappings[0].ListenerAddress != "127.0.0.1" ||
+		mappings[0].ListenerName != "s5m-smartdns-16001" || mappings[0].ProxyName != "node-a" {
+		t.Fatalf("unexpected mapping: %#v", mappings[0])
+	}
+	smartdns, err := buildSmartDNSPerClientConfig(mappings)
+	if err != nil { t.Fatal(err) }
+	for _, want := range []string{"127.0.0.1:16001", "s5m-smartdns-16001", "192.168.1.0/24"} {
+		if !strings.Contains(smartdns, want) { t.Fatalf("SmartDNS config missing %q: %s", want, smartdns) }
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(mihomo), &doc); err != nil { t.Fatal(err) }
+	listeners := doc["listeners"].([]any)
+	managed := listeners[len(listeners)-1].(map[string]any)
+	if managed["port"] != mappings[0].ListenerPort || managed["name"] != mappings[0].ListenerName ||
+		managed["listen"] != mappings[0].ListenerAddress || managed["proxy"] != mappings[0].ProxyName {
+		t.Fatalf("SmartDNS mapping differs from Mihomo listener: listener=%#v mapping=%#v", managed, mappings[0])
+	}
+}
