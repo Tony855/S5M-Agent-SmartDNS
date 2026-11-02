@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -184,7 +185,17 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 			usedPorts[port] = true
 		}
 	}
+	seenClientCIDRs := make(map[string]bool, len(plan.Clients))
 	for _, client := range plan.Clients {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(client.ClientCIDR))
+		if err != nil {
+			return "", fmt.Errorf("客户端网段 %q 无效: %w", client.ClientCIDR, err)
+		}
+		canonicalCIDR := prefix.Masked().String()
+		if seenClientCIDRs[canonicalCIDR] {
+			return "", fmt.Errorf("客户端网段 %q 重复，拒绝生成重复出口 Listener", canonicalCIDR)
+		}
+		seenClientCIDRs[canonicalCIDR] = true
 		if !allowed[client.ProxyName] || !existingProxies[client.ProxyName] {
 			return "", fmt.Errorf("客户端 %s 指向的代理 %q 未出现在当前 Mihomo 配置中", client.ClientCIDR, client.ProxyName)
 		}
