@@ -54,7 +54,7 @@ class SocksProxyServer:
                 methods = client.recv(greeting[1])
                 if not methods or 0 not in methods:
                     return
-                client.sendall(b"\\x05\\x00")
+                client.sendall(b"\x05\x00")
                 request = client.recv(4)
                 if len(request) != 4 or request[0] != 5 or request[1] != 1:
                     return
@@ -71,7 +71,7 @@ class SocksProxyServer:
                 else:
                     return
                 client.recv(2)
-                client.sendall(b"\\x05\\x00\\x00\\x01\\x7f\\x00\\x00\\x01\\x00\\x50")
+                client.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x50")
                 data = client.recv(65536)
                 if not data:
                     return
@@ -79,7 +79,7 @@ class SocksProxyServer:
                 reason = b"No Content" if status == 204 else b"Service Unavailable"
                 client.sendall(
                     b"HTTP/1.1 " + str(status).encode() + b" " + reason
-                    + b"\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n"
+                    + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )
             except (OSError, IndexError):
                 return
@@ -153,8 +153,11 @@ def request_via_mihomo(mixed_port, target_port):
 
 
 def main():
-    node_a = serve(ProxyHandler, "a")
-    node_b = serve(ProxyHandler, "b")
+    proxy_a = SocksProxyServer("a")
+    proxy_b = SocksProxyServer("b")
+    node_a = proxy_a.port
+    node_b = proxy_b.port
+    target = serve(HealthTargetHandler)
     controller = free_port()
     mixed = free_port()
 
@@ -167,11 +170,11 @@ log-level: info
 external-controller: 127.0.0.1:{controller}
 proxies:
   - name: node-a
-    type: http
+    type: socks5
     server: 127.0.0.1
     port: {node_a}
   - name: node-b
-    type: http
+    type: socks5
     server: 127.0.0.1
     port: {node_b}
 proxy-groups:
@@ -239,6 +242,8 @@ rules:
                 ["docker", "rm", "-f", NAME],
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
+            proxy_a.close()
+            proxy_b.close()
 
 
 if __name__ == "__main__":
