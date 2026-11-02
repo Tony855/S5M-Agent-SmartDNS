@@ -511,13 +511,39 @@ func (s *Store) DeleteProxy(id int64) error {
 }
 
 func (s *Store) DeleteProxies(ids []int64) error {
-	if len(ids) == 0 { return fmt.Errorf("未选择代理") }
+	if len(ids) == 0 {
+		return fmt.Errorf("未选择代理")
+	}
+	// Reject invalid and duplicate IDs before opening the transaction. A
+	// duplicate could otherwise make the response count differ from rows deleted.
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return fmt.Errorf("代理 ID 无效")
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("代理 ID %d 重复", id)
+		}
+		seen[id] = struct{}{}
+	}
+
 	tx, err := s.db.Begin()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer tx.Rollback()
 	for _, id := range ids {
-		if id <= 0 { return fmt.Errorf("代理 ID 无效") }
-		if _, err := tx.Exec(`DELETE FROM proxies WHERE id=?`, id); err != nil { return err }
+		result, err := tx.Exec(`DELETE FROM proxies WHERE id=?`, id)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("代理 ID %d 不存在，已取消整批删除", id)
+		}
 	}
 	return tx.Commit()
 }
