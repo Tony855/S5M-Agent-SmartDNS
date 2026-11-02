@@ -265,6 +265,28 @@ func TestRestoreSmartDNSConfigVerifiedRejectsUnrestoredContent(t *testing.T) {
 	}
 }
 
+func TestValidateSmartDNSConfigRestrictsPersistentCachePathsAndOptions(t *testing.T) {
+	base := "bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\\n"
+	valid := base + "cache-persist yes\\ncache-file /data/smartdns.cache\\ncache-checkpoint-time 3600\\n"
+	if err := validateSmartDNSConfig([]byte(valid)); err != nil {
+		t.Fatalf("valid persistent cache config rejected: %v", err)
+	}
+	cases := []struct{name, line string}{
+		{name: "cache persistence disabled", line: "cache-persist no"},
+		{name: "cache path escapes data volume", line: "cache-file /etc/passwd"},
+		{name: "checkpoint too frequent", line: "cache-checkpoint-time 60"},
+		{name: "cache path has extra arguments", line: "cache-file /data/smartdns.cache extra"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := base + tc.line + "\\n"
+			if err := validateSmartDNSConfig([]byte(candidate)); err == nil {
+				t.Fatal("unsafe persistent cache setting must be rejected")
+			}
+		})
+	}
+}
+
 func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
 	secure := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
 	if err := validateSmartDNSConfig(secure); err != nil {
