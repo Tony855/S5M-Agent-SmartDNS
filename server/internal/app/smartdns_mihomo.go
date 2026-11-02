@@ -154,7 +154,7 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 		case float64: usedPorts[int(port)] = true
 		}
 	}
-	for i, client := range plan.Clients {
+	for _, client := range plan.Clients {
 		if !allowed[client.ProxyName] || !existingProxies[client.ProxyName] {
 			return "", fmt.Errorf("客户端 %s 指向的代理 %q 未出现在当前 Mihomo 配置中", client.ClientCIDR, client.ProxyName)
 		}
