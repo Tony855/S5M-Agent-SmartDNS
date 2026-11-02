@@ -31,13 +31,15 @@ on:
       - "server/internal/app/handlers.go"
       - "server/internal/app/handlers_test.go"
       - "server/internal/app/store.go"
+      - "server/internal/app/smartdns_*.go"
+      - "server/internal/app/smartdns_*_test.go"
       - "scripts/tests/proxy-import-parser.test.js"
       - "server/web/index.html"
       - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
       - ".github/workflows/release.yml"
   push:
-    branches: [main]
+    branches: [main, feat/smartdns-per-client-egress]
     paths:
       - "s5m-agent/Dockerfile.smartdns"
       - "s5m-agent/docker-compose.yml"
