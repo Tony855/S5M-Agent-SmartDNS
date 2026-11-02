@@ -14,7 +14,14 @@ import (
 func snapshotFileForTransaction(path string) ([]byte, bool, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		_ = os.Remove(path + ".previous")
+		backupPath := path + ".previous"
+		if removeErr := os.Remove(backupPath); removeErr == nil {
+			if syncErr := syncTransactionDirectory(filepath.Dir(backupPath)); syncErr != nil {
+				return nil, false, fmt.Errorf("同步过期事务备份目录失败: %w", syncErr)
+			}
+		} else if !os.IsNotExist(removeErr) {
+			return nil, false, fmt.Errorf("清理过期事务备份失败: %w", removeErr)
+		}
 		return nil, false, nil
 	}
 	if err != nil {
@@ -24,6 +31,15 @@ func snapshotFileForTransaction(path string) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	return data, true, nil
+}
+
+func syncTransactionDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func restoreFileSnapshot(path string, data []byte, existed bool) error {
@@ -64,6 +80,7 @@ var (
 	}
 	transactionWriteControllerConfig = writeControllerConfig
 	transactionRemoveBackup = removeTransactionBackup
+	transactionSnapshotFile = snapshotFileForTransaction
 )
 
 // applyAgentConfigTransaction serializes the complete Mihomo+SmartDNS update.
@@ -81,24 +98,47 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 	managedPath := managedRouteCIDRsPath()
 	controllerPath := controllerConfigPath()
 
+	preparedBackups := []string{}
+	cleanupPrepared := func(cause error) error {
+		var cleanupErrors []error
+		for _, path := range preparedBackups {
+			if cleanupErr := transactionRemoveBackup(path); cleanupErr != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("清理未启动事务的备份 %s 失败: %w", filepath.Base(path), cleanupErr))
+			}
+		}
+		if len(cleanupErrors) > 0 {
+			return fmt.Errorf("%w；事务预备阶段清理失败: %w", cause, errors.Join(cleanupErrors...))
+		}
+		return cause
+	}
 	oldSmartDNS, hadSmartDNS, err := backupSmartDNSConfig(smartPath, smartPath+".previous")
 	if err != nil {
 		return fmt.Errorf("保存 SmartDNS 事务回滚点失败: %w", err)
 	}
-	oldMihomo, hadMihomo, err := snapshotFileForTransaction(mihomoPath)
+	if hadSmartDNS {
+		preparedBackups = append(preparedBackups, smartPath)
+	}
+	oldMihomo, hadMihomo, err := transactionSnapshotFile(mihomoPath)
 	if err != nil {
-		return fmt.Errorf("保存 Mihomo 事务回滚点失败: %w", err)
+		return cleanupPrepared(fmt.Errorf("保存 Mihomo 事务回滚点失败: %w", err))
 	}
 	if !hadMihomo {
-		return fmt.Errorf("Mihomo 当前配置不存在，拒绝开始联合事务")
+		return cleanupPrepared(fmt.Errorf("Mihomo 当前配置不存在，拒绝开始联合事务"))
 	}
-	oldManaged, hadManaged, err := snapshotFileForTransaction(managedPath)
+	preparedBackups = append(preparedBackups, mihomoPath)
+	oldManaged, hadManaged, err := transactionSnapshotFile(managedPath)
 	if err != nil {
-		return fmt.Errorf("保存 managed CIDR 事务回滚点失败: %w", err)
+		return cleanupPrepared(fmt.Errorf("保存 managed CIDR 事务回滚点失败: %w", err))
 	}
-	oldController, hadController, err := snapshotFileForTransaction(controllerPath)
+	if hadManaged {
+		preparedBackups = append(preparedBackups, managedPath)
+	}
+	oldController, hadController, err := transactionSnapshotFile(controllerPath)
 	if err != nil {
-		return fmt.Errorf("保存主控配置哈希事务回滚点失败: %w", err)
+		return cleanupPrepared(fmt.Errorf("保存主控配置哈希事务回滚点失败: %w", err))
+	}
+	if hadController {
+		preparedBackups = append(preparedBackups, controllerPath)
 	}
 
 	rollback := func(cause error) error {
