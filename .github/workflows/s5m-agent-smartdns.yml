@@ -135,10 +135,11 @@ jobs:
         run: |
           docker compose -f s5m-agent/docker-compose.yml config --quiet
           docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config --quiet
-          ! grep -q 'NET_ADMIN' s5m-agent/docker-compose.yml
-          ! grep -q '/dev/net/tun:/dev/net/tun' s5m-agent/docker-compose.yml
-          grep -q 'NET_ADMIN' s5m-agent/docker-compose.tun.yml
-          grep -q '/dev/net/tun:/dev/net/tun' s5m-agent/docker-compose.tun.yml
+          default_compose="$(docker compose -f s5m-agent/docker-compose.yml config)"
+          tun_compose="$(docker compose -f s5m-agent/docker-compose.yml -f s5m-agent/docker-compose.tun.yml config)"
+          ! grep -Eq 'NET_ADMIN|/dev/net/tun' <<<"$default_compose"
+          grep -q 'NET_ADMIN' <<<"$tun_compose"
+          grep -q '/dev/net/tun:/dev/net/tun' <<<"$tun_compose"
           grep -q 'enable: false' s5m-agent/default-config.yaml
           grep -q 'enable: false' s5m-agent/smartdns/default-config-smartdns.yaml
           bash -n scripts/s5m-deploy.sh
