@@ -1094,3 +1094,23 @@ func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateSmartDNSConfigFailsClosedForPerClientRoutingDirectives(t *testing.T) {
+	base := "bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\\n"
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "proxy-server SOCKS mapping", line: "proxy-server socks5://127.0.0.1:16000 -name s5m-client-a"},
+		{name: "client CIDR group match", line: "group-match -client-ip 192.168.1.10/32 -g s5m-client-a"},
+		{name: "group scope", line: "group-begin s5m-client-a"},
+		{name: "group end", line: "group-end"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateSmartDNSConfig([]byte(base + tc.line + "\\n")); err == nil {
+				t.Fatalf("per-client directive must remain rejected until isolated DNS runtime is implemented: %s", tc.line)
+			}
+		})
+	}
+}
