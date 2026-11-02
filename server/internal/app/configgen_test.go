@@ -1660,12 +1660,17 @@ func TestSmartDNSSharedFallbackPipelineFailsClosedWithoutMachineProxy(t *testing
 	proxies := []Proxy{
 		{Name: "node-b-only", Type: "socks5", Server: "192.0.2.20", Port: 1080, MachineCode: "node-b", Enabled: true},
 	}
-	generated, err := buildConfigFromProxiesWithMode(proxies, "node-a", "test-secret", "rule", "")
-	if err != nil { t.Fatalf("base config generation: %v", err) }
-	_, err = BuildSmartDNSRoutingPlan(
+	// Match BuildConfigForMachine's exact eligibility filter: only global and
+	// current-machine rows may be used to populate this Agent's fallback group.
+	refs := make([]SmartDNSProxyRef, 0, len(proxies))
+	for _, p := range proxies {
+		if p.MachineCode == "__GLOBAL__" || p.MachineCode == "node-a" {
+			refs = append(refs, SmartDNSProxyRef{Name: p.Name, Enabled: p.Enabled})
+		}
+	}
+	_, err := BuildSmartDNSRoutingPlan(
 		SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy},
-		[]SmartDNSProxyRef{{Name: proxies[0].Name, Enabled: proxies[0].Enabled}},
+		refs,
 	)
 	if err == nil { t.Fatal("shared SmartDNS must fail closed when the target machine has no enabled proxy") }
-	_ = generated
 }
