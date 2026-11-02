@@ -59,6 +59,7 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		return "", fmt.Errorf("Mihomo rules 必须是数组")
 	}
 	replaced := false
+	normalizedRules := make([]any, 0, len(rules))
 	for i, raw := range rules {
 		rule, ok := raw.(string)
 		if !ok {
@@ -67,12 +68,22 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		parts := strings.Split(rule, ",")
 		if len(parts) >= 3 && strings.EqualFold(strings.TrimSpace(parts[0]), "PROCESS-NAME") &&
 			strings.EqualFold(strings.TrimSpace(parts[1]), "smartdns") {
+			// Keep exactly one authoritative SmartDNS process route. Remove
+			// stale duplicate rules such as PROCESS-NAME,smartdns,REJECT.
+			if replaced {
+				continue
+			}
 			target := SmartDNSGroupName
-			if len(plan.ProxyNames) == 0 { target = "REJECT" }
-			rules[i] = "PROCESS-NAME,smartdns," + target
+			if len(plan.ProxyNames) == 0 {
+				target = "REJECT"
+			}
+			normalizedRules = append(normalizedRules, "PROCESS-NAME,smartdns,"+target)
 			replaced = true
+			continue
 		}
+		normalizedRules = append(normalizedRules, raw)
 	}
+	rules = normalizedRules
 	if !replaced {
 		// Return-to-China mode historically omitted the SmartDNS process rule
 			// because DNS was expected to follow destination geography. Shared
