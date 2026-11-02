@@ -252,7 +252,15 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "设置保存失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"message": "设置已保存"})
+	// Routing and other shared settings affect generated Agent YAML. Refresh
+	// every authorized node's cached configuration before reporting success.
+	// A failure is explicit: the setting is persisted, but one or more node
+	// configurations may still be stale and require a retry.
+	if err := a.syncAuthorizedNodeConfigs(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "设置已保存，但节点配置同步失败；请重试同步: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "设置已保存，已授权节点配置已同步"})
 }
 
 func (a *App) handleListInstances(w http.ResponseWriter, r *http.Request) {
