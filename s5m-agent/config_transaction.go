@@ -63,6 +63,7 @@ var (
 		return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
 	}
 	transactionWriteControllerConfig = writeControllerConfig
+	transactionRemoveBackup = removeTransactionBackup
 )
 
 // applyAgentConfigTransaction serializes the complete Mihomo+SmartDNS update.
@@ -160,7 +161,7 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 	// is allowed to remove either service's rollback copy.
 	var cleanupErrors []error
 	for _, path := range []string{smartPath, mihomoPath, managedPath, controllerPath} {
-		if err := removeTransactionBackup(path); err != nil {
+		if err := transactionRemoveBackup(path); err != nil {
 			cleanupErrors = append(cleanupErrors, err)
 		}
 	}
