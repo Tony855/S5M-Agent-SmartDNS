@@ -1969,3 +1969,56 @@ func TestBuildConfigForMachineRejectsSmartDNSWhenNoEligibleProxy(t *testing.T) {
 	}
 	if strings.Contains(got, "SMARTDNS-PROXY") { t.Fatalf("empty fallback group must not be generated:\n%s", got) }
 }
+
+
+// Repeated sync must refresh a previously generated SmartDNS group rather
+// than treating the managed group as an operator-owned name collision.
+func TestMergeManagedProxySectionsRefreshesSmartDNSFallbackMembership(t *testing.T) {
+	custom := `proxies:
+  - name: old-node
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [old-node]
+    url: https://www.gstatic.com/generate_204
+    interval: 30
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	generated := `proxies:
+  - name: current-node
+    type: socks5
+    server: 192.0.2.2
+    port: 1080
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [current-node]
+    url: https://www.gstatic.com/generate_204
+    interval: 30
+    timeout: 5000
+    lazy: false
+    expected-status: 204
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("refresh managed SmartDNS group: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	groups := doc["proxy-groups"].([]any)
+	if len(groups) != 1 { t.Fatalf("expected one refreshed group, got %#v", groups) }
+	group := groups[0].(map[string]any)
+	members := group["proxies"].([]any)
+	if len(members) != 1 || members[0] != "current-node" {
+		t.Fatalf("stale fallback membership was not refreshed: %#v", members)
+	}
+	if group["expected-status"] != 204 || group["lazy"] != false {
+		t.Fatalf("new health-check options were not refreshed: %#v", group)
+	}
+}
