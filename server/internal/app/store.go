@@ -549,17 +549,43 @@ func (s *Store) DeleteProxies(ids []int64) error {
 }
 
 func (s *Store) BindProxiesToMachine(ids []int64, machineCode string) error {
-	if len(ids) == 0 { return fmt.Errorf("未选择代理") }
+	if len(ids) == 0 {
+		return fmt.Errorf("未选择代理")
+	}
+	machineCode = strings.TrimSpace(machineCode)
+	if machineCode == "" || machineCode == "__GLOBAL__" || len(machineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(machineCode) {
+		return fmt.Errorf("节点实例机器码无效")
+	}
+	// Validate the complete request before mutation. Duplicate IDs must not
+	// inflate the API's updated count or silently repeat the same association.
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return fmt.Errorf("代理 ID 无效")
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("代理 ID %d 重复", id)
+		}
+		seen[id] = struct{}{}
+	}
+
 	tx, err := s.db.Begin()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer tx.Rollback()
 	for _, id := range ids {
-		if id <= 0 { return fmt.Errorf("代理 ID 无效") }
 		result, err := tx.Exec(`UPDATE proxies SET machine_code=? WHERE id=?`, machineCode, id)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		affected, err := result.RowsAffected()
-		if err != nil { return err }
-		if affected == 0 { return fmt.Errorf("代理 ID %d 不存在", id) }
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("代理 ID %d 不存在，已取消整批关联", id)
+		}
 	}
 	return tx.Commit()
 }
