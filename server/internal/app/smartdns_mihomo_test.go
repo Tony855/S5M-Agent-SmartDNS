@@ -454,3 +454,82 @@ func TestApplySmartDNSSharedFallbackRejectsWhenNoProxyExists(t *testing.T) {
 		t.Fatalf("SmartDNS REJECT rule must precede geography and MATCH rules: %#v", rules)
 	}
 }
+
+
+func TestApplySmartDNSSharedFallbackPinsHealthCheckContractAndNeverAddsDirect(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+  - name: node-b
+    type: socks5
+    server: 192.0.2.2
+    port: 1080
+rules:
+  - PROCESS-NAME,smartdns,DIRECT
+  - MATCH,DIRECT
+`
+	plan := SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModeShared,
+		Strategy: SmartDNSDefaultStrategy,
+		ProxyNames: []string{"node-a", "node-b"},
+	}
+	got, err := applySmartDNSSharedFallback(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	groups, ok := doc["proxy-groups"].([]any)
+	if !ok || len(groups) != 1 { t.Fatalf("unexpected groups: %#v", doc["proxy-groups"]) }
+	group, ok := groups[0].(map[string]any)
+	if !ok { t.Fatalf("fallback group is not an object: %#v", groups[0]) }
+	for key, want := range map[string]any{
+		"name": SmartDNSGroupName,
+		"type": "fallback",
+		"url": "https://www.gstatic.com/generate_204",
+		"interval": 30,
+		"timeout": 5000,
+		"lazy": false,
+		"expected-status": 204,
+	} {
+		if group[key] != want { t.Errorf("fallback %s = %#v, want %#v", key, group[key], want) }
+	}
+	members, ok := group["proxies"].([]any)
+	if !ok || len(members) != 2 || members[0] != "node-a" || members[1] != "node-b" {
+		t.Fatalf("fallback members = %#v", group["proxies"])
+	}
+	rules := doc["rules"].([]any)
+	if rules[0] != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" {
+		t.Fatalf("SmartDNS process rule was not forced through fallback: %#v", rules)
+	}
+	for _, raw := range rules {
+		rule, _ := raw.(string)
+		if strings.HasPrefix(rule, "PROCESS-NAME,smartdns,") && strings.HasSuffix(rule, ",DIRECT") {
+			t.Fatalf("SmartDNS rule can leak directly: %q", rule)
+		}
+	}
+}
+
+func TestApplySmartDNSSharedFallbackRewritesEverySmartDNSProcessRule(t *testing.T) {
+	input := `rules:
+  - PROCESS-NAME,smartdns,DIRECT
+  - DOMAIN,example.com,DIRECT
+  - PROCESS-NAME,SMARTDNS,node-a
+  - MATCH,DIRECT
+`
+	got, err := applySmartDNSSharedFallback(input, SmartDNSRoutingPlan{
+		Mode: SmartDNSProxyModeShared,
+		Strategy: SmartDNSDefaultStrategy,
+		ProxyNames: []string{"node-a"},
+	})
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	rules := doc["rules"].([]any)
+	for i, raw := range rules {
+		rule, _ := raw.(string)
+		if strings.HasPrefix(strings.ToUpper(rule), "PROCESS-NAME,SMARTDNS,") && rule != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" {
+			t.Errorf("SmartDNS process rule %d escaped fallback: %q", i, rule)
+		}
+	}
+}
