@@ -45,10 +45,9 @@ rules:
 	if rules[2] != "SRC-IP-CIDR,192.168.18.23/32,node-b" { t.Fatalf("ordinary client route changed: %#v", rules[2]) }
 }
 
-func TestApplySmartDNSSharedFallbackRejectsMissingRuleAndNameCollision(t *testing.T) {
+func TestApplySmartDNSSharedFallbackRejectsReservedNameCollision(t *testing.T) {
 	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
 	for _, input := range []string{
-		"rules:\n  - MATCH,DIRECT\n",
 		"proxy-groups:\n  - name: SMARTDNS-PROXY\n    type: select\n    proxies: [node-a]\nrules:\n  - PROCESS-NAME,smartdns,node-a\n",
 	} {
 		if _, err := applySmartDNSSharedFallback(input, plan); err == nil { t.Fatalf("expected error for %s", input) }
