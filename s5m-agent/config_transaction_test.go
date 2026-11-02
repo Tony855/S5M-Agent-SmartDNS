@@ -74,3 +74,17 @@ func TestRestoreFileSnapshotRestoresExactBytesAndRemovesFirstInstall(t *testing.
 		t.Fatalf("first-install rollback must remove the file, Lstat error=%v", err)
 	}
 }
+
+func TestRemoveTransactionBackupDeletesSidecar(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path+".previous", []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeTransactionBackup(path); err != nil {
+		t.Fatalf("remove transaction backup: %v", err)
+	}
+	if _, err := os.Lstat(path + ".previous"); !os.IsNotExist(err) {
+		t.Fatalf("transaction backup should be removed, Lstat error=%v", err)
+	}
+}
