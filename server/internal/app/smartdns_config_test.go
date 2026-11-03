@@ -90,14 +90,15 @@ func TestBuildSmartDNSPerClientConfigRejectsDuplicateCIDRsAndPorts(t *testing.T)
 	}
 }
 
-
 func TestBuildSmartDNSPerClientConfigSupportsIPv6ClientCIDR(t *testing.T) {
 	mapping := SmartDNSClientRuntimeMapping{
 		ClientCIDR: "2001:db8:1234::/64", ProxyName: "node-v6",
 		ListenerName: "s5m-smartdns-16010", ListenerAddress: "127.0.0.1", ListenerPort: 16010,
 	}
 	got, err := buildSmartDNSPerClientConfig([]SmartDNSClientRuntimeMapping{mapping})
-	if err != nil { t.Fatalf("build IPv6 client config: %v", err) }
+	if err != nil {
+		t.Fatalf("build IPv6 client config: %v", err)
+	}
 	for _, want := range []string{
 		"bind [::1]:6053", "bind-tcp [::1]:6053",
 		"dualstack-ip-allow-force-AAAA yes",
