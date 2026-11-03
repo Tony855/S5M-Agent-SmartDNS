@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync('server/web/app.js', 'utf8');
 const helper = source.match(/const isTelemetryFresh = \(node, now = Date\.now\(\)\) => \{[\s\S]*?\n    \};/);
 assert.ok(helper, 'dashboard telemetry freshness helper must exist');
-const context = {};
+const context = { TELEMETRY_FRESHNESS_MS: 15000 };
 vm.runInNewContext(helper[0] + '\nthis.isTelemetryFresh = isTelemetryFresh;', context);
 const isFresh = context.isTelemetryFresh;
 const now = 1_800_000_000_000;
