@@ -2161,3 +2161,49 @@ func TestGeneratedNodeConfigDefaultsTUNEnabled(t *testing.T) {
 	tun := doc["tun"].(map[string]any)
 	if tun["enable"] != true { t.Fatalf("generated TUN default = %#v, want true", tun["enable"]) }
 }
+
+
+func TestBuildConfigWithoutEligibleProxiesOmitsEmptyPROXYGroup(t *testing.T) {
+	tests := []struct {
+		name string
+		proxies []Proxy
+		machineCode string
+	}{
+		{name: "no proxy records"},
+		{name: "only disabled proxies", proxies: []Proxy{{
+			Name: "disabled-node", Type: "socks5", Server: "192.0.2.10",
+			Port: 1080, MachineCode: "__GLOBAL__", Enabled: false,
+		}}},
+		{name: "proxy belongs to another machine", machineCode: "node-a", proxies: []Proxy{{
+			Name: "foreign-node", Type: "socks5", Server: "192.0.2.11",
+			Port: 1080, MachineCode: "node-b", Enabled: true,
+		}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildConfigFromProxies(tt.proxies, tt.machineCode, "test-secret")
+			if err != nil { t.Fatalf("buildConfigFromProxies: %v", err) }
+			var doc map[string]any
+			if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatalf("decode generated YAML: %v", err) }
+			groups, ok := doc["proxy-groups"].([]any)
+			if !ok || len(groups) != 0 {
+				t.Fatalf("proxy-groups = %#v, want an empty top-level list and no invalid PROXY group", doc["proxy-groups"])
+			}
+			if strings.Contains(got, "name: PROXY") {
+				t.Fatalf("generated config contains an empty PROXY group:\n%s", got)
+			}
+			rules, ok := doc["rules"].([]any)
+			if !ok || len(rules) == 0 || rules[len(rules)-1] != "MATCH,REJECT" {
+				t.Fatalf("no-proxy rule mode must fail closed with MATCH,REJECT; got %#v", doc["rules"])
+			}
+			for _, raw := range rules {
+				rule, ok := raw.(string)
+				if !ok { t.Fatalf("invalid generated rule: %#v", raw) }
+				parts := strings.Split(rule, ",")
+				if len(parts) >= 3 && parts[len(parts)-1] == "PROXY" {
+					t.Fatalf("rule references absent PROXY group: %q", rule)
+				}
+			}
+		})
+	}
+}

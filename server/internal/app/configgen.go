@@ -1096,16 +1096,22 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 	for _, proxy := range outs {
 		groupProxies = append(groupProxies, proxy.Name)
 	}
-	proxyGroups := []map[string]any{{
-		"name": "PROXY",
-		"type": "select",
-		"proxies": groupProxies,
-	}}
-	groupBytes, err := yaml.Marshal(proxyGroups)
-	if err != nil {
-		return "", fmt.Errorf("序列化代理分组失败: %w", err)
+	// Mihomo rejects a proxy group whose proxies list is empty. A node with
+	// no configured/eligible outbound proxies must therefore have no managed
+	// PROXY group at all; rule-mode fallback remains MATCH,REJECT below.
+	proxyGroupsYAML := " []"
+	if len(groupProxies) > 0 {
+		proxyGroups := []map[string]any{{
+			"name": "PROXY",
+			"type": "select",
+			"proxies": groupProxies,
+		}}
+		groupBytes, err := yaml.Marshal(proxyGroups)
+		if err != nil {
+			return "", fmt.Errorf("序列化代理分组失败: %w", err)
+		}
+		proxyGroupsYAML = "\n" + indent(string(groupBytes), "    ")
 	}
-	proxyGroupsYAML := "\n" + indent(string(groupBytes), "    ")
 
 	rules := []string{"DOMAIN-SUFFIX,v2net.cc,DIRECT"}
 	// Keep Agent-to-controller HTTPS/WebSocket traffic direct under TUN strict-route.
