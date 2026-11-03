@@ -1222,6 +1222,9 @@ func reportHeartbeatWebSocket(cfg Config, status map[string]any) error {
 	conn, response, err := dialer.Dial(base.String(), header)
 	if err != nil {
 		if response != nil {
+			if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+				return fmt.Errorf("Agent authorization revoked: WebSocket handshake HTTP %d", response.StatusCode)
+			}
 			return fmt.Errorf("WebSocket 握手失败：HTTP %d：%w", response.StatusCode, err)
 		}
 		return fmt.Errorf("WebSocket 连接失败：%w", err)
@@ -2107,6 +2110,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	if !markAgentWebSocketConnected(conn, bindingGeneration) {
 		return fmt.Errorf("绑定凭证已更新，拒绝激活旧 WebSocket 会话")
 	}
+	agentConnectionFailed.Store(false)
 
 	heartbeatInterval := time.Duration(welcome.HeartbeatIntervalSec) * time.Second
 	if heartbeatInterval < 5*time.Second || heartbeatInterval > 60*time.Second {
@@ -2370,6 +2374,22 @@ func closeAgentActiveWebSocketForRebind() {
 }
 
 var agentConnected atomic.Bool
+var agentConnectionFailed atomic.Bool
+
+func isAgentAuthorizationRevoked(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "agent authorization revoked")
+}
+
+func clearRevokedAgentBinding() error {
+	unlock := lockAgentBind()
+	defer unlock()
+	agentBindingGeneration.Add(1)
+	closeAgentActiveWebSocketForRebind()
+	err := os.Remove(filepath.Join(mihomoHome(), "agent.json"))
+	if err != nil && !os.IsNotExist(err) { return fmt.Errorf("清除已撤销的本地绑定凭证失败: %w", err) }
+	agentConnectionFailed.Store(false)
+	return nil
+}
 
 func agentConfigHandler(w http.ResponseWriter, r *http.Request) {
 	configPath := filepath.Join(mihomoHome(), "agent.json")
@@ -2391,6 +2411,7 @@ func agentConfigHandler(w http.ResponseWriter, r *http.Request) {
 		"has_token":       strings.TrimSpace(cfg.Token) != "",
 		"central_url":     cfg.CentralURL,
 		"connected":       agentConnected.Load(),
+		"connection_error": agentConnectionFailed.Load(),
 		"config_exists":   configExists,
 		"config_readable": configReadable,
 		"config_valid":    configValid,
@@ -2536,6 +2557,7 @@ func main() {
 			fmt.Printf("刷新主控直连排除地址失败（将继续重试）: %s\n", safeMihomoValidationDiagnostic([]byte(routeErr.Error())))
 		}
 		if err := probeControllerHTTP(cfg); err != nil {
+			agentConnectionFailed.Store(true)
 			fmt.Printf("主控 HTTP 连通性探测失败（仅用于诊断，不传输状态/配置/命令）: %s\n", safeMihomoValidationDiagnostic([]byte(err.Error())))
 			// Jitter probe failures too, so large Agent fleets do not retry in lockstep.
 			time.Sleep(reconnectDelayWithJitter(backoff))
@@ -2549,6 +2571,16 @@ func main() {
 		}
 		sessionStarted := time.Now()
 		if err := runAgentWebSocketSession(cfg, bindingGeneration); err != nil {
+			if isAgentAuthorizationRevoked(err) {
+				if clearErr := clearRevokedAgentBinding(); clearErr != nil {
+					fmt.Printf("撤销授权后清除本地凭证失败: %s\n", safeMihomoValidationDiagnostic([]byte(clearErr.Error())))
+				} else {
+					fmt.Println("主控端已撤销 Agent 授权，本地绑定凭证已清除")
+				}
+				backoff = 2 * time.Second
+				continue
+			}
+			agentConnectionFailed.Store(true)
 			fmt.Printf("Agent WebSocket 会话断开: %s\n", safeMihomoValidationDiagnostic([]byte(err.Error())))
 		}
 		// A session that stayed healthy for at least two minutes resets the

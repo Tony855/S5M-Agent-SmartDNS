@@ -2200,3 +2200,44 @@ func TestSafeMihomoValidationDiagnosticRedactsQuotedCredentialsAndBearerTokens(t
 		t.Fatalf("expected credential values and bearer token to be redacted: %q", got)
 	}
 }
+
+
+func TestIsAgentAuthorizationRevoked(t *testing.T) {
+	if !isAgentAuthorizationRevoked(fmt.Errorf("Agent authorization revoked: HTTP 401")) {
+		t.Fatal("401 authorization failure must be recognized")
+	}
+	if !isAgentAuthorizationRevoked(fmt.Errorf("websocket: close 1000 (normal): Agent authorization revoked")) {
+		t.Fatal("controller revocation close reason must be recognized")
+	}
+	if isAgentAuthorizationRevoked(fmt.Errorf("dial tcp: i/o timeout")) {
+		t.Fatal("transient network errors must not be treated as revoked credentials")
+	}
+}
+
+func TestClearRevokedAgentBindingRemovesOnlyLocalCredential(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MIHOMO_HOME", home)
+	configPath := filepath.Join(home, "agent.json")
+	if err := os.WriteFile(configPath, []byte(`{"central_url":"https://controller.example","token":"revoked-token"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previousGeneration := agentBindingGeneration.Load()
+	previousFailed := agentConnectionFailed.Load()
+	agentConnectionFailed.Store(true)
+	t.Cleanup(func() {
+		agentBindingGeneration.Store(previousGeneration)
+		agentConnectionFailed.Store(previousFailed)
+	})
+	if err := clearRevokedAgentBinding(); err != nil {
+		t.Fatalf("clear revoked binding: %v", err)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("revoked credential file still exists, stat error = %v", err)
+	}
+	if agentBindingGeneration.Load() != previousGeneration+1 {
+		t.Fatal("clearing revoked credentials must invalidate in-flight sessions")
+	}
+	if agentConnectionFailed.Load() {
+		t.Fatal("connection error state must reset after revocation")
+	}
+}
