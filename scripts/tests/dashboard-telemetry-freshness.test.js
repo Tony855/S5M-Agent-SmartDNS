@@ -86,11 +86,14 @@ const telemetryBranch = source.match(/else if \(message\.type === 'agent\.teleme
 assert.ok(telemetryBranch, 'live telemetry event handler must exist');
 assert.equal(telemetryBranch[0].includes('online: true'), false, 'telemetry must never mark an Agent online');
 assert.equal(telemetryBranch[0].includes('last_seen:'), false, 'telemetry must never advance heartbeat last_seen');
-assert.equal(telemetryBranch[0].includes('updated_at:'), false, 'telemetry must never overwrite last heartbeat display time');
+assert.equal(telemetryBranch[0].includes('updated_at: formatAgentTimestamp(Math.floor(receivedAt / 1000))'), true,
+  'telemetry refreshes the displayed last-report time using server receive time');
 assert.equal(source.includes('updated_at: formatAgentTimestamp(last)'), true,
   'initial Agent list uses authenticated heartbeat time for last report');
 assert.equal(source.includes('updated_at: formatAgentTimestamp(receivedAt)'), true,
   'live heartbeat uses server heartbeat receive time');
+assert.equal(source.includes('updated_at: formatAgentTimestamp(Math.floor(receivedAt / 1000))'), true,
+  'live telemetry uses server receive time for last-report display');
 assert.equal(source.includes('new Date(receivedAt).toLocaleString()'), false,
   'telemetry timestamps must not use a second display format');
 
