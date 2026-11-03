@@ -858,13 +858,13 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				a.agentTelemetryPersistAt[machineCode] = receivedAt
 				settings, settingsErr := a.store.GetSettings()
 				if settingsErr != nil {
-					fmt.Printf("agent_ws: telemetry snapshot read failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("读取统计快照", settingsErr))
+					fmt.Printf("agent_ws: telemetry snapshot read failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("读取统计快照", settingsErr))
 				} else {
 					var saved map[string]any
 					raw := strings.TrimSpace(settings["agent_status_"+machineCode])
 					if raw != "" {
 						if unmarshalErr := json.Unmarshal([]byte(raw), &saved); unmarshalErr != nil {
-							fmt.Printf("agent_ws: telemetry snapshot decode failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("解析已有统计快照", unmarshalErr))
+							fmt.Printf("agent_ws: telemetry snapshot decode failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("解析已有统计快照", unmarshalErr))
 						}
 					}
 					if saved == nil {
@@ -876,9 +876,9 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 					saved["telemetry_received_at_ms"] = receivedAt.UnixMilli()
 					payload, marshalErr := json.Marshal(saved)
 					if marshalErr != nil {
-						fmt.Printf("agent_ws: telemetry snapshot encode failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("序列化统计快照", marshalErr))
+						fmt.Printf("agent_ws: telemetry snapshot encode failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("序列化统计快照", marshalErr))
 					} else if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr != nil {
-						fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
+						fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
 					}
 				}
 			}
