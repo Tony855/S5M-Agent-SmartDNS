@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # /root/deploy-s5m-agent.sh
-# 交互式管理 s5m-agent（SmartDNS）容器
+# 交互式管理 s5m-agent（SmartDNS + Mihomo）容器
 #   用法:
 #     ./deploy-s5m-agent.sh          # 进入交互菜单
 #     ./deploy-s5m-agent.sh deploy   # 直接执行自动部署（兼容原脚本行为）
@@ -15,11 +15,28 @@ DATA_DIR="/opt/s5m-agent/data"
 TZ_VAL="Asia/Shanghai"
 RESTART_POLICY="unless-stopped"
 
+# 端口映射（数组内成对出现：参数 值 参数 值 ...）
 PORT_MAP=(
   "-p" "80:80/tcp"
   "-p" "127.0.0.1:7890:7890/tcp"
   "-p" "127.0.0.1:7890:7890/udp"
 )
+
+# TUN 设备映射：宿主机 /dev/net/tun → 容器 /dev/net/tun
+# 缺了它，Mihomo 会报 "configure tun interface: no such file or directory"
+DEVICE_MAP=(
+  "--device" "/dev/net/tun:/dev/net/tun"
+)
+
+# 容器 Capability：
+#   NET_ADMIN —— 创建/管理 TUN 接口、修改路由（必需）
+#   NET_RAW   —— 部分底层网络操作（建议，兼容 sniffer 等场景）
+CAP_ADD=(
+  "--cap-add" "NET_ADMIN"
+  "--cap-add" "NET_RAW"
+)
+
+# 额外环境变量（成对: -e KEY=VALUE）
 EXTRA_ENVS=()
 
 # 若存在配置文件则加载（可持久化交互式修改）
@@ -75,6 +92,61 @@ ports_display() {
   fi
 }
 
+device_display() {
+  if [[ ${#DEVICE_MAP[@]} -eq 0 ]]; then
+    echo "（无）"
+  else
+    local out=() skip=0 d
+    for d in "${DEVICE_MAP[@]}"; do
+      if (( skip )); then out+=("${d}"); skip=0; else skip=1; fi
+    done
+    echo "${out[*]}"
+  fi
+}
+
+caps_display() {
+  if [[ ${#CAP_ADD[@]} -eq 0 ]]; then
+    echo "（无）"
+  else
+    local out=() skip=0 c
+    for c in "${CAP_ADD[@]}"; do
+      if (( skip )); then out+=("${c}"); skip=0; else skip=1; fi
+    done
+    echo "${out[*]}"
+  fi
+}
+
+# 宿主机 TUN 设备自检（仅提示，不阻断）
+check_host_tun() {
+  if [[ ! -e /dev/net/tun ]]; then
+    warn "宿主机未找到 /dev/net/tun（TUN 模式将不可用）"
+    warn "可尝试: modprobe tun  （持久化: echo tun > /etc/modules-load.d/tun.conf）"
+    return 1
+  fi
+  log "宿主机 /dev/net/tun 存在 ✓"
+  return 0
+}
+
+# 端口占用预检（host 端口是否被其他容器占用）
+check_port_conflict() {
+  local spec hp owner
+  for spec in "${PORT_MAP[@]+"${PORT_MAP[@]}"}"; do
+    [[ "${spec}" == "-p" ]] && continue
+    hp="${spec%%/*}"      # 80:80          / 127.0.0.1:7890:7890
+    hp="${hp%:*}"         # 80             / 127.0.0.1:7890
+    hp="${hp##*:}"        # 80             / 7890
+    owner=$(docker ps --format '{{.Names}}|{{.Ports}}' | \
+      awk -F'|' -v p=":${hp}->" -v me="${CONTAINER_NAME}" \
+        '$1!=me && index($2,p){print $1; exit}')
+    if [[ -n "${owner}" ]]; then
+      err "宿主机端口 ${hp} 已被容器 ${owner} 占用"
+      err "请先停止/删除 ${owner}，或修改端口映射后重试"
+      return 1
+    fi
+  done
+  return 0
+}
+
 # ---------- 配置持久化 ----------
 save_config() {
   {
@@ -87,16 +159,22 @@ save_config() {
     echo "PORT_MAP=("
     local i
     if [[ ${#PORT_MAP[@]} -gt 0 ]]; then
-      for i in "${PORT_MAP[@]}"; do
-        echo "  $(printf '%q' "${i}")"
-      done
+      for i in "${PORT_MAP[@]}"; do echo "  $(printf '%q' "${i}")"; done
+    fi
+    echo ")"
+    echo "DEVICE_MAP=("
+    if [[ ${#DEVICE_MAP[@]} -gt 0 ]]; then
+      for i in "${DEVICE_MAP[@]}"; do echo "  $(printf '%q' "${i}")"; done
+    fi
+    echo ")"
+    echo "CAP_ADD=("
+    if [[ ${#CAP_ADD[@]} -gt 0 ]]; then
+      for i in "${CAP_ADD[@]}"; do echo "  $(printf '%q' "${i}")"; done
     fi
     echo ")"
     echo "EXTRA_ENVS=("
     if [[ ${#EXTRA_ENVS[@]} -gt 0 ]]; then
-      for i in "${EXTRA_ENVS[@]}"; do
-        echo "  $(printf '%q' "${i}")"
-      done
+      for i in "${EXTRA_ENVS[@]}"; do echo "  $(printf '%q' "${i}")"; done
     fi
     echo ")"
   } > "${CONFIG_FILE}"
@@ -116,12 +194,20 @@ verify_container() {
     --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' 2>/dev/null || echo n/a)"
   log "Health: ${health}"
 
+  log "容器设备与权限："
+  docker inspect "${CONTAINER_NAME}" --format \
+    '  Devices: {{json .HostConfig.Devices}}
+  CapAdd : {{json .HostConfig.CapAdd}}' 2>/dev/null || true
+
   log "镜像 digest（确认是刚拉下来的最新版）："
   docker image inspect "${IMAGE}" \
     --format '  {{.Id}}  {{index .RepoDigests 0}}' 2>/dev/null || true
 
   log "最近 50 行日志："
   docker logs --tail=50 "${CONTAINER_NAME}" 2>&1 || true
+
+  log "TUN 相关日志（若有）："
+  docker logs "${CONTAINER_NAME}" 2>&1 | grep -iE 'tun|error|fatal' | tail -10 || true
 
   log "监听端口："
   ss -lntup 2>/dev/null | grep -E ':(80|7890|6053)\b' || echo "  （无匹配，稍后再查看）"
@@ -141,6 +227,11 @@ do_pull() {
 do_recreate() {
   local remove_image="${1:-false}"
   local wipe_data="${2:-false}"
+
+  # 0. 宿主机 TUN 预检（仅当启用 TUN 映射时）
+  if [[ ${#DEVICE_MAP[@]} -gt 0 ]]; then
+    check_host_tun || warn "宿主机 TUN 不可用，Mihomo 的 TUN 模式可能无法启动（其余功能不受影响）"
+  fi
 
   # 1. 删除旧容器
   if container_exists; then
@@ -175,6 +266,12 @@ do_recreate() {
   fi
   mkdir -p "${DATA_DIR}"
 
+  # 3.5 端口冲突预检（在拉镜像之前，避免白拉）
+  if ! check_port_conflict; then
+    err "端口预检失败，已中止"
+    return 1
+  fi
+
   # 4. 拉取镜像
   log "拉取镜像 ${IMAGE}"
   if ! docker pull "${IMAGE}"; then
@@ -188,11 +285,18 @@ do_recreate() {
       --name "${CONTAINER_NAME}" \
       --restart "${RESTART_POLICY}" \
       "${PORT_MAP[@]+"${PORT_MAP[@]}"}" \
+      "${DEVICE_MAP[@]+"${DEVICE_MAP[@]}"}" \
+      "${CAP_ADD[@]+"${CAP_ADD[@]}"}" \
       -v "${DATA_DIR}:/data" \
       -e TZ="${TZ_VAL}" \
       ${EXTRA_ENVS[@]+"${EXTRA_ENVS[@]}"} \
       "${IMAGE}" >/dev/null; then
     err "启动容器失败"
+    # 清理半成品（created 状态）容器，避免下次撞名
+    if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
+      warn "清理残留的半成品容器 ${CONTAINER_NAME}"
+      docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    fi
     return 1
   fi
 
@@ -248,10 +352,9 @@ do_logs_tail() {
 
 do_inspect() {
   if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在"; return 1; fi
-  docker inspect "${CONTAINER_NAME}" | sed -n '1,160p'
+  docker inspect "${CONTAINER_NAME}" | sed -n '1,200p'
 }
 
-# 查看本地镜像
 do_list_images() {
   log "本地镜像列表："
   echo
@@ -271,7 +374,6 @@ do_list_images() {
   fi
 }
 
-# 查看全部容器（含已停止）
 do_list_containers() {
   log "全部容器（含已停止）："
   echo
@@ -292,6 +394,7 @@ change_name() {
   [[ -z "${input}" ]] && { warn "未修改"; return; }
   CONTAINER_NAME="${input}"
   log "容器名称已更新（需重建容器生效）"
+  warn "提示：要长期生效请选 19) 保存配置"
 }
 
 change_image() {
@@ -299,6 +402,7 @@ change_image() {
   [[ -z "${input}" ]] && { warn "未修改"; return; }
   IMAGE="${input}"
   log "镜像已更新（需重建容器生效）"
+  warn "提示：要长期生效请选 19) 保存配置"
 }
 
 change_data_dir() {
@@ -306,6 +410,7 @@ change_data_dir() {
   [[ -z "${input}" ]] && { warn "未修改"; return; }
   DATA_DIR="${input}"
   log "数据目录已更新（需重建容器生效）"
+  warn "提示：要长期生效请选 19) 保存配置"
 }
 
 change_ports() {
@@ -319,6 +424,7 @@ change_ports() {
   done
   PORT_MAP=("${new_ports[@]}")
   log "端口映射已更新（需重建容器生效）"
+  warn "提示：要长期生效请选 19) 保存配置"
 }
 
 change_tz() {
@@ -326,6 +432,7 @@ change_tz() {
   [[ -z "${input}" ]] && { warn "未修改"; return; }
   TZ_VAL="${input}"
   log "时区已更新（需重建容器生效）"
+  warn "提示：要长期生效请选 19) 保存配置"
 }
 
 change_restart_policy() {
@@ -336,6 +443,25 @@ change_restart_policy() {
     no|on-failure|always|unless-stopped) RESTART_POLICY="${input}"; log "重启策略已更新（需重建容器生效）" ;;
     *) warn "无效的重启策略" ;;
   esac
+  warn "提示：要长期生效请选 19) 保存配置"
+}
+
+# 切换 TUN 映射（设备 + 权限）
+toggle_tun() {
+  echo "当前 TUN 设备映射: $(device_display)"
+  echo "当前 Capability  : $(caps_display)"
+  read -rp "启用 TUN 设备映射与 NET_ADMIN/NET_RAW？[Y/n]: " ans
+  if [[ "${ans}" =~ ^[Nn]$ ]]; then
+    DEVICE_MAP=()
+    CAP_ADD=()
+    log "已关闭 TUN 映射与相关 Capability（需重建容器生效）"
+  else
+    DEVICE_MAP=( "--device" "/dev/net/tun:/dev/net/tun" )
+    CAP_ADD=( "--cap-add" "NET_ADMIN" "--cap-add" "NET_RAW" )
+    log "已开启 TUN 映射与 NET_ADMIN/NET_RAW（需重建容器生效）"
+    check_host_tun || true
+  fi
+  warn "提示：要长期生效请选 19) 保存配置"
 }
 
 # ---------- 菜单 ----------
@@ -348,6 +474,8 @@ show_menu() {
   printf "  镜像     : %s\n" "${IMAGE}"
   printf "  数据目录 : %s\n" "${DATA_DIR}"
   printf "  端口映射 : %s\n" "$(ports_display)"
+  printf "  TUN 设备 : %s\n" "$(device_display)"
+  printf "  Capability: %s\n" "$(caps_display)"
   printf "  时区     : %s\n" "${TZ_VAL}"
   printf "  重启策略 : %s\n" "${RESTART_POLICY}"
   printf "  状态     : %s\n" "$(container_status)"
@@ -374,6 +502,7 @@ show_menu() {
   echo "  17) 修改时区"
   echo "  18) 修改重启策略"
   echo "  19) 保存配置到文件（${CONFIG_FILE}）"
+  echo "  20) 切换 TUN 映射（--device /dev/net/tun + NET_ADMIN/NET_RAW）"
   echo "  0)  退出"
   echo "════════════════════════════════════════════════════"
 }
@@ -403,6 +532,7 @@ main_menu() {
       17) change_tz ;;
       18) change_restart_policy ;;
       19) save_config ;;
+      20) toggle_tun ;;
       0|q|Q|exit) log "退出"; break ;;
       *) warn "无效选项，请重新选择" ;;
     esac
