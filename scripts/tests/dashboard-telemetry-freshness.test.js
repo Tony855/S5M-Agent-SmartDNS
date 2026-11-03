@@ -27,4 +27,50 @@ assert.doesNotMatch(source, /telemetryUpdatedAt: Number\(lastSeen\)/,
 assert.match(source, /!isTelemetryFresh\(node\)/,
   'stale timer must expire live telemetry while heartbeat remains online');
 
+const telemetryHelper = source.match(/const normalizeTelemetryFields = \(status, receivedAt\) => \{[\s\S]*?\n    \};/);
+assert.ok(telemetryHelper, 'shared telemetry normalizer must exist');
+vm.runInNewContext(telemetryHelper[0] + '\nthis.normalizeTelemetryFields = normalizeTelemetryFields;', context);
+const normalizeTelemetry = context.normalizeTelemetryFields;
+const freshFields = normalizeTelemetry({
+  connections: 9, upload_speed: 120, download_speed: 240,
+  upload_total: 5000, download_total: 7000,
+  telemetry_stale: false, telemetry_sampled_at_ms: 1234,
+  traffic_error: '', connections_error: ''
+}, now);
+assert.equal(freshFields.connections, 9);
+assert.equal(freshFields.uploadSpeed, 120);
+assert.equal(freshFields.downloadSpeed, 240);
+assert.equal(freshFields.uploadTotal, 5000);
+assert.equal(freshFields.downloadTotal, 7000);
+assert.equal(freshFields.telemetryUpdatedAt, now);
+const staleFields = normalizeTelemetry({
+  connections: 9, upload_speed: 120, download_speed: 240,
+  upload_total: 5000, download_total: 7000,
+  telemetry_stale: true, telemetry_sampled_at_ms: 1234,
+  traffic_error: 'timeout', connections_error: ''
+}, now);
+assert.equal(staleFields.connections, 0);
+assert.equal(staleFields.uploadSpeed, 0);
+assert.equal(staleFields.downloadSpeed, 0);
+assert.equal(staleFields.uploadTotal, 5000, 'stale telemetry retains cumulative totals');
+assert.equal(staleFields.telemetryStale, true);
+assert.equal(staleFields.telemetryError, 'timeout');
+
+const countsHelper = source.match(/const withRemoteNodeCounts = \(current, nodes\) => \{[\s\S]*?\n    \};/);
+assert.ok(countsHelper, 'shared remote node counters helper must exist');
+vm.runInNewContext(countsHelper[0] + '\nthis.withRemoteNodeCounts = withRemoteNodeCounts;', context);
+const withCounts = context.withRemoteNodeCounts;
+const counted = withCounts({ proxy_total: 4 }, [
+  { online: true, healthy: true }, { online: true, healthy: false }, { online: false, healthy: true }
+]);
+assert.equal(counted.proxy_total, 4, 'unrelated overview fields are preserved');
+assert.equal(counted.agent_online, 2);
+assert.equal(counted.remote_online, 2);
+assert.equal(counted.mihomo_healthy, 1);
+assert.equal(counted.remote_mihomo_healthy, 1);
+
+assert.doesNotMatch(source, /const getMachineCount =/);
+assert.doesNotMatch(source, /const proxyCountForMachine =/);
+assert.match(source, /getMachineProxyCount/);
+
 console.log('PASS dashboard telemetry freshness regression tests');
