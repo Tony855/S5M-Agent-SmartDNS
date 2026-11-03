@@ -147,10 +147,9 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState) {
 		var err error
 		secret, err = mihomoAPISecretOrLoad(secret, mihomoControllerSecret)
 		if err != nil {
-				previousAt = time.Time{}
-				recordMihomoTelemetryError(state, "读取 Mihomo API secret 失败: "+err.Error())
-				return
-			}
+			previousAt = time.Time{}
+			recordMihomoTelemetryError(state, "读取 Mihomo API secret 失败: "+err.Error())
+			return
 		}
 
 		req, err := newMihomoAPIRequest(ctx, "/connections", secret)
