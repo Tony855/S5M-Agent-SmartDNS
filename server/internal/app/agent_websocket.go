@@ -738,6 +738,12 @@ func safeAgentWebSocketError(operation string, err error) string {
 	return operation + "失败: " + detail
 }
 
+// shouldLogAgentTelemetry rate-limits successful receive diagnostics per Agent.
+// It is independent from persistence throttling and never affects telemetry delivery.
+func shouldLogAgentTelemetry(now, last time.Time, interval time.Duration) bool {
+	return interval > 0 && (last.IsZero() || now.Sub(last) >= interval)
+}
+
 func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	machineCode, err := a.agentMachineFromRequest(r)
 	if err != nil {
@@ -838,23 +844,41 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			if a.agentTelemetryPersistAt == nil {
 				a.agentTelemetryPersistAt = make(map[string]time.Time)
 			}
+			if a.agentTelemetryLogAt == nil {
+				a.agentTelemetryLogAt = make(map[string]time.Time)
+			}
+			if shouldLogAgentTelemetry(receivedAt, a.agentTelemetryLogAt[machineCode], time.Minute) {
+				a.agentTelemetryLogAt[machineCode] = receivedAt
+				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%.0f download_speed=%.0f upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\\n",
+					machineCode, telemetry["upload_speed"], telemetry["download_speed"], telemetry["upload_total"], telemetry["download_total"], telemetry["connections"], telemetry["telemetry_stale"], telemetry["traffic_error"], telemetry["connections_error"])
+			}
 			if receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second {
 				// Throttle failed persistence attempts too; a database outage must
 				// not turn every 200ms frame into another database read/write.
 				a.agentTelemetryPersistAt[machineCode] = receivedAt
 				settings, settingsErr := a.store.GetSettings()
-				if settingsErr == nil {
+				if settingsErr != nil {
+					fmt.Printf("agent_ws: telemetry snapshot read failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("读取统计快照", settingsErr))
+				} else {
 					var saved map[string]any
-					_ = json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &saved)
-					if saved == nil { saved = make(map[string]any) }
+					raw := strings.TrimSpace(settings["agent_status_"+machineCode])
+					if raw != "" {
+						if unmarshalErr := json.Unmarshal([]byte(raw), &saved); unmarshalErr != nil {
+							fmt.Printf("agent_ws: telemetry snapshot decode failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("解析已有统计快照", unmarshalErr))
+						}
+					}
+					if saved == nil {
+						saved = make(map[string]any)
+					}
 					for key, value := range telemetry { saved[key] = value }
 					// Persist server receive time separately from the Agent's sample clock
 					// so dashboard freshness is not affected by remote clock skew.
 					saved["telemetry_received_at_ms"] = receivedAt.UnixMilli()
-					if payload, marshalErr := json.Marshal(saved); marshalErr == nil {
-						if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr != nil {
-							fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
-						}
+					payload, marshalErr := json.Marshal(saved)
+					if marshalErr != nil {
+						fmt.Printf("agent_ws: telemetry snapshot encode failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("序列化统计快照", marshalErr))
+					} else if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr != nil {
+						fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
 					}
 				}
 			}
