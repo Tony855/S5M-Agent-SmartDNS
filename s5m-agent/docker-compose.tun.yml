@@ -1,0 +1,7 @@
+services:
+  s5m-agent:
+    # Explicit opt-in only: required by Mihomo TUN inside the container namespace.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun

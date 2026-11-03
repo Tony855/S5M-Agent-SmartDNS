@@ -1,0 +1,73 @@
+name: Import S5M-Server source archive
+
+on:
+  push:
+    paths:
+      - "source.zip"
+      - ".github/workflows/import-server-source.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: import-server-source-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  extract-and-commit:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate and extract archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s source.zip
+          unzip -t source.zip
+          rm -rf /tmp/s5m-server-import
+          mkdir -p /tmp/s5m-server-import
+          unzip -q source.zip -d /tmp/s5m-server-import
+          test -f /tmp/s5m-server-import/source/main.go
+          test -f /tmp/s5m-server-import/source/go.mod
+          test -d /tmp/s5m-server-import/source/internal
+          test -d /tmp/s5m-server-import/source/web
+          rm -rf server
+          mkdir -p server
+          cp -a /tmp/s5m-server-import/source/. server/
+          test -f server/main.go
+          test -f server/go.mod
+          echo "Imported $(find server -type f | wc -l) files into server/"
+
+      - name: Verify Go source
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: false
+
+      - name: Test and build S5M-Server
+        working-directory: server
+        run: |
+          set -Eeuo pipefail
+          go mod download
+          go test ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/S5M-Server .
+
+      - name: Commit extracted source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "CI: import S5M-Server source archive"
+          git push origin HEAD:main

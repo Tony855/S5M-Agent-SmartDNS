@@ -1,0 +1,68 @@
+services:
+  s5m-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: s5m-server:local
+    container_name: s5m-server
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${S5M_SERVER_PORT:-18081}:8080"
+    environment:
+      S5M_ADDR: ":8080"
+      S5M_DB: /data/s5m-server/s5m.db
+      S5M_CONFIG: /data/s5m-server/config.yaml
+      S5M_BACKUP: /data/s5m-server/backups
+      S5M_ADMIN_USER: ${S5M_ADMIN_USER:-admin}
+      S5M_ADMIN_PASSWORD: ${S5M_ADMIN_PASSWORD:?Set S5M_ADMIN_PASSWORD in .env before starting}
+      S5M_JWT_SECRET: ${S5M_JWT_SECRET:?Set S5M_JWT_SECRET in .env before starting}
+      MIHOMO_API: http://mihomo:9090
+      MIHOMO_SECRET: ${MIHOMO_SECRET:-}
+      MIHOMO_CONFIG_PATH: /data/mihomo/config.yaml
+    volumes:
+      - s5m-data:/data
+      - mihomo-config:/data/mihomo:ro
+    depends_on:
+      mihomo:
+        condition: service_healthy
+    networks: [s5m-internal]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  mihomo:
+    image: metacubex/mihomo:v1.19.12
+    container_name: s5m-server-mihomo
+    restart: unless-stopped
+    command: ["-d", "/root/.config/mihomo"]
+    volumes:
+      - mihomo-config:/root/.config/mihomo
+    expose:
+      - "9090"
+    networks: [s5m-internal]
+    # TUN/transparent routing is intentionally opt-in. Add NET_ADMIN and /dev/net/tun
+    # only after host routing requirements are configured and tested.
+    healthcheck:
+      test: ["CMD", "mihomo", "-v"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  s5m-data:
+  mihomo-config:
+
+networks:
+  s5m-internal:
+    internal: false

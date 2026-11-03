@@ -1,0 +1,40 @@
+#!/command/with-contenv sh
+set -eu
+
+MIHOMO_HOME="${MIHOMO_HOME:-/data}"
+CONFIG_PATH="${MIHOMO_HOME}/config.yaml"
+MIHOMO_BIN="${MIHOMO_HOME}/bin/mihomo"
+MIHOMO_BACKUP="${MIHOMO_BIN}.previous"
+
+mkdir -p "${MIHOMO_HOME}/bin" "${MIHOMO_HOME}/etc"
+
+# Roll back an interrupted kernel update before starting either service.
+if [ -e "${MIHOMO_BACKUP}" ]; then
+  if [ -x "${MIHOMO_BACKUP}" ]; then
+    mv -f "${MIHOMO_BACKUP}" "${MIHOMO_BIN}"
+    chmod 0755 "${MIHOMO_BIN}"
+    echo "已恢复上一次 Mihomo 内核"
+  else
+    echo "Mihomo 旧内核备份不可执行，拒绝自动覆盖" >&2
+    exit 1
+  fi
+fi
+
+# Seed the persistent kernel only on first boot; never overwrite an installed update.
+if [ ! -x "${MIHOMO_BIN}" ]; then
+  cp /usr/local/bin/mihomo.initial "${MIHOMO_BIN}.tmp"
+  chmod 0755 "${MIHOMO_BIN}.tmp"
+  mv -f "${MIHOMO_BIN}.tmp" "${MIHOMO_BIN}"
+fi
+
+if [ ! -s "${CONFIG_PATH}" ]; then
+  cp /app/default-config.yaml "${CONFIG_PATH}"
+  chmod 0600 "${CONFIG_PATH}"
+fi
+
+if grep -Eq '^secret:[[:space:]]*"?(__S5M_GENERATED_SECRET__|__S5M_MIHOMO_SECRET__|change-this-secret)"?[[:space:]]*$' "${CONFIG_PATH}"; then
+  secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d '[:space:]')"
+  [ "${#secret}" -eq 64 ] || { echo "无法生成 Mihomo API secret" >&2; exit 1; }
+  sed -i "s|^secret:.*|secret: \"${secret}\"|" "${CONFIG_PATH}"
+  chmod 0600 "${CONFIG_PATH}"
+fi

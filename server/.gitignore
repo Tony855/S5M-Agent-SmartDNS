@@ -1,0 +1,15 @@
+bin/
+*.db
+*.yaml
+node_modules/
+.DS_Store
+*.bak
+*.bak.*
+*.preinject.*
+s5m-agent/agent-bin
+s5m-agent/agent.log
+bin/s5m-server
+s5m-agent/agent-bin
+s5m-agent/agent.log
+internal/app/*.bak.*
+internal/app/*.cfgbak.*

@@ -1,0 +1,153 @@
+name: Installer Validation
+
+on:
+  push:
+    branches: [main, "fix/**"]
+    paths:
+      - "scripts/install.sh"
+      - "scripts/install-server.sh"
+      - "scripts/deploy-agent.sh"
+      - "scripts/s5m-deploy.sh"
+      - "server/**"
+      - "scripts/tests/proxy-import-parser.test.js"
+      - ".github/workflows/installer-validation.yml"
+  pull_request:
+    paths:
+      - "scripts/install.sh"
+      - "scripts/install-server.sh"
+      - "scripts/deploy-agent.sh"
+      - "server/**"
+      - "scripts/tests/proxy-import-parser.test.js"
+      - ".github/workflows/installer-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-installer:
+    name: Validate native S5M-Server installer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Bash syntax
+        run: |
+          bash -n scripts/install.sh
+          bash -n scripts/install-server.sh
+          bash -n scripts/deploy-agent.sh
+          bash -n scripts/s5m-deploy.sh
+          bash -n scripts/tests/deploy-agent-rollback.sh
+
+      - name: Verify self-contained server installer contract
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          entry = Path("scripts/install.sh").read_text(encoding="utf-8")
+          installer = Path("scripts/install-server.sh").read_text(encoding="utf-8")
+
+          assert "https://github.com/Tony855/S5M-Agent-SmartDNS.git" in entry
+          assert 'REPO_BRANCH="main"' in entry
+          assert 'REPO_DIR="/root/S5M-Agent-SmartDNS"' in entry
+          assert 'exec bash "$INSTALLER" "$@"' in entry
+          assert 'server/main.go' in entry and 'server/go.mod' in entry
+          assert "S5M-Master" not in entry
+          assert "MASTER_DIR" not in entry
+
+          assert 'SRC="$ROOT/server"' in installer
+          assert 'go test ./...' in installer
+          assert 'go build -trimpath' in installer
+          assert 'BIN="/opt/S5M-Server/S5M-Server"' in installer
+          assert 'BUILD_DIR="$(mktemp -d /tmp/s5m-server-build.' in installer
+          assert 'trap \'rm -rf "$BUILD_DIR"\' EXIT' in installer
+          assert "S5M-Master" not in installer
+          assert "docker run" not in entry.lower()
+          assert "docker compose" not in entry.lower()
+          assert "docker-compose" not in entry.lower()
+          assert "docker run" not in installer.lower()
+          assert "docker compose" not in installer.lower()
+          assert "docker-compose" not in installer.lower()
+
+          # Upgrade rollback must include every mutable runtime dependency.
+          assert 'MIHOMO_EXISTED_BEFORE_INSTALL=0' in installer
+          assert '"$BACKUP/mihomo.bin"' in installer
+          assert '"$BACKUP/mihomo-bin-absent"' in installer
+          assert 'PRAGMA quick_check;' in installer
+          assert '"$BACKUP/s5m.db"' in installer
+          assert 'rm -f "$DB_DIR/s5m.db-wal" "$DB_DIR/s5m.db-shm"' in installer
+          assert '"$BACKUP/mihomo-config.md5"' in installer
+          assert 'rollback_install "Go 依赖下载失败"' in installer
+          assert 'rollback_install "Go 单元测试失败"' in installer
+          assert 'rollback_install "S5M-Server 编译失败"' in installer
+          assert 'rollback_install "现有 HTTPS 端点健康检查失败"' in installer
+          assert 'allow-lan: false' in installer
+          assert 'systemctl enable mihomo' in installer
+          assert 'systemctl enable "$UNIT"' in installer
+          assert '"$BACKUP/mihomo-active"' in installer
+          assert '"$BACKUP/server-active"' in installer
+          assert 'systemctl restart mihomo || echo' in installer
+          assert 'systemctl start "$UNIT" || echo' in installer
+          assert 'trap on_install_error ERR' in installer
+          assert 'ROLLBACK_READY=1' in installer
+          assert 'ROLLBACK_READY=0' in installer
+          assert 'trap - ERR' in installer
+          print("Native S5M-Server installer and rollback contract verified.")
+          agent = Path("scripts/deploy-agent.sh").read_text(encoding="utf-8")
+          for required in (
+              'chmod 600 "$CONFIG_FILE"',
+              '[[ -L "$CONFIG_FILE" ]]',
+              '[[ "$CONTAINER_NAME" =~',
+              '[[ "$ENABLE_TUN" == "1" && ! -c /dev/net/tun ]]',
+              'BACKUP_NAME=',
+              'restore_previous()',
+              'ROLLBACK_ARMED=1',
+              'ROLLBACK_ARMED=0',
+              'docker container inspect "$BACKUP_NAME"',
+              'docker rename "$BACKUP_NAME" "$CONTAINER_NAME"',
+              'docker start "$CONTAINER_NAME"',
+              'BIND_ADDR="[$BIND_IP]"',
+              'chmod 600 "$EXTRA_ENV_FILE"',
+              'install -d -m 0700 "$DATA_DIR"',
+              'PROXY_BIND_IP="127.0.0.1"',
+              'PROXY_BIND_IP="${PROXY_BIND_IP:-$BIND_IP}"',
+              'PROXY_BIND_ADDR:$PROXY_PORT:7890/tcp',
+              'WEB_BIND_IP="127.0.0.1"',
+              'WEB_BIND_IP="${WEB_BIND_IP:-$BIND_IP}"',
+              'WEB_BIND_ADDR:$WEB_PORT:80/tcp',
+          ):
+              assert required in agent, f"Missing Agent deployment safeguard: {required}"
+          print("Agent deployment security and rollback contract verified.")
+
+          PY
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck errors
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh
+
+      - name: Test Agent deployment rollback fault paths
+        run: bash scripts/tests/deploy-agent-rollback.sh
+
+      - name: Check embedded web JavaScript syntax
+        run: |
+          node --check server/web/app.js
+          node scripts/tests/proxy-import-parser.test.js
+
+      - name: Test and build bundled S5M-Server source
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache-dependency-path: server/go.sum
+
+      - name: Go tests
+        working-directory: server
+        run: |
+          go mod download
+          go test ./...
+          go vet ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/S5M-Server .

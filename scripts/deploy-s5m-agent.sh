@@ -1,0 +1,461 @@
+#!/usr/bin/env bash
+# /root/deploy-s5m-agent.sh
+# 交互式管理 s5m-agent（SmartDNS）容器
+#   用法:
+#     ./deploy-s5m-agent.sh          # 进入交互菜单
+#     ./deploy-s5m-agent.sh deploy   # 直接执行自动部署（兼容原脚本行为）
+set -euo pipefail
+
+CONFIG_FILE="${CONFIG_FILE:-/root/.s5m-agent.conf}"
+
+# ================= 默认配置 =================
+CONTAINER_NAME="s5m-agent"
+IMAGE="ghcr.io/tony855/s5m-agent-smartdns:dev"
+DATA_DIR="/opt/s5m-agent/data"
+TZ_VAL="Asia/Shanghai"
+RESTART_POLICY="unless-stopped"
+
+PORT_MAP=(
+  "-p" "80:80/tcp"
+  "-p" "127.0.0.1:7890:7890/tcp"
+  "-p" "127.0.0.1:7890:7890/udp"
+)
+EXTRA_ENVS=()
+
+# 若存在配置文件则加载（可持久化交互式修改）
+if [[ -f "${CONFIG_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${CONFIG_FILE}"
+fi
+
+# 自动部署行为（仅 deploy 模式生效）
+FULL_RESET="${FULL_RESET:-true}"
+WIPE_DATA="${WIPE_DATA:-true}"
+CLEAN_LEGACY_IMAGES="${CLEAN_LEGACY_IMAGES:-false}"
+# ============================================
+
+log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
+err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
+
+# ---------- 环境检查 ----------
+require_root() {
+  if [[ $EUID -ne 0 ]]; then err "请用 root 运行"; exit 1; fi
+  command -v docker >/dev/null 2>&1 || { err "未找到 docker，请先安装"; exit 1; }
+  docker info >/dev/null 2>&1 || { err "docker 守护进程未运行"; exit 1; }
+}
+
+# ---------- 工具函数 ----------
+container_exists() {
+  docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${CONTAINER_NAME}"
+}
+
+container_status() {
+  if container_exists; then
+    local st hl
+    st=$(docker inspect "${CONTAINER_NAME}" --format '{{.State.Status}}' 2>/dev/null || echo unknown)
+    hl=$(docker inspect "${CONTAINER_NAME}" \
+         --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' 2>/dev/null || echo n/a)
+    echo "${st} (${hl})"
+  else
+    echo "未创建"
+  fi
+}
+
+ports_display() {
+  local out=() p
+  for p in "${PORT_MAP[@]+"${PORT_MAP[@]}"}"; do
+    [[ "${p}" == "-p" ]] && continue
+    out+=("${p}")
+  done
+  if [[ ${#out[@]} -eq 0 ]]; then
+    echo "（无）"
+  else
+    echo "${out[*]}"
+  fi
+}
+
+# ---------- 配置持久化 ----------
+save_config() {
+  {
+    echo "# s5m-agent 配置文件（由 deploy-s5m-agent.sh 自动生成）"
+    echo "CONTAINER_NAME=$(printf '%q' "${CONTAINER_NAME}")"
+    echo "IMAGE=$(printf '%q' "${IMAGE}")"
+    echo "DATA_DIR=$(printf '%q' "${DATA_DIR}")"
+    echo "TZ_VAL=$(printf '%q' "${TZ_VAL}")"
+    echo "RESTART_POLICY=$(printf '%q' "${RESTART_POLICY}")"
+    echo "PORT_MAP=("
+    local i
+    if [[ ${#PORT_MAP[@]} -gt 0 ]]; then
+      for i in "${PORT_MAP[@]}"; do
+        echo "  $(printf '%q' "${i}")"
+      done
+    fi
+    echo ")"
+    echo "EXTRA_ENVS=("
+    if [[ ${#EXTRA_ENVS[@]} -gt 0 ]]; then
+      for i in "${EXTRA_ENVS[@]}"; do
+        echo "  $(printf '%q' "${i}")"
+      done
+    fi
+    echo ")"
+  } > "${CONFIG_FILE}"
+  log "配置已保存到 ${CONFIG_FILE}"
+}
+
+# ---------- 验证 ----------
+verify_container() {
+  log "等待容器启动..."
+  sleep 5
+
+  log "当前状态："
+  docker ps --filter "name=^/${CONTAINER_NAME}$" || true
+
+  local health
+  health="$(docker inspect "${CONTAINER_NAME}" \
+    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' 2>/dev/null || echo n/a)"
+  log "Health: ${health}"
+
+  log "镜像 digest（确认是刚拉下来的最新版）："
+  docker image inspect "${IMAGE}" \
+    --format '  {{.Id}}  {{index .RepoDigests 0}}' 2>/dev/null || true
+
+  log "最近 50 行日志："
+  docker logs --tail=50 "${CONTAINER_NAME}" 2>&1 || true
+
+  log "监听端口："
+  ss -lntup 2>/dev/null | grep -E ':(80|7890|6053)\b' || echo "  （无匹配，稍后再查看）"
+
+  log "完成。数据目录：${DATA_DIR}"
+}
+
+# ---------- 拉取镜像 ----------
+do_pull() {
+  log "拉取镜像 ${IMAGE}"
+  docker pull "${IMAGE}"
+  docker image inspect "${IMAGE}" \
+    --format '  当前镜像: {{.Id}}  {{index .RepoDigests 0}}' 2>/dev/null || true
+}
+
+# ---------- 重建 / 部署 ----------
+do_recreate() {
+  local remove_image="${1:-false}"
+  local wipe_data="${2:-false}"
+
+  # 1. 删除旧容器
+  if container_exists; then
+    log "停止旧容器 ${CONTAINER_NAME}"
+    docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    log "删除旧容器 ${CONTAINER_NAME}"
+    docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  else
+    warn "容器 ${CONTAINER_NAME} 不存在，跳过"
+  fi
+
+  # 2. 删除本地镜像
+  if [[ "${remove_image}" == "true" ]]; then
+    log "删除本地镜像 ${IMAGE}（强制重新拉取）"
+    if docker rmi -f "${IMAGE}" >/dev/null 2>&1; then
+      log "已删除本地镜像"
+    else
+      warn "删除镜像失败（可能被其他容器引用），继续尝试拉取"
+    fi
+  fi
+  log "清理 dangling 镜像（<none>）"
+  docker image prune -f >/dev/null 2>&1 || true
+
+  # 3. 数据目录
+  if [[ "${wipe_data}" == "true" ]]; then
+    if [[ -d "${DATA_DIR}" ]]; then
+      log "删除旧数据目录 ${DATA_DIR}"
+      rm -rf "${DATA_DIR}"
+    fi
+  else
+    warn "保留现有数据目录 ${DATA_DIR}"
+  fi
+  mkdir -p "${DATA_DIR}"
+
+  # 4. 拉取镜像
+  log "拉取镜像 ${IMAGE}"
+  if ! docker pull "${IMAGE}"; then
+    err "拉取镜像失败"
+    return 1
+  fi
+
+  # 5. 启动新容器
+  log "启动容器 ${CONTAINER_NAME}"
+  if ! docker run -d \
+      --name "${CONTAINER_NAME}" \
+      --restart "${RESTART_POLICY}" \
+      "${PORT_MAP[@]+"${PORT_MAP[@]}"}" \
+      -v "${DATA_DIR}:/data" \
+      -e TZ="${TZ_VAL}" \
+      ${EXTRA_ENVS[@]+"${EXTRA_ENVS[@]}"} \
+      "${IMAGE}" >/dev/null; then
+    err "启动容器失败"
+    return 1
+  fi
+
+  # 6. 验证
+  verify_container
+}
+
+# ---------- 生命周期控制 ----------
+do_start() {
+  if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在，请先部署"; return 1; fi
+  log "启动 ${CONTAINER_NAME}"
+  docker start "${CONTAINER_NAME}"
+}
+
+do_stop() {
+  if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在"; return 1; fi
+  log "停止 ${CONTAINER_NAME}"
+  docker stop "${CONTAINER_NAME}"
+}
+
+do_restart() {
+  if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在，请先部署"; return 1; fi
+  log "重启 ${CONTAINER_NAME}"
+  docker restart "${CONTAINER_NAME}"
+}
+
+do_remove() {
+  if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在"; return 1; fi
+  read -rp "确认删除容器 ${CONTAINER_NAME}？（数据目录将保留）[y/N]: " ans
+  [[ "${ans}" =~ ^[Yy]$ ]] || { warn "已取消"; return 1; }
+  docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  log "已删除容器 ${CONTAINER_NAME}"
+}
+
+# ---------- 查看：日志 / 详情 / 镜像 / 容器 ----------
+do_logs_follow() {
+  if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在"; return 1; fi
+  echo "按 Ctrl+C 停止查看日志，返回菜单"
+  local pid
+  docker logs -f --tail=100 "${CONTAINER_NAME}" &
+  pid=$!
+  trap "kill ${pid} 2>/dev/null || true" INT
+  wait "${pid}" 2>/dev/null || true
+  trap - INT
+  echo
+}
+
+do_logs_tail() {
+  if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在"; return 1; fi
+  docker logs --tail=200 "${CONTAINER_NAME}" 2>&1 || true
+}
+
+do_inspect() {
+  if ! container_exists; then warn "容器 ${CONTAINER_NAME} 不存在"; return 1; fi
+  docker inspect "${CONTAINER_NAME}" | sed -n '1,160p'
+}
+
+# 查看本地镜像
+do_list_images() {
+  log "本地镜像列表："
+  echo
+  docker images \
+    --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}' \
+    || { warn "获取镜像列表失败"; return 1; }
+  echo
+  if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+    log "当前配置镜像：${IMAGE}（本地已存在）"
+    docker image inspect "${IMAGE}" --format \
+'  ID     : {{.Id}}
+  Digest : {{index .RepoDigests 0}}
+  Size   : {{.Size}}
+  Created: {{.Created}}'
+  else
+    warn "当前配置镜像：${IMAGE}（本地不存在，需先拉取）"
+  fi
+}
+
+# 查看全部容器（含已停止）
+do_list_containers() {
+  log "全部容器（含已停止）："
+  echo
+  docker ps -a \
+    --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' \
+    || { warn "获取容器列表失败"; return 1; }
+  echo
+  if container_exists; then
+    log "当前管理容器 ${CONTAINER_NAME} 状态：$(container_status)"
+  else
+    warn "当前管理容器 ${CONTAINER_NAME} 不存在"
+  fi
+}
+
+# ---------- 交互式修改配置 ----------
+change_name() {
+  read -rp "新容器名称 [${CONTAINER_NAME}]: " input
+  [[ -z "${input}" ]] && { warn "未修改"; return; }
+  CONTAINER_NAME="${input}"
+  log "容器名称已更新（需重建容器生效）"
+}
+
+change_image() {
+  read -rp "新镜像地址 [${IMAGE}]: " input
+  [[ -z "${input}" ]] && { warn "未修改"; return; }
+  IMAGE="${input}"
+  log "镜像已更新（需重建容器生效）"
+}
+
+change_data_dir() {
+  read -rp "新数据目录 [${DATA_DIR}]: " input
+  [[ -z "${input}" ]] && { warn "未修改"; return; }
+  DATA_DIR="${input}"
+  log "数据目录已更新（需重建容器生效）"
+}
+
+change_ports() {
+  echo "当前端口映射: $(ports_display)"
+  echo "请输入新的端口映射，用空格分隔，带协议（例如: 80:80/tcp 127.0.0.1:7890:7890/tcp 127.0.0.1:7890:7890/udp）"
+  read -rp "> " input
+  [[ -z "${input}" ]] && { warn "未修改"; return; }
+  local new_ports=() m
+  for m in ${input}; do
+    new_ports+=("-p" "${m}")
+  done
+  PORT_MAP=("${new_ports[@]}")
+  log "端口映射已更新（需重建容器生效）"
+}
+
+change_tz() {
+  read -rp "新时区 [${TZ_VAL}]: " input
+  [[ -z "${input}" ]] && { warn "未修改"; return; }
+  TZ_VAL="${input}"
+  log "时区已更新（需重建容器生效）"
+}
+
+change_restart_policy() {
+  echo "可选: no | on-failure | always | unless-stopped"
+  read -rp "新重启策略 [${RESTART_POLICY}]: " input
+  [[ -z "${input}" ]] && { warn "未修改"; return; }
+  case "${input}" in
+    no|on-failure|always|unless-stopped) RESTART_POLICY="${input}"; log "重启策略已更新（需重建容器生效）" ;;
+    *) warn "无效的重启策略" ;;
+  esac
+}
+
+# ---------- 菜单 ----------
+show_menu() {
+  echo
+  echo "════════════════════════════════════════════════════"
+  echo "            s5m-agent 容器管理"
+  echo "════════════════════════════════════════════════════"
+  printf "  容器名称 : %s\n" "${CONTAINER_NAME}"
+  printf "  镜像     : %s\n" "${IMAGE}"
+  printf "  数据目录 : %s\n" "${DATA_DIR}"
+  printf "  端口映射 : %s\n" "$(ports_display)"
+  printf "  时区     : %s\n" "${TZ_VAL}"
+  printf "  重启策略 : %s\n" "${RESTART_POLICY}"
+  printf "  状态     : %s\n" "$(container_status)"
+  echo "────────────────────────────────────────────────────"
+  echo "  ── 部署 / 生命周期 ──"
+  echo "  1)  完整重建（删容器 + 删镜像 + 删数据 + 重拉 + 启动）"
+  echo "  2)  重新部署（删容器 + 保留数据 + 重拉 + 启动）"
+  echo "  3)  拉取最新镜像"
+  echo "  4)  启动容器"
+  echo "  5)  停止容器"
+  echo "  6)  重启容器"
+  echo "  7)  删除容器（保留数据）"
+  echo "  ── 查看 ──"
+  echo "  8)  查看日志（实时，Ctrl+C 退出）"
+  echo "  9)  查看最近 200 行日志"
+  echo "  10) 显示当前容器详情（inspect）"
+  echo "  11) 查看本地镜像列表（含当前镜像详情）"
+  echo "  12) 查看全部容器列表（含已停止）"
+  echo "  ── 修改配置 ──"
+  echo "  13) 修改容器名称"
+  echo "  14) 修改镜像"
+  echo "  15) 修改数据目录"
+  echo "  16) 修改端口映射"
+  echo "  17) 修改时区"
+  echo "  18) 修改重启策略"
+  echo "  19) 保存配置到文件（${CONFIG_FILE}）"
+  echo "  0)  退出"
+  echo "════════════════════════════════════════════════════"
+}
+
+main_menu() {
+  require_root
+  while true; do
+    show_menu
+    read -rp "请选择操作: " choice || break
+    case "${choice}" in
+      1)  do_recreate true true   || warn "操作失败" ;;
+      2)  do_recreate false false || warn "操作失败" ;;
+      3)  do_pull                 || warn "拉取失败" ;;
+      4)  do_start                || true ;;
+      5)  do_stop                 || true ;;
+      6)  do_restart              || true ;;
+      7)  do_remove               || true ;;
+      8)  do_logs_follow          || true ;;
+      9)  do_logs_tail            || true ;;
+      10) do_inspect              || true ;;
+      11) do_list_images          || true ;;
+      12) do_list_containers      || true ;;
+      13) change_name ;;
+      14) change_image ;;
+      15) change_data_dir ;;
+      16) change_ports ;;
+      17) change_tz ;;
+      18) change_restart_policy ;;
+      19) save_config ;;
+      0|q|Q|exit) log "退出"; break ;;
+      *) warn "无效选项，请重新选择" ;;
+    esac
+  done
+}
+
+# ---------- 自动化部署（兼容原脚本） ----------
+exec_deploy_auto() {
+  require_root
+
+  local remove_image="false"
+  local wipe="${WIPE_DATA}"
+
+  if [[ "${FULL_RESET}" == "true" ]]; then
+    remove_image="true"
+    wipe="true"
+  fi
+
+  if [[ "${CLEAN_LEGACY_IMAGES}" == "true" ]]; then
+    log "清理旧仓库 s5m-agent:local / s5m-agent:amd64-test"
+    docker rmi -f s5m-agent:local s5m-agent:amd64-test >/dev/null 2>&1 || true
+  fi
+
+  do_recreate "${remove_image}" "${wipe}"
+
+  log "常用命令："
+  echo "  docker logs -f ${CONTAINER_NAME}"
+  echo "  docker restart ${CONTAINER_NAME}"
+  echo "  docker inspect ${CONTAINER_NAME} --format '{{.State.Health.Status}}'"
+  echo
+  echo "提示：不带参数运行本脚本可进入交互式管理菜单"
+}
+
+# ---------- 入口 ----------
+case "${1:-menu}" in
+  deploy|--auto|auto)
+    exec_deploy_auto
+    ;;
+  menu|"")
+    main_menu
+    ;;
+  -h|--help|help)
+    cat <<EOF
+用法: $0 [menu|deploy]
+  menu   交互式管理菜单（默认）
+  deploy 直接执行自动部署（读取环境变量 FULL_RESET / WIPE_DATA / CLEAN_LEGACY_IMAGES）
+
+配置文件: ${CONFIG_FILE}（保存后下次启动自动加载）
+EOF
+    ;;
+  *)
+    err "未知参数: $1"
+    echo "使用 '$0 --help' 查看帮助"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,21 @@
+services:
+  smartdns:
+    image: ghcr.io/tony855/smartdns:latest
+    container_name: s5m-smartdns
+    restart: unless-stopped
+    ports:
+      # Local host access for Mihomo / host processes; not exposed to LAN/WAN.
+      - "127.0.0.1:6053:53/udp"
+      - "127.0.0.1:6053:53/tcp"
+    volumes:
+      # Keep a copy of smartdns.conf beside this Compose file before mounting.
+      - ./smartdns.conf:/etc/smartdns/smartdns.conf:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
