@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,27 +30,45 @@ func TestMihomoTelemetryStateSnapshotIsConsistent(t *testing.T) {
 	}
 }
 
-func TestTelemetryPollingIntervalStaysWithinInteractiveDefault(t *testing.T) {
+func TestTelemetryIntervalsStayWithinInteractiveDefaults(t *testing.T) {
+	if defaultTelemetryPushInterval != 200*time.Millisecond {
+		t.Fatalf("push interval = %v, want 200ms", defaultTelemetryPushInterval)
+	}
 	if defaultConnectionsInterval != 500*time.Millisecond {
 		t.Fatalf("connections interval = %v, want 500ms", defaultConnectionsInterval)
 	}
 }
 
-func TestTelemetryPollerDoesNotWriteUnsolicitedWebSocketFrames(t *testing.T) {
+func TestTelemetryPublisherSendsSupportedHighFrequencyFrames(t *testing.T) {
 	t.Setenv("MIHOMO_HOME", t.TempDir())
 
+	previousState := agentMihomoTelemetry
+	state := &mihomoTelemetryState{}
+	sampledAt := time.Now()
+	state.update(func(value *mihomoTelemetrySnapshot) {
+		value.UploadSpeed = 1234
+		value.DownloadSpeed = 5678
+		value.Connections = 4
+		value.UploadTotal = 10000
+		value.DownloadTotal = 20000
+		value.SampledAt = sampledAt
+	})
+	agentMihomoTelemetry = state
+	defer func() { agentMihomoTelemetry = previousState }()
+
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	serverRead := make(chan error, 1)
+	received := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			serverRead <- err
 			return
 		}
 		defer conn.Close()
-		_ = conn.SetReadDeadline(time.Now().Add(350 * time.Millisecond))
-		_, _, err = conn.ReadMessage()
-		serverRead <- err
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var payload map[string]any
+		if err := conn.ReadJSON(&payload); err == nil {
+			received <- payload
+		}
 	}))
 	defer server.Close()
 
@@ -70,18 +87,31 @@ func TestTelemetryPollerDoesNotWriteUnsolicitedWebSocketFrames(t *testing.T) {
 	}()
 
 	select {
-	case err := <-serverRead:
-		if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
-			t.Fatalf("server received an unsolicited websocket frame or unexpected error: %v", err)
+	case payload := <-received:
+		if payload["type"] != "telemetry" {
+			t.Fatalf("frame type = %#v, want telemetry", payload["type"])
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("server websocket read did not finish")
+		status, ok := payload["status"].(map[string]any)
+		if !ok {
+			t.Fatalf("telemetry status has unexpected type: %#v", payload["status"])
+		}
+		if status["upload_speed"] != float64(1234) || status["download_speed"] != float64(5678) {
+			t.Fatalf("telemetry speeds were not sent: %#v", status)
+		}
+		if status["connections"] != float64(4) || status["upload_total"] != float64(10000) || status["download_total"] != float64(20000) {
+			t.Fatalf("telemetry counters were not sent: %#v", status)
+		}
+		if status["telemetry_stale"] != false || status["telemetry_sampled_at_ms"] != float64(sampledAt.UnixMilli()) {
+			t.Fatalf("telemetry freshness metadata was not sent: %#v", status)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("publisher did not send a telemetry frame")
 	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("telemetry poller did not stop after context cancellation")
+		t.Fatal("telemetry publisher did not stop after context cancellation")
 	}
 }
 
