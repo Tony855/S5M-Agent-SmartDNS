@@ -104,6 +104,6 @@ func TestBuildSmartDNSPerClientConfigSupportsIPv6ClientCIDR(t *testing.T) {
 		"dualstack-ip-allow-force-AAAA yes",
 		"group-match -client-ip 2001:db8:1234::/64 -g s5m-smartdns-group-16010",
 	} {
-		if !strings.Contains(got, want) { t.Errorf("generated IPv6 config missing %q:\\n%s", want, got) }
+			t.Errorf("generated IPv6 config missing %q:\n%s", want, got)
 	}
 }
