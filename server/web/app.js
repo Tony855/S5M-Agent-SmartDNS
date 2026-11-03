@@ -291,8 +291,8 @@ createApp({
         connections: Math.max(0, Number(status.connections) || 0),
         downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
         uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
-        downloadTotal: Math.max(0, Number(status.download_total) || Number(previous.downloadTotal) || 0),
-        uploadTotal: Math.max(0, Number(status.upload_total) || Number(previous.uploadTotal) || 0),
+        downloadTotal: Number.isFinite(Number(status.download_total)) ? Math.max(0, Number(status.download_total)) : Math.max(0, Number(previous.downloadTotal) || 0),
+        uploadTotal: Number.isFinite(Number(status.upload_total)) ? Math.max(0, Number(status.upload_total)) : Math.max(0, Number(previous.uploadTotal) || 0),
         telemetryStale: status.telemetry_stale === true,
         telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetrySampledAt) || 0,
         telemetryUpdatedAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetryUpdatedAt) || 0,
@@ -439,6 +439,8 @@ createApp({
             const receivedAt = Number(message.received_at_ms) || Date.now();
             if (receivedAt - (telemetryLastRenderAt.get(code) || 0) < 450) return;
             telemetryLastRenderAt.set(code, receivedAt);
+            // Prevent an older overview snapshot from replacing this newer telemetry sample.
+            agentStatusRevision++;
             const remoteNodes = Array.isArray(overview.value.remote_nodes) ? overview.value.remote_nodes.slice() : [];
             const remoteIndex = remoteNodes.findIndex(node => String(node.machine_code || '') === code);
             if (remoteIndex >= 0) {
