@@ -239,6 +239,19 @@ func forgetAgentWSWriteLock(conn *websocket.Conn) {
 	agentWSWriteLocks.Delete(conn)
 }
 
+// A Gorilla WebSocket connection cannot be safely reused after a write error.
+// Closing it wakes the session's reader so the normal reconnect loop can
+// establish a fresh authenticated session instead of leaving heartbeats alive
+// while telemetry silently stops.
+func closeTelemetrySessionOnWriteError(conn *websocket.Conn, writeErr error) {
+	if conn == nil || writeErr == nil {
+		return
+	}
+	diagnostic := safeMihomoValidationDiagnostic([]byte(writeErr.Error()))
+	fmt.Printf("Agent telemetry WebSocket 写入失败，关闭当前会话并触发重连: %s\\n", diagnostic)
+	_ = conn.Close()
+}
+
 func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 	// The controller has a dedicated "telemetry" frame handler. It consumes
 	// these frames without replying on the socket and publishes browser events,
@@ -273,6 +286,7 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 				},
 			}
 			if err := writeAgentWSJSON(conn, payload); err != nil {
+				closeTelemetrySessionOnWriteError(conn, err)
 				return
 			}
 		}
