@@ -78,7 +78,7 @@ const timestampHelper = source.match(/const formatAgentTimestamp = \(unixSeconds
 assert.ok(timestampHelper, 'one canonical Agent timestamp formatter must exist');
 vm.runInNewContext(timestampHelper[0] + '\\nthis.formatAgentTimestamp = formatAgentTimestamp;', context);
 const formatTimestamp = context.formatAgentTimestamp;
-assert.match(formatTimestamp(1793700000), /^\\d{4}\\/\\d{2}\\/\\d{2} \\d{2}:\\d{2}:\\d{2}$/, 'report timestamps use one stable local format');
+assert.match(formatTimestamp(1793700000), /^[0-9]{4}[/][0-9]{2}[/][0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$/, 'report timestamps use one stable local format');
 assert.equal(formatTimestamp(0), '', 'missing timestamps remain empty');
 assert.equal(formatTimestamp('invalid'), '', 'invalid timestamps remain empty');
 
