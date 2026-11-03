@@ -482,8 +482,10 @@ createApp({
               const previousNode = remoteNodes[remoteIndex];
               remoteNodes.splice(remoteIndex, 1, {
                 ...previousNode,
-                // Telemetry is not a heartbeat: preserve liveness and last_seen.
-                ...normalizeTelemetryFields(status, receivedAt)
+                // Telemetry refreshes the displayed last-report time, but never
+                // changes Agent liveness or the authenticated heartbeat timestamp.
+                ...normalizeTelemetryFields(status, receivedAt),
+                updated_at: formatAgentTimestamp(Math.floor(receivedAt / 1000))
               });
               overview.value = { ...overview.value, remote_nodes: remoteNodes };
             } else if (!overviewResyncRequested) {
@@ -497,7 +499,8 @@ createApp({
               const previous = agentEntries.value[index];
               agentEntries.value.splice(index, 1, {
                 ...previous,
-                ...normalizeTelemetryFields(status, receivedAt)
+                ...normalizeTelemetryFields(status, receivedAt),
+                updated_at: formatAgentTimestamp(Math.floor(receivedAt / 1000))
               });
             } else {
               loadAgentsData();
