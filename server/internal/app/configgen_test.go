@@ -2207,3 +2207,41 @@ func TestBuildConfigWithoutEligibleProxiesOmitsEmptyPROXYGroup(t *testing.T) {
 		})
 	}
 }
+
+
+func TestMergeManagedProxySectionsRemovesStaleCustomPROXYWhenNoNodes(t *testing.T) {
+	custom := `mode: rule
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: []
+  - name: CUSTOM-MANUAL
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - MATCH,PROXY
+`
+	generated := `mode: rule
+proxies: []
+proxy-groups: []
+rules:
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("merge config without proxies: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatalf("decode merged YAML: %v", err) }
+	groups, ok := doc["proxy-groups"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("stale PROXY group should be removed while custom groups remain: %#v", doc["proxy-groups"])
+	}
+	group := groups[0].(map[string]any)
+	if group["name"] != "CUSTOM-MANUAL" {
+		t.Fatalf("unexpected remaining group: %#v", group)
+	}
+	rules := doc["rules"].([]any)
+	if len(rules) == 0 || rules[len(rules)-1] != "MATCH,REJECT" {
+		t.Fatalf("no-proxy policy must remain fail-closed: %#v", rules)
+	}
+}

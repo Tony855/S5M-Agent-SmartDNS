@@ -1348,6 +1348,13 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 	}
 	merged := make([]any, 0, len(custom)+len(generated))
 	seen := make(map[string]bool, len(custom)+len(generated))
+	generatedHasProxyGroup := false
+	for _, raw := range generated {
+		if group, ok := raw.(map[string]any); ok && group["name"] == "PROXY" {
+			generatedHasProxyGroup = true
+			break
+		}
+	}
 	for _, raw := range custom {
 		group, ok := raw.(map[string]any)
 		if !ok { return nil, fmt.Errorf("自定义 proxy-groups 项必须是对象") }
@@ -1355,6 +1362,12 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 		if !ok || strings.TrimSpace(name) == "" { return nil, fmt.Errorf("自定义 proxy-group 名称不能为空") }
 		name = strings.TrimSpace(name)
 		if seen[name] { return nil, fmt.Errorf("自定义 proxy-group 名称重复: %q", name) }
+		// PROXY is database-managed. If this machine has no eligible
+		// outbound proxies, discard a stale custom copy as well, or Mihomo
+		// will still reject an empty group after the managed sections merge.
+		if name == "PROXY" && !generatedHasProxyGroup {
+			continue
+		}
 		seen[name] = true
 		merged = append(merged, raw)
 	}
