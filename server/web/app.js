@@ -13,6 +13,14 @@ createApp({
     const pwdForm = reactive({ old: '', new: '', confirm: '' });
 
     const overview = ref({});
+    const TELEMETRY_FRESHNESS_MS = 15000;
+    // Telemetry freshness is based only on the server receive timestamp. Agent
+    // heartbeat and Agent wall-clock sample timestamps are not substitutes.
+    const isTelemetryFresh = (node, now = Date.now()) => {
+      const receivedAt = Number(node && (node.telemetryUpdatedAt || node.telemetry_updated_at_ms)) || 0;
+      return node && node.telemetryStale !== true && node.telemetry_stale !== true
+        && receivedAt > 0 && now >= receivedAt && now - receivedAt <= TELEMETRY_FRESHNESS_MS;
+    };
     // Aggregate only remote Agent Mihomo telemetry; never mix in controller-local traffic.
     const traffic = computed(() => {
       const nodes = Array.isArray(overview.value.remote_nodes) ? overview.value.remote_nodes : [];
@@ -21,12 +29,7 @@ createApp({
       nodes.forEach(node => {
         totals.uploadTotal += Math.max(0, Number(node.uploadTotal) || 0);
         totals.downloadTotal += Math.max(0, Number(node.downloadTotal) || 0);
-        const telemetryAt = Number(node.telemetryUpdatedAt || node.telemetry_updated_at_ms || node.telemetrySampledAt || 0);
-        const lastSeenMs = (Number(node.last_seen) || 0) * 1000;
-        const telemetryFresh = node.telemetryStale !== true && node.telemetry_stale !== true &&
-          (telemetryAt > 0 ? (now - telemetryAt >= 0 && now - telemetryAt <= 15000)
-            : (lastSeenMs > 0 && now - lastSeenMs >= 0 && now - lastSeenMs <= 90000));
-        if (node.online === true && node.healthy === true && telemetryFresh) {
+        if (node.online === true && node.healthy === true && isTelemetryFresh(node, now)) {
           totals.up += Math.max(0, Number(node.uploadSpeed) || 0);
           totals.down += Math.max(0, Number(node.downloadSpeed) || 0);
           totals.conns += Math.max(0, Number(node.connections) || 0);
@@ -289,16 +292,18 @@ createApp({
         healthy,
         mihomo_api_online: healthy,
         mihomo_version: status.mihomo_version || previous.mihomo_version || '',
-        connections: Math.max(0, Number(status.connections) || 0),
-        downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
-        uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
-        downloadTotal: Number.isFinite(Number(status.download_total)) ? Math.max(0, Number(status.download_total)) : Math.max(0, Number(previous.downloadTotal) || 0),
-        uploadTotal: Number.isFinite(Number(status.upload_total)) ? Math.max(0, Number(status.upload_total)) : Math.max(0, Number(previous.uploadTotal) || 0),
-        telemetryStale: status.telemetry_stale === true,
-        telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetrySampledAt) || 0,
-        // last_seen is assigned by the server; do not use the remote Agent clock
-        // for freshness decisions because its wall clock may be skewed.
-        telemetryUpdatedAt: Number(lastSeen) > 0 ? Number(lastSeen) * 1000 : Number(previous.telemetryUpdatedAt) || 0,
+        // Heartbeat/status events must not refresh or overwrite telemetry. Only
+        // an explicit server receive timestamp can advance the telemetry sample.
+        ...(Number(status.telemetry_received_at_ms) > 0 ? {
+          connections: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.connections) || 0),
+          downloadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.download_speed) || 0),
+          uploadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.upload_speed) || 0),
+          downloadTotal: Number.isFinite(Number(status.download_total)) ? Math.max(0, Number(status.download_total)) : Math.max(0, Number(previous.downloadTotal) || 0),
+          uploadTotal: Number.isFinite(Number(status.upload_total)) ? Math.max(0, Number(status.upload_total)) : Math.max(0, Number(previous.uploadTotal) || 0),
+          telemetryStale: status.telemetry_stale === true,
+          telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetrySampledAt) || 0,
+          telemetryUpdatedAt: Number(status.telemetry_received_at_ms)
+        } : {}),
         last_seen: lastSeen,
         updated_at: new Date(lastSeen * 1000).toISOString(),
         last_error: String(status.last_error || '')
@@ -326,7 +331,13 @@ createApp({
             const age = now - (Number(node.last_seen) || 0);
             if (node.online === true && (age < 0 || age >= 90)) {
               changed = true;
-              return { ...node, online: false, healthy: false, mihomo_api_online: false, uploadSpeed: 0, downloadSpeed: 0 };
+              return { ...node, online: false, healthy: false, mihomo_api_online: false, connections: 0, uploadSpeed: 0, downloadSpeed: 0 };
+            }
+            if (node.online === true && !isTelemetryFresh(node) &&
+                (node.telemetryStale !== true || Number(node.connections) !== 0 ||
+                 Number(node.uploadSpeed) !== 0 || Number(node.downloadSpeed) !== 0)) {
+              changed = true;
+              return { ...node, telemetryStale: true, connections: 0, uploadSpeed: 0, downloadSpeed: 0 };
             }
             return node;
           });
@@ -453,9 +464,9 @@ createApp({
                 online: true,
                 healthy: previousNode.healthy === true || previousNode.mihomo_api_online === true,
                 mihomo_api_online: previousNode.mihomo_api_online === true || previousNode.healthy === true,
-                connections: Math.max(0, Number(status.connections) || 0),
-                uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
-                downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
+                connections: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.connections) || 0),
+                uploadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.upload_speed) || 0),
+                downloadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.download_speed) || 0),
                 uploadTotal: Math.max(0, Number(status.upload_total) || 0),
                 downloadTotal: Math.max(0, Number(status.download_total) || 0),
                 telemetryStale: status.telemetry_stale === true,
@@ -476,9 +487,9 @@ createApp({
               const previous = agentEntries.value[index];
               agentEntries.value.splice(index, 1, {
                 ...previous,
-                connections: Math.max(0, Number(status.connections) || 0),
-                uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
-                downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
+                connections: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.connections) || 0),
+                uploadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.upload_speed) || 0),
+                downloadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.download_speed) || 0),
                 uploadTotal: Math.max(0, Number(status.upload_total) || 0),
                 downloadTotal: Math.max(0, Number(status.download_total) || 0),
                 telemetryError: [status.traffic_error, status.connections_error].filter(Boolean).join('；'),
