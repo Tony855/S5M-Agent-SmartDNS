@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -239,5 +240,39 @@ func TestApplyMihomoTelemetrySnapshotKeepsCachedValuesAndFreshness(t *testing.T)
 	applyMihomoTelemetrySnapshot(status, snapshot, now.Add(2*time.Second))
 	if status["telemetry_stale"] != true {
 		t.Fatalf("expired sample not marked stale: %#v", status["telemetry_stale"])
+	}
+}
+
+func TestTelemetryWriteFailureClosesSessionSocket(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	serverRead := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverConn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverRead <- err
+			return
+		}
+		defer serverConn.Close()
+		_, _, err = serverConn.ReadMessage()
+		serverRead <- err
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer clientConn.Close()
+
+	closeTelemetrySessionOnWriteError(clientConn, errors.New("broken pipe"))
+
+	select {
+	case err := <-serverRead:
+		if err == nil {
+			t.Fatal("server read unexpectedly succeeded after telemetry write failure")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing telemetry session did not wake the peer reader")
 	}
 }
