@@ -385,6 +385,10 @@ jobs:
           build-args: |
             SMARTDNS_REF=${{ env.SMARTDNS_REF }}
 
+      - name: Test Mihomo fallback runtime failover (linux/arm64)
+        timeout-minutes: 3
+        run: python3 scripts/tests/mihomo-fallback-runtime.py s5m-agent-smartdns:arm64-test
+
       - name: Run ARM64 container startup and DNS smoke test
         timeout-minutes: 5
         shell: bash

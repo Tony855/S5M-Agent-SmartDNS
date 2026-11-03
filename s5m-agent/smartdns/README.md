@@ -1,6 +1,6 @@
 # S5M Agent + SmartDNS combined image
 
-This is an **optional, standalone image variant** that runs the existing S5M Agent, Mihomo and SmartDNS in one container under s6-overlay supervision. Its development branch is `s5m-agent-smartdns`; it is intentionally not merged into `main` or `dev`.
+This is an **optional, standalone image variant** that runs the existing S5M Agent, Mihomo and SmartDNS in one container under s6-overlay supervision. This repository's `main` branch is the source of truth for this variant; it remains a separate image and does not replace the standard `s5m-agent` or RouterOS images.
 
 - Image published by a successful push to the isolated `s5m-agent-smartdns` branch: `ghcr.io/tony855/s5m-agent-smartdns:dev` plus a commit-SHA tag.
 - Architectures: `linux/amd64` and `linux/arm64`.
@@ -36,6 +36,6 @@ The init script intentionally preserves a non-empty `/data/config.yaml`. Therefo
 
 ## Tests and image publishing
 
-The dedicated GitHub Actions workflow is triggered by relevant file changes in a pull request targeting `s5m-agent-smartdns` or by a push to `s5m-agent-smartdns`. It builds AMD64, starts a temporary combined container, checks Agent HTTP health and both dataplane processes, verifies there is no published HTTP/SOCKS proxy port, confirms both Agent and SmartDNS processes are running, and performs UDP and TCP DNS lookups against the local SmartDNS listener. It separately builds the ARM64 image.
+The dedicated GitHub Actions workflow runs on relevant pull requests targeting `main` and pushes to `main`. It runs server and Agent tests, builds AMD64 and ARM64 images, exercises Mihomo fallback selection and fail-closed behavior on both architectures, starts a temporary combined container on each architecture, checks Agent HTTP health and both dataplane processes, verifies that no proxy or controller API port is published, confirms restart persistence and SmartDNS self-recovery where supported, and performs UDP and TCP DNS lookups against both default and China-only SmartDNS listeners.
 
-Pull-request runs do not publish images. The multi-architecture image is published only after a successful **push to `s5m-agent-smartdns`** (the branch's `dev` image tag is a container tag, not the Git branch named `dev`). Pushing to the repository's `dev` branch alone does not trigger this workflow.
+Pull-request runs do not publish images. The multi-architecture image is published only after the `test-server`, AMD64 runtime smoke, and ARM64 build/runtime smoke jobs all pass on a push to `main`. The `dev` suffix is a GHCR image tag; it is not the Git branch name.
