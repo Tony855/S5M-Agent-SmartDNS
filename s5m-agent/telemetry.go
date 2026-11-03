@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	defaultTelemetryPushInterval = 200 * time.Millisecond
 	defaultConnectionsInterval   = 500 * time.Millisecond
 )
 
@@ -29,7 +28,7 @@ type mihomoTelemetrySnapshot struct {
 	TrafficError     string    `json:"traffic_error"`
 	ConnectionsError string    `json:"connections_error"`
 	UpdatedAt        time.Time `json:"-"`
-	SampledAt         time.Time `json:"-"`
+	SampledAt        time.Time `json:"-"`
 }
 
 type mihomoTelemetryState struct {
