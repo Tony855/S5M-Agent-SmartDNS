@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"net"
 	"testing"
 	"time"
 
