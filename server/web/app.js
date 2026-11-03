@@ -13,7 +13,28 @@ createApp({
     const pwdForm = reactive({ old: '', new: '', confirm: '' });
 
     const overview = ref({});
-    const traffic = ref({ up: 0, down: 0, conns: 0 });
+    // Aggregate only remote Agent Mihomo telemetry; never mix in controller-local traffic.
+    const traffic = computed(() => {
+      const nodes = Array.isArray(overview.value.remote_nodes) ? overview.value.remote_nodes : [];
+      const now = Date.now();
+      const totals = { up: 0, down: 0, conns: 0, uploadTotal: 0, downloadTotal: 0, contributingNodes: 0 };
+      nodes.forEach(node => {
+        totals.uploadTotal += Math.max(0, Number(node.uploadTotal) || 0);
+        totals.downloadTotal += Math.max(0, Number(node.downloadTotal) || 0);
+        const telemetryAt = Number(node.telemetryUpdatedAt || node.telemetry_updated_at_ms || node.telemetrySampledAt || 0);
+        const lastSeenMs = (Number(node.last_seen) || 0) * 1000;
+        const telemetryFresh = node.telemetryStale !== true && node.telemetry_stale !== true &&
+          (telemetryAt > 0 ? (now - telemetryAt >= 0 && now - telemetryAt <= 15000)
+            : (lastSeenMs > 0 && now - lastSeenMs >= 0 && now - lastSeenMs <= 90000));
+        if (node.online === true && node.healthy === true && telemetryFresh) {
+          totals.up += Math.max(0, Number(node.uploadSpeed) || 0);
+          totals.down += Math.max(0, Number(node.downloadSpeed) || 0);
+          totals.conns += Math.max(0, Number(node.connections) || 0);
+          totals.contributingNodes++;
+        }
+      });
+      return totals;
+    });
     const realtimeStatus = ref('disconnected');
     let browserEventsSocket = null;
     let browserEventsRetryTimer = null;
@@ -272,6 +293,9 @@ createApp({
         uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
         downloadTotal: Math.max(0, Number(status.download_total) || Number(previous.downloadTotal) || 0),
         uploadTotal: Math.max(0, Number(status.upload_total) || Number(previous.uploadTotal) || 0),
+        telemetryStale: status.telemetry_stale === true,
+        telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetrySampledAt) || 0,
+        telemetryUpdatedAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetryUpdatedAt) || 0,
         last_seen: lastSeen,
         updated_at: new Date(lastSeen * 1000).toISOString(),
         last_error: String(status.last_error || '')
@@ -379,13 +403,8 @@ createApp({
             const status = message.status && typeof message.status === 'object' ? message.status : {};
             syncServerClock(message.server_time);
             const receivedAt = Number(message.last_seen) || Math.floor(serverNowSeconds());
-            // Live telemetry is authoritative while WebSocket is connected.
-            // HTTP is only used for initial/reconnect snapshots, not polling.
-            traffic.value = {
-              up: Math.max(0, Number(status.upload_speed) || 0),
-              down: Math.max(0, Number(status.download_speed) || 0),
-              conns: Math.max(0, Number(status.connections) || 0)
-            };
+            // Live telemetry is authoritative per Agent; dashboard totals are
+            // derived from all remote_nodes rather than whichever Agent reported last.
             updateDashboardAgentStatus(code, status, receivedAt);
             const index = agentEntries.value.findIndex(item => item.code === code);
             if (index >= 0) {
@@ -420,11 +439,28 @@ createApp({
             const receivedAt = Number(message.received_at_ms) || Date.now();
             if (receivedAt - (telemetryLastRenderAt.get(code) || 0) < 450) return;
             telemetryLastRenderAt.set(code, receivedAt);
-            traffic.value = {
-              up: Math.max(0, Number(status.upload_speed) || 0),
-              down: Math.max(0, Number(status.download_speed) || 0),
-              conns: Math.max(0, Number(status.connections) || 0)
-            };
+            const remoteNodes = Array.isArray(overview.value.remote_nodes) ? overview.value.remote_nodes.slice() : [];
+            const remoteIndex = remoteNodes.findIndex(node => String(node.machine_code || '') === code);
+            if (remoteIndex >= 0) {
+              const previousNode = remoteNodes[remoteIndex];
+              remoteNodes.splice(remoteIndex, 1, {
+                ...previousNode,
+                online: true,
+                healthy: previousNode.healthy === true || previousNode.mihomo_api_online === true,
+                mihomo_api_online: previousNode.mihomo_api_online === true || previousNode.healthy === true,
+                connections: Math.max(0, Number(status.connections) || 0),
+                uploadSpeed: Math.max(0, Number(status.upload_speed) || 0),
+                downloadSpeed: Math.max(0, Number(status.download_speed) || 0),
+                uploadTotal: Math.max(0, Number(status.upload_total) || 0),
+                downloadTotal: Math.max(0, Number(status.download_total) || 0),
+                telemetryStale: status.telemetry_stale === true,
+                telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
+                telemetryUpdatedAt: receivedAt,
+                last_seen: Math.floor(receivedAt / 1000),
+                updated_at: new Date(receivedAt).toLocaleString()
+              });
+              overview.value = { ...overview.value, remote_nodes: remoteNodes };
+            }
             const index = agentEntries.value.findIndex(item => item.code === code);
             if (index >= 0) {
               const previous = agentEntries.value[index];
@@ -585,16 +621,9 @@ createApp({
         console.warn('通过实时通道读取仪表盘概览失败', e);
       }
 
-      try {
-        const data = await sendBrowserWSControl({ type: 'monitor.traffic.get' });
-        traffic.value = {
-          up: Math.max(0, Number((data.data || {}).up) || 0),
-          down: Math.max(0, Number((data.data || {}).down) || 0),
-          conns: Math.max(0, Number((data.data || {}).conns) || 0)
-        };
-      } catch (e) {
-        console.warn('通过实时通道读取流量失败', e);
-      }
+      // Remote Agent telemetry events continuously update remote_nodes.
+      // monitor.traffic.get measures controller-local Mihomo and must not
+      // overwrite the remote-agent aggregate shown on this dashboard.
     };
 
     const recoverMihomoUpdateTask = async () => {
