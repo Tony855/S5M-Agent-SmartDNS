@@ -848,6 +848,9 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 					_ = json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &saved)
 					if saved == nil { saved = make(map[string]any) }
 					for key, value := range telemetry { saved[key] = value }
+					// Persist server receive time separately from the Agent's sample clock
+					// so dashboard freshness is not affected by remote clock skew.
+					saved["telemetry_received_at_ms"] = receivedAt.UnixMilli()
 					if payload, marshalErr := json.Marshal(saved); marshalErr == nil {
 						if updateErr := a.store.UpdateSettings(map[string]string{"agent_status_"+machineCode: string(payload)}); updateErr != nil {
 							fmt.Printf("agent_ws: telemetry snapshot persistence failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("保存统计快照", updateErr))
