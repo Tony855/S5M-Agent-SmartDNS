@@ -21,6 +21,15 @@ createApp({
       return node && node.telemetryStale !== true && node.telemetry_stale !== true
         && receivedAt > 0 && now >= receivedAt && now - receivedAt <= TELEMETRY_FRESHNESS_MS;
     };
+    const formatAgentTimestamp = (unixSeconds) => {
+      const seconds = Number(unixSeconds);
+      if (!Number.isFinite(seconds) || seconds <= 0) return '';
+      const date = new Date(seconds * 1000);
+      if (!Number.isFinite(date.getTime())) return '';
+      const pad = value => String(value).padStart(2, '0');
+      return date.getFullYear() + '/' + pad(date.getMonth() + 1) + '/' + pad(date.getDate()) + ' ' +
+        pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+    };
     const normalizeTelemetryFields = (status, receivedAt) => {
       const stale = status.telemetry_stale === true;
       return {
@@ -321,7 +330,7 @@ createApp({
           telemetryUpdatedAt: Number(status.telemetry_received_at_ms)
         } : {}),
         last_seen: lastSeen,
-        updated_at: new Date(lastSeen * 1000).toISOString(),
+        updated_at: formatAgentTimestamp(lastSeen),
         last_error: String(status.last_error || '')
       });
       overview.value = withRemoteNodeCounts(current, nodes);
@@ -453,7 +462,7 @@ createApp({
                 runtimeMessage: status.mihomo_process_running === true && status.mihomo_api_healthy !== true && status.mihomo_healthy !== true
                   ? String(status.last_error || 'Mihomo 进程运行中，但 API 健康检查未通过')
                   : (status.mihomo_healthy === true ? '' : String(status.last_error || 'Agent 已连接，但 Mihomo 健康检查未通过')),
-                updated_at: new Date(receivedAt * 1000).toLocaleString()
+                updated_at: formatAgentTimestamp(receivedAt)
               };
               agentEntries.value.splice(index, 1, updated);
             } else {
@@ -473,12 +482,8 @@ createApp({
               const previousNode = remoteNodes[remoteIndex];
               remoteNodes.splice(remoteIndex, 1, {
                 ...previousNode,
-                online: true,
-                healthy: previousNode.healthy === true || previousNode.mihomo_api_online === true,
-                mihomo_api_online: previousNode.mihomo_api_online === true || previousNode.healthy === true,
-                ...normalizeTelemetryFields(status, receivedAt),
-                last_seen: Math.floor(receivedAt / 1000),
-                updated_at: new Date(receivedAt).toLocaleString()
+                // Telemetry is not a heartbeat: preserve liveness and last_seen.
+                ...normalizeTelemetryFields(status, receivedAt)
               });
               overview.value = { ...overview.value, remote_nodes: remoteNodes };
             } else if (!overviewResyncRequested) {
@@ -1274,7 +1279,7 @@ createApp({
               : '尚无通信记录；请检查 Agent 是否启动、绑定 Token 和主控地址';
           } else if (!online) {
             runtimeMessage = '运行状态已记录，但心跳已超时；请检查 Agent 进程和网络连接';
-          } else if (!status.mihomo_healthy) {
+          } else if (!(status.mihomo_api_healthy === true || status.mihomo_healthy === true)) {
             runtimeMessage = lastError || 'Agent 已上报，但 Mihomo API 未通过健康检查';
           }
 
@@ -1298,9 +1303,7 @@ createApp({
             runtimeReported,
             runtimeMessage,
             lastError,
-            updated_at: (reportedAt > 0 && Number.isFinite(reportedAt)) || (last > 0 && Number.isFinite(last))
-              ? new Date(((reportedAt > 0 && Number.isFinite(reportedAt)) ? reportedAt : last) * 1000).toLocaleString()
-              : '',
+            updated_at: formatAgentTimestamp(last),
             pendingCommand: item.pending_command && typeof item.pending_command === 'object' ? item.pending_command : null,
             commandResult: item.command_result && typeof item.command_result === 'object' ? item.command_result : null
           });
