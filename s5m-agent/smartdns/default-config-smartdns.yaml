@@ -11,9 +11,12 @@ secret: __S5M_GENERATED_SECRET__
 
 profile:
   store-selected: true
+  # Persist Fake-IP <-> domain mappings only; DNS answer caching belongs to SmartDNS.
   store-fake-ip: true
 
 dns:
+  # SmartDNS is the single DNS-answer cache (cache/prefetch/serve-expired).
+  # Mihomo keeps only Fake-IP mapping state via profile.store-fake-ip above.
   enable: true
   listen: 127.0.0.1:5353
   enhanced-mode: fake-ip
