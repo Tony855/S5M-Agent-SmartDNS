@@ -84,9 +84,9 @@
           <div class="stat-card"><div class="stat-title">Mihomo 健康节点</div><div class="stat-value">{{ overview.remote_mihomo_healthy || 0 }}</div><div class="section-hint">控制 API 可达且内核正常</div></div>
           <div class="stat-card"><div class="stat-title stat-title-download">实时下载速率</div><div class="stat-value">{{ fmtSpeed(traffic.down) }}</div></div>
           <div class="stat-card"><div class="stat-title stat-title-upload">实时上传速率</div><div class="stat-value">{{ fmtSpeed(traffic.up) }}</div></div>
-          <div class="stat-card"><div class="stat-title">活跃连接数</div><div class="stat-value">{{ traffic.conns || 0 }}</div></div>
-          <div class="stat-card"><div class="stat-title">累计下载流量</div><div class="stat-value">{{ fmtBytes(overview.downloadTotal) }}</div></div>
-          <div class="stat-card"><div class="stat-title">累计上传流量</div><div class="stat-value">{{ fmtBytes(overview.uploadTotal) }}</div></div>
+          <div class="stat-card"><div class="stat-title">活跃连接数</div><div class="stat-value">{{ traffic.conns || 0 }}</div><div class="section-hint">汇总 {{ traffic.contributingNodes || 0 }} 个有效上报节点</div></div>
+          <div class="stat-card"><div class="stat-title">累计下载流量</div><div class="stat-value">{{ fmtBytes(traffic.downloadTotal) }}</div></div>
+          <div class="stat-card"><div class="stat-title">累计上传流量</div><div class="stat-value">{{ fmtBytes(traffic.uploadTotal) }}</div></div>
           <div class="stat-card"><div class="stat-title">已启用代理</div><div class="stat-value">{{ overview.proxy_enabled || 0 }} / {{ overview.proxy_total || 0 }}</div></div>
         </div>
         <div class="card-panel">
