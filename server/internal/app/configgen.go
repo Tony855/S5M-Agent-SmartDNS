@@ -1479,6 +1479,40 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("合并自定义规则失败: %w", err)
 	}
+	// When no database-managed outbound group exists, custom YAML must not
+	// retain references to the missing PROXY policy. Rewrite only policy targets
+	// and group members to REJECT; never turn these routes into DIRECT.
+	generatedGroups, _ := generatedDoc["proxy-groups"].([]any)
+	generatedHasProxy := false
+	for _, raw := range generatedGroups {
+		if group, ok := raw.(map[string]any); ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(group["name"])), "PROXY") {
+			generatedHasProxy = true
+			break
+		}
+	}
+	if !generatedHasProxy {
+		for _, raw := range mergedGroups {
+			group, ok := raw.(map[string]any)
+			if !ok { continue }
+			members, ok := group["proxies"].([]any)
+			if !ok { continue }
+			for i, member := range members {
+				if name, ok := member.(string); ok && strings.EqualFold(strings.TrimSpace(name), "PROXY") {
+					members[i] = "REJECT"
+				}
+			}
+			group["proxies"] = members
+		}
+		for i, raw := range mergedRules {
+			rule, ok := raw.(string)
+			if !ok { continue }
+			parts := strings.Split(rule, ",")
+			if len(parts) >= 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "PROXY") {
+				parts[2] = "REJECT"
+				mergedRules[i] = strings.Join(parts, ",")
+			}
+		}
+	}
 	customDoc["rules"] = mergedRules
 	merged, err := yaml.Marshal(customDoc)
 	if err != nil {

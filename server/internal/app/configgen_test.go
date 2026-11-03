@@ -2209,6 +2209,38 @@ func TestBuildConfigWithoutEligibleProxiesOmitsEmptyPROXYGroup(t *testing.T) {
 }
 
 
+func TestMergeManagedProxySectionsRewritesStalePROXYReferencesWhenNoNodes(t *testing.T) {
+	custom := `mode: rule
+proxy-groups:
+  - name: CUSTOM-CHAIN
+    type: select
+    proxies: [PROXY, DIRECT]
+rules:
+  - DOMAIN-SUFFIX,blocked.example,PROXY
+  - DOMAIN-SUFFIX,allowed.example,DIRECT
+  - MATCH,PROXY
+`
+	generated := `mode: rule
+proxies: []
+proxy-groups: []
+rules:
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("merge config without proxies: %v", err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatalf("decode merged YAML: %v", err) }
+	groups := doc["proxy-groups"].([]any)
+	members := groups[0].(map[string]any)["proxies"].([]any)
+	if len(members) != 2 || members[0] != "REJECT" || members[1] != "DIRECT" {
+		t.Fatalf("stale group reference must become REJECT and preserve unrelated members: %#v", members)
+	}
+	rules := doc["rules"].([]any)
+	if len(rules) != 3 || rules[0] != "DOMAIN-SUFFIX,blocked.example,REJECT" || rules[1] != "DOMAIN-SUFFIX,allowed.example,DIRECT" || rules[2] != "MATCH,REJECT" {
+		t.Fatalf("stale policy references must fail closed without changing unrelated rules: %#v", rules)
+	}
+}
+
 func TestMergeManagedProxySectionsRemovesStaleCustomPROXYWhenNoNodes(t *testing.T) {
 	custom := `mode: rule
 proxy-groups:
