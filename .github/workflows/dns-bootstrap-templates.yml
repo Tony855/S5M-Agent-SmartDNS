@@ -45,4 +45,4 @@ jobs:
           grep -Fqx 'server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com' "$config"
           grep -Fqx 'server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google' "$config"
           ! grep -Eq '^[[:space:]]*server(-tcp)?[[:space:]]' "$config"
-          ! grep -E '^[[:space:]]*server-tls[[:space:]]' "$config" | grep -Ev -- '-host-name [^[:space:]]+ .* -tls-host-verify [^[:space:]]+'
+          ! grep -E '^[[:space:]]*server-tls[[:space:]]' "$config" | grep -Ev -- '-host-name [^[:space:]]+.*-tls-host-verify [^[:space:]]+'
