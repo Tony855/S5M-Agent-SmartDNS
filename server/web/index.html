@@ -156,7 +156,7 @@
             <div class="group-tab danger" :class="{ active: activeGroup === 'UNBOUND' }" @click="activeGroup = 'UNBOUND'">未绑定 ({{ getUnboundCount() }})</div>
             <div v-for="code in proxyGroupCodes" :key="code" class="group-tab success" 
                  :class="{ active: activeGroup === code }" @click="activeGroup = code">
-              {{ code === '__GLOBAL__' ? '全局节点' : '机器: ' + code }} ({{ getMachineCount(code) }})
+              {{ code === '__GLOBAL__' ? '全局节点' : '机器: ' + code }} ({{ getMachineProxyCount(code) }})
             </div>
           </div>
 
@@ -352,13 +352,13 @@
                       </span>
                     </div>
                   </div>
-                  <span>关联代理：<strong>{{ proxyCountForMachine(item.code) }}</strong></span>
+                  <span>关联代理：<strong>{{ getMachineProxyCount(item.code) }}</strong></span>
                   <span v-if="item.telemetryStale" class="instance-summary-error">流量数据已过期，当前显示最后一次成功采样{{ item.telemetrySampledAt ? '（' + new Date(item.telemetrySampledAt).toLocaleString() + '）' : '（尚无有效采样）' }}</span>
                   <span v-if="item.runtimeMessage || item.lastError || item.telemetryError" class="instance-summary-error">Agent 状态/错误信息：{{ [item.runtimeMessage, item.lastError, item.telemetryError].filter(Boolean).join('；') }}</span>
                 </div>
               </div>
               <div class="instance-actions">
-                <el-button size="small" type="primary" plain @click="openProxiesForMachine(item.code)">关联代理（{{ proxyCountForMachine(item.code) }}）</el-button>
+                <el-button size="small" type="primary" plain @click="openProxiesForMachine(item.code)">关联代理（{{ getMachineProxyCount(item.code) }}）</el-button>
                 <el-button size="small" @click="openNodeConfigForMachine(item.code)">独立配置</el-button>
                 <el-button size="small" type="warning" plain @click="openAgentKernelUpdate(item.code)">更新 Mihomo</el-button>
                 <el-button size="small" type="danger" plain @click="deleteAgent(item.code)">撤销绑定</el-button>

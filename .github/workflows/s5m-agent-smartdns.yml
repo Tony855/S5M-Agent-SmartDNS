@@ -95,6 +95,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate dashboard JavaScript and telemetry freshness
+        run: |
+          node --check server/web/app.js
+          node scripts/tests/dashboard-telemetry-freshness.test.js
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
