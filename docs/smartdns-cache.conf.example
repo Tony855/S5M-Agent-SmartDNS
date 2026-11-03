@@ -11,8 +11,8 @@ serve-expired yes
 
 # Encrypted DNS-over-TLS only. Literal IP endpoints avoid bootstrap loops.
 # In S5M Agent, PROCESS-NAME,smartdns routes these sockets through the selected proxy.
-server-tls 1.1.1.1:853 -host-name cloudflare-dns.com
-server-tls 8.8.8.8:853 -host-name dns.google
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
+server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google
 
 # Avoid enabling audit logging unless query logs are intentionally required.
 audit-enable no
