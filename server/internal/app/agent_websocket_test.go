@@ -1759,3 +1759,19 @@ func TestBrowserEventsWebSocketAcceptsLargeMessageAndStaysConnected(t *testing.T
 		t.Fatalf("unexpected follow-up response: %#v", followup)
 	}
 }
+
+func TestShouldLogAgentTelemetryRateLimitsPerNode(t *testing.T) {
+	base := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	if !shouldLogAgentTelemetry(base, time.Time{}, time.Minute) {
+		t.Fatal("first telemetry frame should be logged")
+	}
+	if shouldLogAgentTelemetry(base.Add(59*time.Second), base, time.Minute) {
+		t.Fatal("telemetry log should be suppressed inside the interval")
+	}
+	if !shouldLogAgentTelemetry(base.Add(time.Minute), base, time.Minute) {
+		t.Fatal("telemetry log should resume at the interval boundary")
+	}
+	if shouldLogAgentTelemetry(base.Add(time.Hour), base, 0) {
+		t.Fatal("non-positive interval must disable logging")
+	}
+}
