@@ -1,8 +1,14 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestMihomoTelemetryStateSnapshotIsConsistent(t *testing.T) {
@@ -23,12 +29,57 @@ func TestMihomoTelemetryStateSnapshotIsConsistent(t *testing.T) {
 	}
 }
 
-func TestTelemetryIntervalsStayWithinInteractiveDefaults(t *testing.T) {
-	if defaultTelemetryPushInterval != 200*time.Millisecond {
-		t.Fatalf("push interval = %v, want 200ms", defaultTelemetryPushInterval)
-	}
+func TestTelemetryPollingIntervalStaysWithinInteractiveDefault(t *testing.T) {
 	if defaultConnectionsInterval != 500*time.Millisecond {
 		t.Fatalf("connections interval = %v, want 500ms", defaultConnectionsInterval)
+	}
+}
+
+func TestTelemetryPollerDoesNotWriteUnsolicitedWebSocketFrames(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	serverRead := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverRead <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(350 * time.Millisecond))
+		_, _, err = conn.ReadMessage()
+		serverRead <- err
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAgentTelemetryPublisher(ctx, conn)
+	}()
+
+	select {
+	case err := <-serverRead:
+		if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+			t.Fatalf("server received an unsolicited websocket frame or unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server websocket read did not finish")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("telemetry poller did not stop after context cancellation")
 	}
 }
 
