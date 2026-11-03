@@ -296,7 +296,9 @@ createApp({
         uploadTotal: Number.isFinite(Number(status.upload_total)) ? Math.max(0, Number(status.upload_total)) : Math.max(0, Number(previous.uploadTotal) || 0),
         telemetryStale: status.telemetry_stale === true,
         telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetrySampledAt) || 0,
-        telemetryUpdatedAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : Number(previous.telemetryUpdatedAt) || 0,
+        // last_seen is assigned by the server; do not use the remote Agent clock
+        // for freshness decisions because its wall clock may be skewed.
+        telemetryUpdatedAt: Number(lastSeen) > 0 ? Number(lastSeen) * 1000 : Number(previous.telemetryUpdatedAt) || 0,
         last_seen: lastSeen,
         updated_at: new Date(lastSeen * 1000).toISOString(),
         last_error: String(status.last_error || '')
