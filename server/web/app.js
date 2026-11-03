@@ -497,8 +497,7 @@ createApp({
               const previous = agentEntries.value[index];
               agentEntries.value.splice(index, 1, {
                 ...previous,
-                ...normalizeTelemetryFields(status, receivedAt),
-                updated_at: new Date(receivedAt).toLocaleString()
+                ...normalizeTelemetryFields(status, receivedAt)
               });
             } else {
               loadAgentsData();
