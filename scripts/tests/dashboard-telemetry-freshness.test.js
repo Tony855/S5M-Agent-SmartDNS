@@ -84,14 +84,14 @@ assert.equal(formatTimestamp('invalid'), '', 'invalid timestamps remain empty');
 
 const telemetryBranch = source.match(/else if \(message\.type === 'agent\.telemetry\.updated'[\s\S]*?(?=else if \(\(message\.type === 'agent\.command\.updated')/);
 assert.ok(telemetryBranch, 'live telemetry event handler must exist');
-assert.doesNotMatch(telemetryBranch[0], /online:\\s*true/, 'telemetry must never mark an Agent online');
-assert.doesNotMatch(telemetryBranch[0], /last_seen\\s*:/, 'telemetry must never advance heartbeat last_seen');
-assert.doesNotMatch(telemetryBranch[0], /updated_at\\s*:/, 'telemetry must never overwrite last heartbeat display time');
-assert.match(source, /updated_at: formatAgentTimestamp\\(last\\)/,
+assert.equal(telemetryBranch[0].includes('online: true'), false, 'telemetry must never mark an Agent online');
+assert.equal(telemetryBranch[0].includes('last_seen:'), false, 'telemetry must never advance heartbeat last_seen');
+assert.equal(telemetryBranch[0].includes('updated_at:'), false, 'telemetry must never overwrite last heartbeat display time');
+assert.equal(source.includes('updated_at: formatAgentTimestamp(last)'), true,
   'initial Agent list uses authenticated heartbeat time for last report');
-assert.match(source, /updated_at: formatAgentTimestamp\\(receivedAt\\)/,
+assert.equal(source.includes('updated_at: formatAgentTimestamp(receivedAt)'), true,
   'live heartbeat uses server heartbeat receive time');
-assert.doesNotMatch(source, /new Date\\(receivedAt\\)\\.toLocaleString\\(\\)/,
+assert.equal(source.includes('new Date(receivedAt).toLocaleString()'), false,
   'telemetry timestamps must not use a second display format');
 
 console.log('PASS dashboard telemetry freshness regression tests');
