@@ -241,3 +241,26 @@ func TestApplyMihomoTelemetrySnapshotKeepsCachedValuesAndFreshness(t *testing.T)
 		t.Fatalf("expired sample not marked stale: %#v", status["telemetry_stale"])
 	}
 }
+
+
+func TestMihomoTelemetryStatusIsSharedByHeartbeatAndPublisher(t *testing.T) {
+	now := time.Now()
+	sampledAt := now.Add(-250 * time.Millisecond)
+	snapshot := mihomoTelemetrySnapshot{
+		UploadSpeed: 11, DownloadSpeed: 22, Connections: 3,
+		UploadTotal: 44, DownloadTotal: 55,
+		TrafficError: "traffic warning", ConnectionsError: "connection warning",
+		SampledAt: sampledAt,
+	}
+	streamStatus := mihomoTelemetryStatus(snapshot, now)
+	heartbeatStatus := map[string]any{}
+	applyMihomoTelemetrySnapshot(heartbeatStatus, snapshot, now)
+	for key, want := range streamStatus {
+		if got := heartbeatStatus[key]; got != want {
+			t.Fatalf("heartbeat field %q = %#v, stream field = %#v", key, got, want)
+		}
+	}
+	if len(heartbeatStatus) != len(streamStatus) {
+		t.Fatalf("heartbeat schema has %d fields, stream schema has %d", len(heartbeatStatus), len(streamStatus))
+	}
+}

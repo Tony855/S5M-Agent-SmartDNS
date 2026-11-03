@@ -107,20 +107,28 @@ func mihomoTelemetryIsStale(sampledAt, now time.Time) bool {
 	return sampledAt.IsZero() || now.Sub(sampledAt) > 3*defaultConnectionsInterval
 }
 
-func applyMihomoTelemetrySnapshot(status map[string]any, snapshot mihomoTelemetrySnapshot, now time.Time) {
-	status["upload_speed"] = snapshot.UploadSpeed
-	status["download_speed"] = snapshot.DownloadSpeed
-	status["upload_total"] = snapshot.UploadTotal
-	status["download_total"] = snapshot.DownloadTotal
-	status["connections"] = snapshot.Connections
-	status["traffic_error"] = snapshot.TrafficError
-	status["connections_error"] = snapshot.ConnectionsError
+// mihomoTelemetryStatus is the single serializer for heartbeat and streaming
+// telemetry. Keeping both transports on the same field mapping prevents their
+// schemas from drifting as telemetry fields evolve.
+func mihomoTelemetryStatus(snapshot mihomoTelemetrySnapshot, now time.Time) map[string]any {
 	sampledAtMS := int64(0)
 	if !snapshot.SampledAt.IsZero() {
 		sampledAtMS = snapshot.SampledAt.UnixMilli()
 	}
-	status["telemetry_sampled_at_ms"] = sampledAtMS
-	status["telemetry_stale"] = mihomoTelemetryIsStale(snapshot.SampledAt, now)
+	return map[string]any{
+		"upload_speed": snapshot.UploadSpeed, "download_speed": snapshot.DownloadSpeed,
+		"upload_total": snapshot.UploadTotal, "download_total": snapshot.DownloadTotal,
+		"connections": snapshot.Connections, "traffic_error": snapshot.TrafficError,
+		"connections_error": snapshot.ConnectionsError,
+		"telemetry_sampled_at_ms": sampledAtMS,
+		"telemetry_stale": mihomoTelemetryIsStale(snapshot.SampledAt, now),
+	}
+}
+
+func applyMihomoTelemetrySnapshot(status map[string]any, snapshot mihomoTelemetrySnapshot, now time.Time) {
+	for key, value := range mihomoTelemetryStatus(snapshot, now) {
+		status[key] = value
+	}
 }
 
 func recordMihomoTelemetryError(state *mihomoTelemetryState, message string) {
@@ -253,25 +261,9 @@ func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
 			return
 		case now := <-ticker.C:
 			snapshot := agentMihomoTelemetry.snapshot()
-			sampledAtMS := int64(0)
-			if !snapshot.SampledAt.IsZero() {
-				sampledAtMS = snapshot.SampledAt.UnixMilli()
-			}
-			payload := map[string]any{
-				"type": "telemetry",
-				"status": map[string]any{
-					"upload_speed": snapshot.UploadSpeed,
-					"download_speed": snapshot.DownloadSpeed,
-					"connections": snapshot.Connections,
-					"upload_total": snapshot.UploadTotal,
-					"download_total": snapshot.DownloadTotal,
-					"traffic_error": snapshot.TrafficError,
-					"connections_error": snapshot.ConnectionsError,
-					"telemetry_at_ms": now.UnixMilli(),
-					"telemetry_sampled_at_ms": sampledAtMS,
-					"telemetry_stale": mihomoTelemetryIsStale(snapshot.SampledAt, now),
-				},
-			}
+			status := mihomoTelemetryStatus(snapshot, now)
+			status["telemetry_at_ms"] = now.UnixMilli()
+			payload := map[string]any{"type": "telemetry", "status": status}
 			if err := writeAgentWSJSON(conn, payload); err != nil {
 				return
 			}
