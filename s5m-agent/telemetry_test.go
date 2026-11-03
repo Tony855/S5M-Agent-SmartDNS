@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -138,6 +139,35 @@ func TestMihomoTelemetryStaleThreshold(t *testing.T) {
 	}
 	if !mihomoTelemetryIsStale(now.Add(-2*time.Second), now) {
 		t.Fatal("sample older than the stale threshold must be stale")
+	}
+}
+
+func TestMihomoAPISecretOrLoadRetriesAfterFailureAndCachesSuccess(t *testing.T) {
+	attempts := 0
+	load := func() (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "", fmt.Errorf("config not ready")
+		}
+		return "rotated-secret", nil
+	}
+
+	if _, err := mihomoAPISecretOrLoad("", load); err == nil {
+		t.Fatal("first secret load should fail while config is unavailable")
+	}
+	secret, err := mihomoAPISecretOrLoad("", load)
+	if err != nil {
+		t.Fatalf("second secret load should recover: %v", err)
+	}
+	if secret != "rotated-secret" {
+		t.Fatalf("loaded secret = %q, want rotated-secret", secret)
+	}
+	secret, err = mihomoAPISecretOrLoad(secret, load)
+	if err != nil {
+		t.Fatalf("cached secret should be reused: %v", err)
+	}
+	if secret != "rotated-secret" || attempts != 2 {
+		t.Fatalf("secret=%q attempts=%d, want cached secret and exactly 2 loads", secret, attempts)
 	}
 }
 
