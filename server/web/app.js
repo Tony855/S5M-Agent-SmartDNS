@@ -461,7 +461,7 @@ createApp({
                 lastError: String(status.last_error || ''),
                 runtimeMessage: status.mihomo_process_running === true && status.mihomo_api_healthy !== true && status.mihomo_healthy !== true
                   ? String(status.last_error || 'Mihomo 进程运行中，但 API 健康检查未通过')
-                  : (status.mihomo_healthy === true ? '' : String(status.last_error || 'Agent 已连接，但 Mihomo 健康检查未通过')),
+                  : ((status.mihomo_api_healthy === true || status.mihomo_healthy === true) ? '' : String(status.last_error || 'Agent 已连接，但 Mihomo API 健康检查未通过')),
                 updated_at: formatAgentTimestamp(receivedAt)
               };
               agentEntries.value.splice(index, 1, updated);
