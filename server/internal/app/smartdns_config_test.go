@@ -24,6 +24,9 @@ func TestBuildSmartDNSPerClientConfigUsesExactLoopbackListenerMappings(t *testin
 		"proxy-server socks5://127.0.0.1:16001 -name s5m-smartdns-16001",
 		"group-match -client-ip 192.168.20.0/24 -g s5m-smartdns-group-16001",
 		"No default upstream",
+		"cache-size 16384",
+		"prefetch-domain yes",
+		"serve-expired yes",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated config missing %q:\n%s", want, got)
