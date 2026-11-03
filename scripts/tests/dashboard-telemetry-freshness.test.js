@@ -76,7 +76,7 @@ assert.match(source, /getMachineProxyCount/);
 
 const timestampHelper = source.match(/const formatAgentTimestamp = \(unixSeconds\) => \{[\s\S]*?\n    \};/);
 assert.ok(timestampHelper, 'one canonical Agent timestamp formatter must exist');
-vm.runInNewContext(timestampHelper[0] + '\\nthis.formatAgentTimestamp = formatAgentTimestamp;', context);
+vm.runInNewContext(timestampHelper[0] + String.fromCharCode(10) + 'this.formatAgentTimestamp = formatAgentTimestamp;', context);
 const formatTimestamp = context.formatAgentTimestamp;
 assert.match(formatTimestamp(1793700000), /^[0-9]{4}[/][0-9]{2}[/][0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$/, 'report timestamps use one stable local format');
 assert.equal(formatTimestamp(0), '', 'missing timestamps remain empty');
