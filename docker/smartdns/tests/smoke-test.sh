@@ -56,7 +56,7 @@ echo "PASS: SmartDNS answered example.com over UDP (port $UDP_PORT) and TCP (por
 
 # AAAA records must remain available; this checks DNS data, not IPv6 route reachability.
 AAAA_RESULT="$(dig @127.0.0.1 -p "$UDP_PORT" cloudflare.com AAAA +time=3 +tries=1 +short)"
-printf '%s\\n' "$AAAA_RESULT" | grep -Eq '^[0-9a-fA-F:]+$' || {
+printf '%s\n' "$AAAA_RESULT" | grep -Eq '^[0-9a-fA-F:]+$' || {
   docker logs "$NAME" || true
   echo "AAAA DNS query failed or returned no IPv6 address" >&2
   exit 1
