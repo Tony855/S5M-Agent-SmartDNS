@@ -599,7 +599,11 @@ func (a *App) handleOverview(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			online := lastSeen > 0 && now-lastSeen >= 0 && now-lastSeen < 90
-			healthy, _ := status["mihomo_healthy"].(bool)
+			healthy, _ := status["mihomo_api_healthy"].(bool)
+			if _, exists := status["mihomo_api_healthy"]; !exists {
+				// Backward compatibility for Agents that only report the legacy alias.
+				healthy, _ = status["mihomo_healthy"].(bool)
+			}
 			apiOnline := healthy
 			updatedAt := ""
 			if lastSeen > 0 {
