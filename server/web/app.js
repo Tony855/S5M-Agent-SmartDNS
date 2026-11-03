@@ -45,6 +45,7 @@ createApp({
     const browserWSRequests = new Map();
     const telemetryLastRenderAt = new Map();
     let overviewTimer = null;
+    let overviewResyncRequested = false;
     const proxies = ref([]);
     const loadingProxies = ref(false);
 
@@ -439,11 +440,11 @@ createApp({
             const receivedAt = Number(message.received_at_ms) || Date.now();
             if (receivedAt - (telemetryLastRenderAt.get(code) || 0) < 450) return;
             telemetryLastRenderAt.set(code, receivedAt);
-            // Prevent an older overview snapshot from replacing this newer telemetry sample.
-            agentStatusRevision++;
             const remoteNodes = Array.isArray(overview.value.remote_nodes) ? overview.value.remote_nodes.slice() : [];
             const remoteIndex = remoteNodes.findIndex(node => String(node.machine_code || '') === code);
             if (remoteIndex >= 0) {
+              // Prevent an older overview snapshot from replacing this newer telemetry sample.
+              agentStatusRevision++;
               const previousNode = remoteNodes[remoteIndex];
               remoteNodes.splice(remoteIndex, 1, {
                 ...previousNode,
@@ -462,9 +463,11 @@ createApp({
                 updated_at: new Date(receivedAt).toLocaleString()
               });
               overview.value = { ...overview.value, remote_nodes: remoteNodes };
-            } else {
+            } else if (!overviewResyncRequested) {
               // A telemetry frame can race the first overview snapshot after reconnect.
-              loadOverview();
+              // Coalesce unknown-node resyncs instead of issuing a request every 450ms.
+              overviewResyncRequested = true;
+              loadOverview().finally(() => { overviewResyncRequested = false; });
             }
             const index = agentEntries.value.findIndex(item => item.code === code);
             if (index >= 0) {
