@@ -248,7 +248,7 @@ func closeTelemetrySessionOnWriteError(conn *websocket.Conn, writeErr error) {
 		return
 	}
 	diagnostic := safeMihomoValidationDiagnostic([]byte(writeErr.Error()))
-	fmt.Printf("Agent telemetry WebSocket 写入失败，关闭当前会话并触发重连: %s\\n", diagnostic)
+	fmt.Printf("Agent telemetry WebSocket 写入失败，关闭当前会话并触发重连: %s\n", diagnostic)
 	_ = conn.Close()
 }
 
