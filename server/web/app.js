@@ -21,6 +21,26 @@ createApp({
       return node && node.telemetryStale !== true && node.telemetry_stale !== true
         && receivedAt > 0 && now >= receivedAt && now - receivedAt <= TELEMETRY_FRESHNESS_MS;
     };
+    const normalizeTelemetryFields = (status, receivedAt) => {
+      const stale = status.telemetry_stale === true;
+      return {
+        connections: stale ? 0 : Math.max(0, Number(status.connections) || 0),
+        uploadSpeed: stale ? 0 : Math.max(0, Number(status.upload_speed) || 0),
+        downloadSpeed: stale ? 0 : Math.max(0, Number(status.download_speed) || 0),
+        uploadTotal: Math.max(0, Number(status.upload_total) || 0),
+        downloadTotal: Math.max(0, Number(status.download_total) || 0),
+        telemetryError: [status.traffic_error, status.connections_error].filter(Boolean).join('；'),
+        telemetryStale: stale,
+        telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
+        telemetryUpdatedAt: Number(receivedAt) || 0
+      };
+    };
+    const withRemoteNodeCounts = (current, nodes) => {
+      const online = nodes.filter(node => node.online === true).length;
+      const mihomoHealthy = nodes.filter(node => node.online === true && node.healthy === true).length;
+      return { ...current, remote_nodes: nodes, agent_online: online, remote_online: online,
+        mihomo_healthy: mihomoHealthy, remote_mihomo_healthy: mihomoHealthy };
+    };
     // Aggregate only remote Agent Mihomo telemetry; never mix in controller-local traffic.
     const traffic = computed(() => {
       const nodes = Array.isArray(overview.value.remote_nodes) ? overview.value.remote_nodes : [];
@@ -162,7 +182,7 @@ createApp({
       if (!item) return '未找到已授权的节点实例';
       return (item.online ? '在线' : '离线') + (item.hostname ? ' · ' + item.hostname : '');
     };
-    const proxyCountForMachine = (code) => {
+    const getMachineProxyCount = (code) => {
       const machineCode = String(code || '').trim();
       return proxies.value.filter(p => String(p.machine_code || '').trim() === machineCode).length;
     };
@@ -185,10 +205,6 @@ createApp({
     });
 
     const getUnboundCount = () => proxies.value.filter(p => !p.machine_code).length;
-    const getMachineCount = (code) => {
-      const machineCode = String(code || '').trim();
-      return proxies.value.filter(p => String(p.machine_code || '').trim() === machineCode).length;
-    };
     // =============================
 
     // Normalize upstream Mihomo version strings before the UI adds its display prefix.
@@ -308,9 +324,7 @@ createApp({
         updated_at: new Date(lastSeen * 1000).toISOString(),
         last_error: String(status.last_error || '')
       });
-      const online = nodes.filter(node => node.online === true).length;
-      const mihomoHealthy = nodes.filter(node => node.online === true && node.healthy === true).length;
-      overview.value = { ...current, remote_nodes: nodes, agent_online: online, remote_online: online, mihomo_healthy: mihomoHealthy, remote_mihomo_healthy: mihomoHealthy };
+      overview.value = withRemoteNodeCounts(current, nodes);
     };
 
     const startStaleStatusTimer = () => {
@@ -342,9 +356,7 @@ createApp({
             return node;
           });
           if (changed) {
-            const online = nodes.filter(node => node.online === true).length;
-            const mihomoHealthy = nodes.filter(node => node.online === true && node.healthy === true).length;
-            overview.value = { ...current, remote_nodes: nodes, agent_online: online, remote_online: online, mihomo_healthy: mihomoHealthy, remote_mihomo_healthy: mihomoHealthy };
+            overview.value = withRemoteNodeCounts(current, nodes);
           }
         }
       }, 5000);
@@ -464,14 +476,7 @@ createApp({
                 online: true,
                 healthy: previousNode.healthy === true || previousNode.mihomo_api_online === true,
                 mihomo_api_online: previousNode.mihomo_api_online === true || previousNode.healthy === true,
-                connections: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.connections) || 0),
-                uploadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.upload_speed) || 0),
-                downloadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.download_speed) || 0),
-                uploadTotal: Math.max(0, Number(status.upload_total) || 0),
-                downloadTotal: Math.max(0, Number(status.download_total) || 0),
-                telemetryStale: status.telemetry_stale === true,
-                telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
-                telemetryUpdatedAt: receivedAt,
+                ...normalizeTelemetryFields(status, receivedAt),
                 last_seen: Math.floor(receivedAt / 1000),
                 updated_at: new Date(receivedAt).toLocaleString()
               });
@@ -487,15 +492,7 @@ createApp({
               const previous = agentEntries.value[index];
               agentEntries.value.splice(index, 1, {
                 ...previous,
-                connections: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.connections) || 0),
-                uploadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.upload_speed) || 0),
-                downloadSpeed: status.telemetry_stale === true ? 0 : Math.max(0, Number(status.download_speed) || 0),
-                uploadTotal: Math.max(0, Number(status.upload_total) || 0),
-                downloadTotal: Math.max(0, Number(status.download_total) || 0),
-                telemetryError: [status.traffic_error, status.connections_error].filter(Boolean).join('；'),
-                telemetryStale: status.telemetry_stale === true,
-                telemetrySampledAt: Number(status.telemetry_sampled_at_ms) > 0 ? Number(status.telemetry_sampled_at_ms) : 0,
-                telemetryUpdatedAt: receivedAt,
+                ...normalizeTelemetryFields(status, receivedAt),
                 updated_at: new Date(receivedAt).toLocaleString()
               });
             } else {
@@ -1777,7 +1774,7 @@ createApp({
       page, token, loginUser, loginPass, loggingIn, currentUser,
       pwdDialog, pwdSaving, pwdForm, handleLoginEnter, handleUserMenu, resetPwdForm, changeAdminPassword,
       overview, traffic, realtimeStatus, connectBrowserEvents, proxies, loadingProxies, filteredProxies, availableMachineCodes, proxyGroupCodes, activeGroup,
-      getUnboundCount, getMachineCount, machineCodeOptionLabel, machineCodeStatus, proxyCountForMachine, nodeConfigState, openProxiesForMachine, openNodeConfigForMachine,
+      getUnboundCount, getMachineProxyCount, machineCodeOptionLabel, machineCodeStatus, nodeConfigState, openProxiesForMachine, openNodeConfigForMachine,
       newMachineCode, generatedToken, generating, agentEntries, agentLoading, agentRefreshing, agentSearch, agentStatusFilter, filteredAgentEntries,
       retryingNodeConfigSync, retryNodeConfigSync,
       configYaml, configTunEnabled, configDnsEnabled, configDnsNameservers, syncConfigQuickSettingsFromYaml, applyConfigQuickSettings,
