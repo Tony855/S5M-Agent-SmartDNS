@@ -65,6 +65,16 @@ func mihomoControllerSecret() (string, error) {
 	return mihomoAPISecretFromConfig(cfg)
 }
 
+func mihomoAPISecretOrLoad(current string, load func() (string, error)) (string, error) {
+	if strings.TrimSpace(current) != "" {
+		return current, nil
+	}
+	if load == nil {
+		return "", fmt.Errorf("Mihomo API secret loader is unavailable")
+	}
+	return load()
+}
+
 func mihomoAPISecretFromConfig(cfg map[string]any) (string, error) {
 	secret, _ := cfg["secret"].(string)
 	secret = strings.TrimSpace(secret)
@@ -134,10 +144,9 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState) {
 		// Read the secret lazily and retry on every polling cycle while it is
 		// unavailable. This recovers from startup races where Mihomo config is
 		// generated after the Agent WebSocket session has already connected.
-		if secret == "" {
-			var err error
-			secret, err = mihomoControllerSecret()
-			if err != nil {
+		var err error
+		secret, err = mihomoAPISecretOrLoad(secret, mihomoControllerSecret)
+		if err != nil {
 				previousAt = time.Time{}
 				recordMihomoTelemetryError(state, "读取 Mihomo API secret 失败: "+err.Error())
 				return
