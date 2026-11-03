@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	defaultConnectionsInterval   = 500 * time.Millisecond
+	defaultTelemetryPushInterval = 200 * time.Millisecond
+	defaultConnectionsInterval  = 500 * time.Millisecond
 )
 
 type mihomoTelemetrySnapshot struct {
@@ -37,7 +38,7 @@ type mihomoTelemetryState struct {
 }
 
 // Shared by the heartbeat snapshot and the high-frequency WebSocket publisher.
-// This avoids a second /connections poll on the control-plane heartbeat path.
+// The publisher sends snapshots through the controller's supported telemetry frame.
 var agentMihomoTelemetry = &mihomoTelemetryState{}
 
 func (s *mihomoTelemetryState) update(fn func(*mihomoTelemetrySnapshot)) {
@@ -238,11 +239,42 @@ func forgetAgentWSWriteLock(conn *websocket.Conn) {
 	agentWSWriteLocks.Delete(conn)
 }
 
-func runAgentTelemetryPublisher(ctx context.Context, _ *websocket.Conn) {
-	// Telemetry is sampled continuously and attached to the existing heartbeat
-	// status by collectMihomoStatus. Do not write an independent "telemetry"
-	// frame here: the Agent control loop waits synchronously for heartbeat/config
-	// responses on this socket, so unsolicited frames can desynchronize replies
-	// unless the controller explicitly implements a multiplexed reader.
-	pollMihomoConnections(ctx, agentMihomoTelemetry)
+func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
+	// The controller has a dedicated "telemetry" frame handler. It consumes
+	// these frames without replying on the socket and publishes browser events,
+	// so this stream does not interfere with synchronous heartbeat/config ACKs.
+	go pollMihomoConnections(ctx, agentMihomoTelemetry)
+
+	ticker := time.NewTicker(defaultTelemetryPushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			snapshot := agentMihomoTelemetry.snapshot()
+			sampledAtMS := int64(0)
+			if !snapshot.SampledAt.IsZero() {
+				sampledAtMS = snapshot.SampledAt.UnixMilli()
+			}
+			payload := map[string]any{
+				"type": "telemetry",
+				"status": map[string]any{
+					"upload_speed": snapshot.UploadSpeed,
+					"download_speed": snapshot.DownloadSpeed,
+					"connections": snapshot.Connections,
+					"upload_total": snapshot.UploadTotal,
+					"download_total": snapshot.DownloadTotal,
+					"traffic_error": snapshot.TrafficError,
+					"connections_error": snapshot.ConnectionsError,
+					"telemetry_at_ms": now.UnixMilli(),
+					"telemetry_sampled_at_ms": sampledAtMS,
+					"telemetry_stale": mihomoTelemetryIsStale(snapshot.SampledAt, now),
+				},
+			}
+			if err := writeAgentWSJSON(conn, payload); err != nil {
+				return
+			}
+		}
+	}
 }
