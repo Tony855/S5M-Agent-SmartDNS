@@ -849,7 +849,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			if shouldLogAgentTelemetry(receivedAt, a.agentTelemetryLogAt[machineCode], time.Minute) {
 				a.agentTelemetryLogAt[machineCode] = receivedAt
-				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%.0f download_speed=%.0f upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\\n",
+				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%v download_speed=%v upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\n",
 					machineCode, telemetry["upload_speed"], telemetry["download_speed"], telemetry["upload_total"], telemetry["download_total"], telemetry["connections"], telemetry["telemetry_stale"], telemetry["traffic_error"], telemetry["connections_error"])
 			}
 			if receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second {
