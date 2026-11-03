@@ -1,8 +1,16 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestMihomoTelemetryStateSnapshotIsConsistent(t *testing.T) {
@@ -23,12 +31,57 @@ func TestMihomoTelemetryStateSnapshotIsConsistent(t *testing.T) {
 	}
 }
 
-func TestTelemetryIntervalsStayWithinInteractiveDefaults(t *testing.T) {
-	if defaultTelemetryPushInterval != 200*time.Millisecond {
-		t.Fatalf("push interval = %v, want 200ms", defaultTelemetryPushInterval)
-	}
+func TestTelemetryPollingIntervalStaysWithinInteractiveDefault(t *testing.T) {
 	if defaultConnectionsInterval != 500*time.Millisecond {
 		t.Fatalf("connections interval = %v, want 500ms", defaultConnectionsInterval)
+	}
+}
+
+func TestTelemetryPollerDoesNotWriteUnsolicitedWebSocketFrames(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	serverRead := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverRead <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(350 * time.Millisecond))
+		_, _, err = conn.ReadMessage()
+		serverRead <- err
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAgentTelemetryPublisher(ctx, conn)
+	}()
+
+	select {
+	case err := <-serverRead:
+		if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+			t.Fatalf("server received an unsolicited websocket frame or unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server websocket read did not finish")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("telemetry poller did not stop after context cancellation")
 	}
 }
 
@@ -86,6 +139,35 @@ func TestMihomoTelemetryStaleThreshold(t *testing.T) {
 	}
 	if !mihomoTelemetryIsStale(now.Add(-2*time.Second), now) {
 		t.Fatal("sample older than the stale threshold must be stale")
+	}
+}
+
+func TestMihomoAPISecretOrLoadRetriesAfterFailureAndCachesSuccess(t *testing.T) {
+	attempts := 0
+	load := func() (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "", fmt.Errorf("config not ready")
+		}
+		return "rotated-secret", nil
+	}
+
+	if _, err := mihomoAPISecretOrLoad("", load); err == nil {
+		t.Fatal("first secret load should fail while config is unavailable")
+	}
+	secret, err := mihomoAPISecretOrLoad("", load)
+	if err != nil {
+		t.Fatalf("second secret load should recover: %v", err)
+	}
+	if secret != "rotated-secret" {
+		t.Fatalf("loaded secret = %q, want rotated-secret", secret)
+	}
+	secret, err = mihomoAPISecretOrLoad(secret, load)
+	if err != nil {
+		t.Fatalf("cached secret should be reused: %v", err)
+	}
+	if secret != "rotated-secret" || attempts != 2 {
+		t.Fatalf("secret=%q attempts=%d, want cached secret and exactly 2 loads", secret, attempts)
 	}
 }
 

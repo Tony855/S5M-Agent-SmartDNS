@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	defaultTelemetryPushInterval = 200 * time.Millisecond
 	defaultConnectionsInterval   = 500 * time.Millisecond
 )
 
@@ -29,7 +28,7 @@ type mihomoTelemetrySnapshot struct {
 	TrafficError     string    `json:"traffic_error"`
 	ConnectionsError string    `json:"connections_error"`
 	UpdatedAt        time.Time `json:"-"`
-	SampledAt         time.Time `json:"-"`
+	SampledAt        time.Time `json:"-"`
 }
 
 type mihomoTelemetryState struct {
@@ -64,6 +63,16 @@ func mihomoControllerSecret() (string, error) {
 		return "", fmt.Errorf("解析 Mihomo 配置失败: %w", err)
 	}
 	return mihomoAPISecretFromConfig(cfg)
+}
+
+func mihomoAPISecretOrLoad(current string, load func() (string, error)) (string, error) {
+	if strings.TrimSpace(current) != "" {
+		return current, nil
+	}
+	if load == nil {
+		return "", fmt.Errorf("Mihomo API secret loader is unavailable")
+	}
+	return load()
 }
 
 func mihomoAPISecretFromConfig(cfg map[string]any) (string, error) {
@@ -123,14 +132,26 @@ func recordMihomoTelemetryError(state *mihomoTelemetryState, message string) {
 	})
 }
 
-func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, secret string) {
+func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState) {
 	ticker := time.NewTicker(defaultConnectionsInterval)
 	defer ticker.Stop()
 	client := &http.Client{Timeout: 2 * time.Second}
+	var secret string
 	var previousAt time.Time
 	var previousUpload, previousDownload uint64
 
 	poll := func() {
+		// Read the secret lazily and retry on every polling cycle while it is
+		// unavailable. This recovers from startup races where Mihomo config is
+		// generated after the Agent WebSocket session has already connected.
+		var err error
+		secret, err = mihomoAPISecretOrLoad(secret, mihomoControllerSecret)
+		if err != nil {
+			previousAt = time.Time{}
+			recordMihomoTelemetryError(state, "读取 Mihomo API secret 失败: "+err.Error())
+			return
+		}
+
 		req, err := newMihomoAPIRequest(ctx, "/connections", secret)
 		if err != nil {
 			previousAt = time.Time{}
@@ -146,6 +167,14 @@ func pollMihomoConnections(ctx context.Context, state *mihomoTelemetryState, sec
 			return
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			// The Mihomo secret may have changed during a config reload. Drop
+			// the cached value so the next poll rereads the current config.
+			secret = ""
+			previousAt = time.Time{}
+			recordMihomoTelemetryError(state, fmt.Sprintf("Mihomo /connections 鉴权失败 HTTP %d，等待重新读取 API secret", resp.StatusCode))
+			return
+		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			previousAt = time.Time{}
 			recordMihomoTelemetryError(state, fmt.Sprintf("Mihomo /connections 返回 HTTP %d", resp.StatusCode))
@@ -209,48 +238,11 @@ func forgetAgentWSWriteLock(conn *websocket.Conn) {
 	agentWSWriteLocks.Delete(conn)
 }
 
-func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
-	secret, err := mihomoControllerSecret()
-	state := agentMihomoTelemetry
-	if err != nil {
-		diagnostic := safeMihomoValidationDiagnostic([]byte(err.Error()))
-		state.update(func(v *mihomoTelemetrySnapshot) {
-			v.TrafficError = diagnostic
-			v.ConnectionsError = diagnostic
-		})
-	} else {
-		go pollMihomoConnections(ctx, state, secret)
-	}
-	ticker := time.NewTicker(defaultTelemetryPushInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-ticker.C:
-			snapshot := state.snapshot()
-			sampledAtMS := int64(0)
-			if !snapshot.SampledAt.IsZero() {
-				sampledAtMS = snapshot.SampledAt.UnixMilli()
-			}
-			payload := map[string]any{
-				"type": "telemetry",
-				"status": map[string]any{
-					"upload_speed":      snapshot.UploadSpeed,
-					"download_speed":    snapshot.DownloadSpeed,
-					"connections":       snapshot.Connections,
-					"upload_total":      snapshot.UploadTotal,
-					"download_total":    snapshot.DownloadTotal,
-					"traffic_error":     snapshot.TrafficError,
-					"connections_error": snapshot.ConnectionsError,
-					"telemetry_at_ms":        now.UnixMilli(),
-					"telemetry_sampled_at_ms": sampledAtMS,
-					"telemetry_stale":         mihomoTelemetryIsStale(snapshot.SampledAt, now),
-				},
-			}
-			if err := writeAgentWSJSON(conn, payload); err != nil {
-				return
-			}
-		}
-	}
+func runAgentTelemetryPublisher(ctx context.Context, _ *websocket.Conn) {
+	// Telemetry is sampled continuously and attached to the existing heartbeat
+	// status by collectMihomoStatus. Do not write an independent "telemetry"
+	// frame here: the Agent control loop waits synchronously for heartbeat/config
+	// responses on this socket, so unsolicited frames can desynchronize replies
+	// unless the controller explicitly implements a multiplexed reader.
+	pollMihomoConnections(ctx, agentMihomoTelemetry)
 }
