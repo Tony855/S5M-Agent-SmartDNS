@@ -462,6 +462,9 @@ createApp({
                 updated_at: new Date(receivedAt).toLocaleString()
               });
               overview.value = { ...overview.value, remote_nodes: remoteNodes };
+            } else {
+              // A telemetry frame can race the first overview snapshot after reconnect.
+              loadOverview();
             }
             const index = agentEntries.value.findIndex(item => item.code === code);
             if (index >= 0) {
