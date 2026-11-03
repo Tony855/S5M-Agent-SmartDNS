@@ -104,9 +104,14 @@
       } else if (data.connected) {
         btn.innerText = '重新绑定';
         setStatus('active', '✅节点设备已绑定成功，连接正常');
+        const msg = document.getElementById('msg');
+        if (msg) msg.style.display = 'none';
+      } else if (data.connection_error) {
+        btn.innerText = '重新绑定';
+        setStatus('error', '主控端暂时无法连接，Agent 将自动重试；请检查网络和主控服务');
       } else {
         btn.innerText = '重新绑定';
-        setStatus('', '已保存绑定信息，正在连接主控端…');
+        setStatus('', '已保存绑定信息，正在建立主控连接…');
       }
       updateBindButton();
     } catch (_) {
@@ -137,7 +142,8 @@
       const text = await res.text(); let data = {};
       try { data = JSON.parse(text); } catch { data = { message: text }; }
       if (!res.ok) throw new Error(data.error || data.message || '绑定失败');
-      showMsg('绑定请求已提交，正在连接服务器。', true);
+      const msg = document.getElementById('msg');
+      if (msg) msg.style.display = 'none';
       document.getElementById('secret').value = '';
       // Registration only persists credentials; the WebSocket connects asynchronously.
       // Re-enable the button so a failed/expired connection can be retried without reload.
