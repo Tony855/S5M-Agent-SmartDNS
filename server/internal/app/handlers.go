@@ -619,7 +619,7 @@ func (a *App) handleOverview(w http.ResponseWriter, r *http.Request) {
 				"uploadTotal":       status["upload_total"],
 				"telemetryStale":    status["telemetry_stale"],
 				"telemetrySampledAt": status["telemetry_sampled_at_ms"],
-				"telemetryUpdatedAt": status["telemetry_sampled_at_ms"],
+				"telemetryUpdatedAt": status["telemetry_received_at_ms"],
 				"last_seen":         lastSeen,
 				"updated_at":        updatedAt,
 				"last_error":        status["last_error"],
