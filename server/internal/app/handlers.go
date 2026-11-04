@@ -2499,7 +2499,7 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		ServerTime          int64             `json:"server_time"`
 		Status              map[string]any    `json:"status,omitempty"`
 		CommandResult       map[string]any    `json:"command_result,omitempty"`
-		PendingCommand      map[string]string `json:"pending_command,omitempty"`
+		PendingCommand      map[string]any    `json:"pending_command,omitempty"`
 		DesiredConfigSHA256 string            `json:"desired_config_sha256,omitempty"`
 		SmartDNSEnabled      *bool             `json:"smartdns_enabled,omitempty"`
 	}
