@@ -611,3 +611,30 @@ func TestApplySmartDNSSharedSelectExposesManualEgressChoice(t *testing.T) {
 	if _, exists := group["url"]; exists { t.Fatalf("manual select group must not have health-test fields: %#v", group) }
 	if doc["rules"].([]any)[0] != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { t.Fatalf("SmartDNS must use the manual selection group: %#v", doc["rules"]) }
 }
+
+
+func TestApplySmartDNSSharedSelectUsesExistingManualProxyGroup(t *testing.T) {
+	input := `proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [node-a, node-b]
+rules:
+  - PROCESS-NAME,smartdns,node-a
+  - MATCH,REJECT
+`
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect, GroupName: "PROXY", ProxyNames: []string{"node-a", "node-b"}}
+	got, err := applySmartDNSSharedFallback(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	groups := doc["proxy-groups"].([]any)
+	if len(groups) != 1 || groups[0].(map[string]any)["name"] != "PROXY" { t.Fatalf("manual selection must reuse PROXY without creating a second group: %#v", groups) }
+	rules := doc["rules"].([]any)
+	if rules[0] != "PROCESS-NAME,smartdns,PROXY" { t.Fatalf("SmartDNS must follow the selected PROXY egress: %#v", rules) }
+}
+
+func TestApplySmartDNSSharedSelectRejectsMissingManualProxyGroup(t *testing.T) {
+	input := "proxy-groups: []\\nrules:\\n  - MATCH,REJECT\\n"
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect, GroupName: "PROXY", ProxyNames: []string{"node-a"}}
+	if _, err := applySmartDNSSharedFallback(input, plan); err == nil { t.Fatal("manual selection must fail if the managed PROXY group is absent") }
+}
