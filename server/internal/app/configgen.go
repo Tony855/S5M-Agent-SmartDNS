@@ -761,11 +761,12 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Shared SmartDNS fallback is the default for Agent machines. An explicitly
-	// stored empty value remains the opt-out switch for legacy routing; controller
-	// config (machineCode == "") is never changed by this Agent-only policy.
+	// SmartDNS proxy routing is opt-in. A missing or explicitly empty setting
+	// preserves the node's historical DNS/process routing exactly; this is
+	// essential for upgrades because existing nodes may not have SmartDNS.
+	// Controller config (machineCode == "") is never changed by this Agent-only policy.
 	rawRouting, routingSettingExists := settings["smartdns_routing_config"]
-	applySharedFallback := strings.TrimSpace(machineCode) != "" && !routingSettingExists
+	applySharedFallback := false
 	var routing SmartDNSRoutingConfig
 	if routingSettingExists && strings.TrimSpace(rawRouting) != "" {
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
