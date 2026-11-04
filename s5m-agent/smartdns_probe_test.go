@@ -1417,7 +1417,7 @@ dualstack-ip-allow-force-AAAA yes
 		restart: func() error { restarts++; return nil },
 		waitHealthy: func(time.Duration) bool { return false },
 	})
-	if status["smartdns_available"] != true || status["smartdns_control_supported"] != true || status["smartdns_enabled"] != false {
+	if status["smartdns_available"] != true || status["smartdns_control_supported"] != true || status["smartdns_domestic_listener"] != true || status["smartdns_enabled"] != false {
 		t.Fatalf("unexpected disabled capability state: %#v", status)
 	}
 	if status["smartdns_running"] != true || status["smartdns_dns_healthy"] != false {
