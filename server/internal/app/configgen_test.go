@@ -1104,7 +1104,7 @@ func TestBuildConfigIncludesTUNDNSDefaults(t *testing.T) {
 		"proxy-server-nameserver:",
 		"fallback:",
 		"dns-hijack:",
-		"ipv6: false",
+		"ipv6: true",
 		"https://dns.cloudflare.com/dns-query",
 		"https://dns.google/dns-query",
 		"fallback-filter:",
