@@ -829,6 +829,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_available", true)
 		assert(t, status, "smartdns_running", true)
 		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_domestic_listener", false)
 		assert(t, status, "smartdns_version", "SmartDNS 1.2026")
 		assert(t, status, "smartdns_config_sha256", hex.EncodeToString(configHash[:]))
 		assert(t, status, "smartdns_last_error", "")
