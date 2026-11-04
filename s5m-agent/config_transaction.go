@@ -277,6 +277,9 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 		if err := validateSmartDNSConfig(smartDNSConfig); err != nil {
 			return fmt.Errorf("启用 SmartDNS 的配置未通过安全校验: %w", err)
 		}
+		if !smartDNSConfigHasDomesticListener(smartDNSConfig) {
+			return fmt.Errorf("当前 Mihomo DNS 配置需要 127.0.0.1:6054 国内解析，但 SmartDNS 配置没有完整的 UDP/TCP china-dot 监听")
+		}
 		if !wasEnabled {
 			if err := persistSmartDNSDisabled(false); err != nil { return err }
 			if err := smartDNSServiceStart(); err != nil {
