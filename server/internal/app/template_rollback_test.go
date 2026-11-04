@@ -3,7 +3,8 @@ package app
 import (
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"\n\t"strings"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
