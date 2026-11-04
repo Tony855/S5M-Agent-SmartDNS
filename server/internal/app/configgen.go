@@ -731,31 +731,58 @@ func routeAgentDNSViaSmartDNS(yml string) (string, error) {
 	root := doc.Content[0]
 	var dns *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "dns" {
-			dns = root.Content[i+1]
-			break
-		}
+		if root.Content[i].Value == "dns" { dns = root.Content[i+1]; break }
 	}
 	if dns == nil || dns.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("Agent DNS 配置缺少 dns 对象")
 	}
+	setScalar := func(mapping *yaml.Node, key, value string) error {
+		if mapping == nil || mapping.Kind != yaml.MappingNode { return fmt.Errorf("%s 必须是 YAML 对象", key) }
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			if mapping.Content[i].Value == key {
+				mapping.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+				return nil
+			}
+		}
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+		)
+		return nil
+	}
+	var nameserver *yaml.Node
 	for i := 0; i+1 < len(dns.Content); i += 2 {
-		if dns.Content[i].Value == "nameserver" {
-			dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
-			}}
-			out, err := yaml.Marshal(&doc)
-			return string(out), err
+		if dns.Content[i].Value == "nameserver" { nameserver = dns.Content[i+1]; break }
+	}
+	localNameserver := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+	}}
+	if nameserver == nil {
+		dns.Content = append(dns.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"}, localNameserver)
+	} else if nameserver.Kind != yaml.SequenceNode {
+		return "", fmt.Errorf("dns.nameserver 必须是 YAML 列表")
+	} else {
+		for i := range dns.Content {
+			if dns.Content[i].Value == "nameserver" { dns.Content[i+1] = localNameserver; break }
 		}
 	}
-	dns.Content = append(dns.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"},
-		&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
-		}},
-	)
+	var policy *yaml.Node
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		if dns.Content[i].Value == "nameserver-policy" { policy = dns.Content[i+1]; break }
+	}
+	if policy == nil {
+		policy = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		dns.Content = append(dns.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver-policy"}, policy)
+	}
+	if policy.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("dns.nameserver-policy 必须是 YAML 对象")
+	}
+	if err := setScalar(policy, "geosite:cn", "127.0.0.1:6054"); err != nil { return "", err }
 	out, err := yaml.Marshal(&doc)
-	return string(out), err
+	if err != nil { return "", fmt.Errorf("序列化 Agent SmartDNS DNS 配置失败: %w", err) }
+	return string(out), nil
 }
 
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
