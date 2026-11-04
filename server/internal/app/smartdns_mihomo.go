@@ -15,8 +15,8 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 	if plan.Mode != SmartDNSProxyModeShared {
 		return document, nil
 	}
-	if plan.Strategy != "" && plan.Strategy != SmartDNSDefaultStrategy {
-		return "", fmt.Errorf("SmartDNS shared fallback 策略无效")
+	if plan.Strategy != "" && plan.Strategy != SmartDNSStrategyFallback && plan.Strategy != SmartDNSStrategyURLTest && plan.Strategy != SmartDNSStrategySelect {
+		return "", fmt.Errorf("SmartDNS shared proxy 策略无效: %q", plan.Strategy)
 	}
 	var root map[string]any
 	if err := yaml.Unmarshal([]byte(document), &root); err != nil {
@@ -41,16 +41,25 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 			}
 			proxies = append(proxies, name)
 		}
-		groups = append(groups, map[string]any{
+		group := map[string]any{
 			"name": SmartDNSGroupName,
-			"type": "fallback",
+			"type": plan.Strategy,
 			"proxies": proxies,
-			"url": "https://www.gstatic.com/generate_204",
-			"interval": 30,
-			"timeout": 5000,
-			"lazy": false,
-			"expected-status": 204,
-		})
+		}
+		// url-test continuously probes every eligible proxy and automatically
+		// selects the lowest-latency healthy egress. fallback preserves ordered
+		// failover, while select exposes a persistent operator-controlled choice.
+		if plan.Strategy == SmartDNSStrategyURLTest || plan.Strategy == SmartDNSStrategyFallback {
+			group["url"] = "https://www.gstatic.com/generate_204"
+			group["interval"] = 30
+			group["timeout"] = 5000
+			group["lazy"] = false
+			group["expected-status"] = 204
+		}
+		if plan.Strategy == SmartDNSStrategyURLTest {
+			group["tolerance"] = 50
+		}
+		groups = append(groups, group)
 		root["proxy-groups"] = groups
 	}
 
