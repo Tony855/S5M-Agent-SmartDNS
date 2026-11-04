@@ -264,6 +264,9 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 	if len(mihomoYAML) == 0 {
 		return fmt.Errorf("缺少主控下发的 Mihomo 配置，拒绝切换 SmartDNS")
 	}
+	if err := validateAgentSmartDNSDNSMode(mihomoYAML, enabled); err != nil {
+		return fmt.Errorf("Mihomo DNS 配置与 SmartDNS 目标状态不一致: %w", err)
+	}
 	wasEnabled := smartDNSRuntimeEnabled()
 	if enabled {
 		if len(smartDNSConfig) == 0 {
