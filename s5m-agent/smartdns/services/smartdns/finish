@@ -1,0 +1,6 @@
+#!/command/with-contenv sh
+# Exit 125 tells s6-supervise not to restart a deliberately disabled service.
+if [ -f /data/smartdns.disabled ]; then
+  exit 125
+fi
+exit 0
