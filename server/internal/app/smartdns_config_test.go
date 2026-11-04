@@ -19,7 +19,7 @@ func TestBuildSmartDNSPerClientConfigUsesExactLoopbackListenerMappings(t *testin
 		"bind-tcp 127.0.0.1:6053",
 		"bind [::1]:6053",
 		"bind-tcp [::1]:6053",
-		"dualstack-ip-selection yes",
+		"dualstack-ip-selection no",
 		"dualstack-ip-selection-threshold 10",
 		"dualstack-ip-allow-force-AAAA yes",
 		"proxy-server socks5://127.0.0.1:16000 -name s5m-smartdns-16000",
