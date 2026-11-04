@@ -1360,7 +1360,7 @@ func TestParseShadowsocksSIP003Plugins(t *testing.T) {
 	// The whole method:password@authority form may itself be base64 encoded;
 	// its plugin query must remain outside and survive decoding.
 	encoded := base64.RawURLEncoding.EncodeToString([]byte("chacha20-ietf-poly1305:secret@ss.example.net:443"))
-	v2rayURI := "ss://" + encoded + "?plugin=v2ray-plugin%3Btls%3Bhost%3Dcdn.example.net%3Bpath%3D%252Fws%3Bmux%3Dtrue#v2ray"
+	v2rayURI := "ss://" + encoded + "?plugin=v2ray-plugin%3Btls%3Bhost%3Dcdn.example.net%3Bpath%3D%2Fws%3Bmux%3Dtrue#v2ray"
 	v2ray, err := parseProxyLine(v2rayURI)
 	if err != nil { t.Fatalf("parse v2ray-plugin SIP002 URI: %v", err) }
 	if v2ray.Server != "ss.example.net" || v2ray.Port != 443 || v2ray.Extra["plugin"] != "v2ray-plugin" {
