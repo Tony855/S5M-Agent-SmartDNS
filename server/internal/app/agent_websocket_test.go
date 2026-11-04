@@ -1873,6 +1873,7 @@ func TestQueueAgentSmartDNSRejectsUnsupportedAndRequiresSavedConfig(t *testing.T
 		t.Fatalf("ordinary Agent image should be rejected, got %v", err)
 	}
 	status["smartdns_available"] = true
+	status["smartdns_control_supported"] = true
 	raw, _ = json.Marshal(status)
 	if err := app.store.UpdateSettings(map[string]string{"agent_status_"+code: string(raw)}); err != nil { t.Fatal(err) }
 	if err := app.queueAgentSmartDNSEnabled(code, true); err == nil || !strings.Contains(err.Error(), "尚无已保存的 SmartDNS 配置") {
@@ -1883,7 +1884,7 @@ func TestQueueAgentSmartDNSRejectsUnsupportedAndRequiresSavedConfig(t *testing.T
 func TestQueueAgentSmartDNSDisableIncludesFallbackMihomoConfig(t *testing.T) {
 	app, code, _ := websocketTestApp(t)
 	now := time.Now().Unix()
-	status := map[string]any{"received_at": now, "smartdns_available": true}
+	status := map[string]any{"received_at": now, "smartdns_available": true, "smartdns_control_supported": true}
 	raw, _ := json.Marshal(status)
 	if err := app.store.UpdateSettings(map[string]string{
 		"agent_lastseen_"+code: strconv.FormatInt(now, 10),
