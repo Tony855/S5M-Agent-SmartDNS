@@ -1354,7 +1354,10 @@ func parseProxyLine(line string) (*Proxy, error) {
 	}
 	p := &Proxy{Mode: "rule", SourceCIDR: "0.0.0.0/0", Enabled: true, Extra: map[string]any{}}
 	if idx := strings.LastIndex(line, "#"); idx != -1 {
-		name, _ := url.QueryUnescape(line[idx+1:])
+		name, err := url.PathUnescape(line[idx+1:])
+		if err != nil {
+			return nil, fmt.Errorf("代理名称片段编码无效")
+		}
 		p.Name = strings.TrimSpace(name)
 		line = line[:idx]
 	}
@@ -1634,7 +1637,7 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 		if protocol == "" {
 			for _, server := range input.Servers {
 				if strings.TrimSpace(server.ID) != "" || strings.TrimSpace(server.UUID) != "" {
-					if strings.TrimSpace(server.Network) != "" || server.AlterID >= 0 {
+					if strings.TrimSpace(server.Network) != "" || server.AlterID > 0 {
 						protocol = "vmess"
 						break
 					}

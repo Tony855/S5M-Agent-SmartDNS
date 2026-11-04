@@ -265,6 +265,36 @@ func TestParseProxyLineAcceptsValidPort(t *testing.T) {
 	}
 }
 
+func TestParseProxyLinePreservesURIFragmentPlusAndEscapes(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{name: "literal plus", line: "socks5://user:pass@example.com:1080#HK+01", want: "HK+01"},
+		{name: "escaped plus", line: "socks5://user:pass@example.com:1080#HK%2B01", want: "HK+01"},
+		{name: "escaped space", line: "socks5://user:pass@example.com:1080#Hong%20Kong", want: "Hong Kong"},
+		{name: "unicode", line: "socks5://user:pass@example.com:1080#%E9%A6%99%E6%B8%AF", want: "香港"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxy, err := parseProxyLine(tt.line)
+			if err != nil {
+				t.Fatalf("parseProxyLine() error = %v", err)
+			}
+			if proxy.Name != tt.want {
+				t.Fatalf("name = %q, want %q", proxy.Name, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseProxyLineRejectsMalformedFragmentEscape(t *testing.T) {
+	if _, err := parseProxyLine("socks5://user:pass@example.com:1080#node%2"); err == nil {
+		t.Fatal("parseProxyLine() should reject malformed fragment percent escape")
+	}
+}
+
 func TestValidateProxyRejectsUnsupportedProtocol(t *testing.T) {
 	for _, protocol := range []string{"", "unknown", "socks", "vmess+ws"} {
 		proxy := Proxy{Name: "proxy-a", Mode: "proxy", Type: protocol, Server: "example.com", Port: 1080}
@@ -627,6 +657,17 @@ func TestParseProxyImportContentPreservesVLESSRealityOptions(t *testing.T) {
 	}
 	if p.Extra["client-fingerprint"] != "chrome" {
 		t.Fatalf("client fingerprint lost: %#v", p.Extra)
+	}
+}
+
+func TestParseProxyImportContentDoesNotInferVMessFromMissingAlterID(t *testing.T) {
+	content := `{"servers":[{"address":"proxy.example.test","port":443,"id":"ambiguous-id"}]}`
+	proxies, failures := parseProxyImportContent(content)
+	if len(proxies) != 0 {
+		t.Fatalf("ambiguous JSON was incorrectly imported as VMess: %#v", proxies)
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "无法根据节点字段识别代理协议") {
+		t.Fatalf("failures = %#v, want protocol inference error", failures)
 	}
 }
 
