@@ -1389,15 +1389,15 @@ func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 	app := &App{store: store}
 	now := time.Now().Unix()
 	healthy := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now,
 	}
 	stale := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now - int64(agentWSHeartbeatTTL.Seconds()) - 1,
 	}
 	future := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now + 120,
 	}
 	cases := []struct{name string; status map[string]any; want bool}{
