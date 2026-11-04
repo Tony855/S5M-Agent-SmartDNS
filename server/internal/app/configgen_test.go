@@ -1406,6 +1406,7 @@ func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true, "received_at": now}, false},
 		{"healthy and fresh", healthy, true},
 		{"legacy healthy without domestic telemetry", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true, "received_at": now}, true},
+		{"primary-only healthy with domestic disabled", map[string]any{"smartdns_available": true, "smartdns_domestic_listener": false, "smartdns_running": true, "smartdns_dns_healthy": true, "received_at": now}, true},
 		{"healthy but stale", stale, false},
 		{"future timestamp", future, false},
 		{"missing heartbeat timestamp", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, false},
