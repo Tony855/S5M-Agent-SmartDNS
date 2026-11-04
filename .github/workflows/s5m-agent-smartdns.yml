@@ -378,7 +378,7 @@ jobs:
             SMARTDNS_AAAA_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS TCP AAAA answer: %s\n" "$SMARTDNS_AAAA_TCP"
             printf "%s\n" "$SMARTDNS_AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP did not return an AAAA answer" >&2; exit 1; }
-            # Match the healthcheck's domestic-policy listener coverage on ARM64.
+            # Match the healthcheck domestic-policy listener coverage on ARM64.
             for rrtype in A AAAA; do
               domestic_domain=www.baidu.com
               if [ "$rrtype" = AAAA ]; then domestic_domain=www.qq.com; fi
