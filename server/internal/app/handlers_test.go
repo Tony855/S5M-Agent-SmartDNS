@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -1737,5 +1738,29 @@ func TestValidateProxyRejectsWhitespaceInServer(t *testing.T) {
 		if msg := (&App{}).validateProxy(&proxy); msg == "" {
 			t.Errorf("validateProxy(server=%q) unexpectedly succeeded", server)
 		}
+	}
+}
+
+func TestHandleUpdateSettingsAcceptsSmartDNSUpstreamStrategies(t *testing.T) {
+	for _, strategy := range []string{"url-test", "select", "fallback"} {
+		t.Run(strategy, func(t *testing.T) {
+			store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-strategy-"+strategy+".db"))
+			if err != nil { t.Fatal(err) }
+			defer store.db.Close()
+			app := &App{store: store}
+			inner, _ := json.Marshal(SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: strategy})
+			bodyBytes, _ := json.Marshal(map[string]string{"smartdns_routing_config": string(inner)})
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(bodyBytes))
+			rec := httptest.NewRecorder()
+			app.handleUpdateSettings(rec, req)
+			if rec.Code != http.StatusOK { t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String()) }
+			settings, err := store.GetSettings()
+			if err != nil { t.Fatal(err) }
+			var got SmartDNSRoutingConfig
+			if err := json.Unmarshal([]byte(settings["smartdns_routing_config"]), &got); err != nil { t.Fatal(err) }
+			if got.Mode != SmartDNSProxyModeShared || got.Strategy != strategy {
+				t.Fatalf("stored SmartDNS routing config = %#v, want strategy %s", got, strategy)
+			}
+		})
 	}
 }
