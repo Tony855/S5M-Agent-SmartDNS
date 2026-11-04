@@ -6,7 +6,7 @@ import (
 )
 
 func TestValidateSmartDNSConfigRejectsUnimplementedPerClientDirectives(t *testing.T) {
-	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	tests := []struct {
 		name string
 		line string
@@ -28,14 +28,14 @@ func TestValidateSmartDNSConfigRejectsUnimplementedPerClientDirectives(t *testin
 }
 
 func TestValidateSmartDNSConfigAcceptsExistingEncryptedSharedMode(t *testing.T) {
-	config := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	config := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	if err := validateSmartDNSConfig([]byte(config)); err != nil {
 		t.Fatalf("existing encrypted shared-mode config rejected: %v", err)
 	}
 }
 
 func TestValidateSmartDNSConfigRejectsProxyServerInjectionVariants(t *testing.T) {
-	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	for _, directive := range []string{
 		"proxy-server http://127.0.0.1:19081",
 		"proxy-server socks5://0.0.0.0:19081",
