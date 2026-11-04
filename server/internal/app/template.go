@@ -315,6 +315,8 @@ func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.R
 		return
 	}
 	boundNodes := make([]string, 0)
+	orphanBindings := make([]string, 0)
+	globalToken := strings.TrimSpace(settings["agent_token"])
 	for rows.Next() {
 		var machineCode string
 		if err := rows.Scan(&machineCode); err != nil {
@@ -326,19 +328,12 @@ func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.R
 		// dedicated Agent credential. Deleted/revoked machines may leave legacy
 		// rows behind from older versions; remove those orphan bindings safely.
 		token := strings.TrimSpace(settings["agent_machine_"+machineCode])
-		globalToken := strings.TrimSpace(settings["agent_token"])
 		// Only infer a deleted/revoked machine when the server has a configured
 		// global Agent token. In minimal test/legacy databases without that
 		// setting, missing per-machine credentials are not enough to prove that
 		// a binding is orphaned, so retain the safe blocking behavior.
 		if globalToken != "" && (token == "" || token == globalToken) {
-			if _, err := tx.ExecContext(r.Context(),
-				"DELETE FROM node_template_bindings WHERE machine_code=? AND source='template' AND template_version=?",
-				machineCode, version); err != nil {
-				rows.Close()
-				writeErr(w, http.StatusInternalServerError, "清理已删除节点的遗留模板绑定失败")
-				return
-			}
+			orphanBindings = append(orphanBindings, machineCode)
 			continue
 		}
 		boundNodes = append(boundNodes, machineCode)
@@ -348,7 +343,21 @@ func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.R
 		writeErr(w, http.StatusInternalServerError, "读取节点模板绑定失败")
 		return
 	}
-	rows.Close()
+	if err := rows.Close(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "关闭节点模板绑定游标失败")
+		return
+	}
+	// Finish reading and close the cursor before modifying the table it queried.
+	// This avoids depending on SQLite behavior for writes while a read cursor on
+	// the same table is still active inside the transaction.
+	for _, machineCode := range orphanBindings {
+		if _, err := tx.ExecContext(r.Context(),
+			"DELETE FROM node_template_bindings WHERE machine_code=? AND source='template' AND template_version=?",
+			machineCode, version); err != nil {
+			writeErr(w, http.StatusInternalServerError, "清理已删除节点的遗留模板绑定失败")
+			return
+		}
+	}
 	if len(boundNodes) > 0 {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":       fmt.Sprintf("模板 v%d 仍被 %d 个节点绑定，不能删除", version, len(boundNodes)),
