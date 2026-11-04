@@ -1475,6 +1475,15 @@ func TestValidateAgentSmartDNSDNSModeRequiresSafeListenerReferences(t *testing.T
 	if err := validateAgentSmartDNSDNSMode(enabled, false); err == nil {
 		t.Fatal("disabled mode must reject any remaining SmartDNS loopback references")
 	}
+	ipv6Domestic := []byte(`dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn: [::1]:6054
+`)
+	if err := validateAgentSmartDNSDNSMode(ipv6Domestic, false); err == nil {
+		t.Fatal("disabled mode must reject the IPv6 domestic SmartDNS listener too")
+	}
 	missingDomestic := []byte(`dns:
   nameserver:
     - 127.0.0.1:6053
