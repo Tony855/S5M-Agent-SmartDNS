@@ -84,8 +84,11 @@ proxies:
 		}
 		if !found { t.Errorf("fake-ip-filter missing %q: %#v", want, filters) }
 	}
-	if dns["ipv6"] != false {
-		t.Errorf("dns.ipv6 = %#v, want false", dns["ipv6"])
+	if config["ipv6"] != true {
+		t.Errorf("ipv6 = %#v, want true for dual-stack TUN routing", config["ipv6"])
+	}
+	if dns["ipv6"] != true {
+		t.Errorf("dns.ipv6 = %#v, want true to preserve AAAA answers", dns["ipv6"])
 	}
 	tun, ok := config["tun"].(map[string]any)
 	if !ok { t.Fatalf("tun is not a mapping: %#v", config["tun"]) }
