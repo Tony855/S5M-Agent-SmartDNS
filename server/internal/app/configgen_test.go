@@ -2311,3 +2311,87 @@ func TestBuildConfigFromSocks5HImportGeneratesCanonicalMihomoProxy(t *testing.T)
 		t.Fatalf("non-standard remote_dns field must not leak into Mihomo YAML: %#v", generated)
 	}
 }
+
+func TestApplyAgentRuntimeDNSFallbackRemovesPrimaryAndDomesticSmartDNS(t *testing.T) {
+	source := `dns:
+  enable: true
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    "geosite:cn": 127.0.0.1:6054
+    "geosite:private": 192.0.2.53
+  default-nameserver:
+    - tls://223.5.5.5
+`
+	got, err := applyAgentRuntimeDNS(source, false)
+	if err != nil {
+		t.Fatalf("apply SmartDNS fallback: %v", err)
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(got), &root); err != nil {
+		t.Fatalf("decode fallback YAML: %v", err)
+	}
+	dns := root["dns"].(map[string]any)
+	for _, raw := range dns["nameserver"].([]any) {
+		if strings.Contains(raw.(string), "127.0.0.1:6053") || strings.Contains(raw.(string), "127.0.0.1:6054") {
+			t.Fatalf("primary nameserver still points to SmartDNS: %#v", dns["nameserver"])
+		}
+	}
+	wantPrimary := map[string]bool{
+		"https://dns.cloudflare.com/dns-query": false,
+		"https://dns.google/dns-query": false,
+	}
+	for _, raw := range dns["nameserver"].([]any) {
+		if _, ok := wantPrimary[raw.(string)]; ok {
+			wantPrimary[raw.(string)] = true
+		}
+	}
+	for server, found := range wantPrimary {
+		if !found { t.Errorf("missing encrypted fallback %q", server) }
+	}
+	policy := dns["nameserver-policy"].(map[string]any)
+	cnFallback, ok := policy["geosite:cn"].([]any)
+	if !ok { t.Fatalf("China policy was not converted to fallback list: %#v", policy["geosite:cn"]) }
+	wantCN := map[string]bool{
+		"https://dns.alidns.com/dns-query": false,
+		"https://doh.pub/dns-query": false,
+	}
+	for _, raw := range cnFallback {
+		server := raw.(string)
+		if strings.Contains(server, "127.0.0.1:6054") { t.Fatalf("China policy still points to SmartDNS: %#v", cnFallback) }
+		if _, ok := wantCN[server]; ok { wantCN[server] = true }
+	}
+	for server, found := range wantCN {
+		if !found { t.Errorf("missing domestic encrypted fallback %q", server) }
+	}
+	if policy["geosite:private"] != "192.0.2.53" {
+		t.Fatalf("unrelated operator nameserver policy changed: %#v", policy["geosite:private"])
+	}
+	if !strings.Contains(got, "tls://223.5.5.5") {
+		t.Fatal("bootstrap DNS was unexpectedly changed")
+	}
+}
+
+func TestApplyAgentRuntimeDNSFallbackFiltersOnlySmartDNSFromMixedLists(t *testing.T) {
+	source := `dns:
+  nameserver:
+    - 127.0.0.1:6053
+    - 1.1.1.1
+  nameserver-policy:
+    "geosite:cn":
+      - 127.0.0.1:6054
+      - 223.5.5.5
+`
+	got, err := applyAgentRuntimeDNS(source, false)
+	if err != nil { t.Fatal(err) }
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(got), &root); err != nil { t.Fatal(err) }
+	dns := root["dns"].(map[string]any)
+	if got := dns["nameserver"].([]any); len(got) != 1 || got[0] != "1.1.1.1" {
+		t.Fatalf("mixed nameserver list not safely filtered: %#v", got)
+	}
+	policy := dns["nameserver-policy"].(map[string]any)
+	if got := policy["geosite:cn"].([]any); len(got) != 1 || got[0] != "223.5.5.5" {
+		t.Fatalf("mixed nameserver-policy list not safely filtered: %#v", got)
+	}
+}
