@@ -478,3 +478,36 @@ func TestCreateProxyRejectsUnserializableExtensionConfig(t *testing.T) {
 		t.Fatalf("invalid proxy rows = %d, want 0", count)
 	}
 }
+
+
+func TestStoreMutationsReturnNoRowsForMissingRecords(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "missing-row-mutations.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	if err := store.DeleteInstance(999); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("DeleteInstance(missing) = %v, want sql.ErrNoRows", err)
+	}
+	if err := store.UpdatePassword(999, "new-hash"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("UpdatePassword(missing) = %v, want sql.ErrNoRows", err)
+	}
+	if err := store.UpdateVersionStatus(999, "published"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("UpdateVersionStatus(missing) = %v, want sql.ErrNoRows", err)
+	}
+
+	if err := store.CreateInstance(&Instance{Name: "existing", MachineCode: "node-a", APIURL: "http://127.0.0.1"}); err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if err := store.DeleteInstance(1); err != nil {
+		t.Errorf("DeleteInstance(existing) = %v, want nil", err)
+	}
+
+	if err := store.InsertVersion(1, "sha", "yaml", "draft"); err != nil {
+		t.Fatalf("InsertVersion: %v", err)
+	}
+	if err := store.UpdateVersionStatus(1, "published"); err != nil {
+		t.Errorf("UpdateVersionStatus(existing) = %v, want nil", err)
+	}
+}
