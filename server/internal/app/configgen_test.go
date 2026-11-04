@@ -2526,8 +2526,24 @@ func TestAgentHasDomesticSmartDNSRequiresCapabilityOrFreshEnableAck(t *testing.T
 	now := time.Now().Unix()
 	legacyStatus, _ := json.Marshal(map[string]any{"received_at": now, "smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true})
 	if err := store.UpdateSettings(map[string]string{"agent_status_node-a": string(legacyStatus)}); err != nil { t.Fatal(err) }
-	if app.agentHasDomesticSmartDNS("node-a") { t.Fatal("legacy Agent without domestic capability must retain primary-only SmartDNS routing") }
+	if domestic, reported := app.agentSmartDNSDomesticListenerStatus("node-a"); reported || domestic { t.Fatal("legacy Agent without domestic capability must retain primary-only SmartDNS routing") }
 	result, _ := json.Marshal(map[string]any{"type":"set_smartdns_enabled","status":"success","enabled":true,"updated_at":now})
 	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a":"true","agent_command_result_node-a":string(result)}); err != nil { t.Fatal(err) }
-	if !app.agentHasDomesticSmartDNS("node-a") { t.Fatal("fresh verified enable ACK should activate domestic SmartDNS policy") }
+	if domestic, reported := app.agentSmartDNSDomesticListenerStatus("node-a"); !reported || !domestic { t.Fatal("fresh verified enable ACK should activate domestic SmartDNS policy") }
+}
+
+
+func TestApplyAgentRuntimeDNSFallsBackDomesticWhenListenerExplicitlyUnavailable(t *testing.T) {
+	input := `dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`
+	got, err := applyAgentRuntimeDNS(input, true, false)
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(got, "127.0.0.1:6053") { t.Fatalf("primary SmartDNS listener should remain active: %s", got) }
+	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("missing domestic listener must not remain referenced: %s", got) }
+	if !strings.Contains(got, "dns.alidns.com/dns-query") { t.Fatalf("domestic fallback resolver was not restored: %s", got) }
 }
