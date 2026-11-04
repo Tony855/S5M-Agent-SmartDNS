@@ -375,6 +375,30 @@
                 <el-button size="small" type="primary" :loading="savingMachineProxyMode[item.code]" @click="saveMachineProxyMode(item.code)">保存模式</el-button>
                 <span class="section-hint">仅影响此机器；代理节点的增删、禁用或重新绑定不会改变此设置</span>
               </div>
+              <div class="machine-smartdns" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--border,#e5e7eb);">
+                <strong>SmartDNS 服务管理</strong>
+                <template v-if="item.smartdnsAvailable">
+                  <el-switch
+                    :model-value="item.smartdnsEnabled"
+                    active-text="启用"
+                    inactive-text="禁用"
+                    :loading="savingMachineSmartDNS[item.code] === true"
+                    :disabled="!item.online || !!(item.pendingCommand && item.pendingCommand.type === 'set_smartdns_enabled') || savingMachineSmartDNS[item.code] === true"
+                    @change="enabled => setMachineSmartDNS(item.code, enabled)"
+                  ></el-switch>
+                  <span class="instance-summary-mihomo" :class="item.smartdnsRunning && item.smartdnsDNSHealthy ? 'is-running' : (item.smartdnsEnabled ? 'is-unknown' : 'is-stopped')">
+                    {{ !item.online ? 'Agent 离线' : (item.pendingCommand && item.pendingCommand.type === 'set_smartdns_enabled' ? '启停命令执行中' : (item.smartdnsRunning ? (item.smartdnsDNSHealthy ? '运行中 · DNS 健康' : '进程运行中 · DNS 异常') : (item.smartdnsEnabled ? '已启用 · 等待健康上报' : '已禁用 · 进程已停止'))) }}
+                  </span>
+                  <span v-if="item.smartdnsLastError" class="instance-summary-error">{{ item.smartdnsLastError }}</span>
+                  <span v-if="item.commandResult && item.commandResult.type === 'set_smartdns_enabled'" class="section-hint">
+                    最近操作：{{ item.commandResult.status === 'success' ? '成功' : '失败' }} · {{ item.commandResult.message || '' }}
+                  </span>
+                </template>
+                <span v-else class="section-hint">
+                  {{ item.online && item.runtimeReported ? '此节点未安装 SmartDNS（普通 Agent 镜像），不支持启停' : '尚未收到 SmartDNS 能力上报，暂不可操作' }}
+                </span>
+                <span class="section-hint">仅影响当前节点；禁用前先切换并验证 Mihomo 备用 DNS，再停止 SmartDNS。Agent 重启后仍保持此状态。</span>
+              </div>
             </div>
           </div>
 
