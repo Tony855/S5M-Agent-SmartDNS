@@ -503,6 +503,7 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		return
 	}
 	status["smartdns_available"] = true
+	status["smartdns_control_supported"] = true
 	enabled := true
 	if deps.enabled != nil { enabled = deps.enabled() }
 	status["smartdns_enabled"] = enabled
