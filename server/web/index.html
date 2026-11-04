@@ -394,7 +394,7 @@
                   </span>
                 </template>
                 <span v-else class="section-hint">
-                  {{ item.online && item.runtimeReported ? '此节点未安装 SmartDNS（普通 Agent 镜像），不支持启停' : '尚未收到 SmartDNS 能力上报，暂不可操作' }}
+                  {{ item.smartdnsBinaryAvailable ? 'SmartDNS 已安装，但 Agent 版本过旧，不支持远程启停，请先升级 Agent' : (item.online && item.runtimeReported ? '此节点未安装 SmartDNS（普通 Agent 镜像），不支持启停' : '尚未收到 SmartDNS 能力上报，暂不可操作') }}
                 </span>
                 <span class="section-hint">仅影响当前节点；禁用前先切换并验证 Mihomo 备用 DNS，再停止 SmartDNS。Agent 重启后仍保持此状态。</span>
               </div>
