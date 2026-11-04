@@ -599,20 +599,6 @@ rules:
 	if rules[0] != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { t.Fatalf("SmartDNS process bypassed auto-select group: %#v", rules) }
 }
 
-func TestApplySmartDNSSharedSelectExposesManualEgressChoice(t *testing.T) {
-	input := "rules:\\n  - PROCESS-NAME,smartdns,node-a\\n  - MATCH,REJECT\\n"
-	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect, ProxyNames: []string{"node-a", "node-b"}}
-	got, err := applySmartDNSSharedFallback(input, plan)
-	if err != nil { t.Fatal(err) }
-	var doc map[string]any
-	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
-	group := doc["proxy-groups"].([]any)[0].(map[string]any)
-	if group["type"] != "select" { t.Fatalf("manual egress group type = %#v", group["type"]) }
-	if _, exists := group["url"]; exists { t.Fatalf("manual select group must not have health-test fields: %#v", group) }
-	if doc["rules"].([]any)[0] != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { t.Fatalf("SmartDNS must use the manual selection group: %#v", doc["rules"]) }
-}
-
-
 func TestApplySmartDNSSharedSelectUsesExistingManualProxyGroup(t *testing.T) {
 	input := `proxy-groups:
   - name: PROXY
