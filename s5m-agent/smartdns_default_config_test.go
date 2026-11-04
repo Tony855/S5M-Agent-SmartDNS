@@ -32,7 +32,7 @@ func TestCombinedSmartDNSDefaultConfigEnablesAndValidatesIPv6(t *testing.T) {
 		t.Fatalf("combined SmartDNS default config rejected: %v", err)
 	}
 	for _, directive := range []string{
-		"dualstack-ip-selection yes",
+		"dualstack-ip-selection no",
 		"dualstack-ip-selection-threshold 10",
 		"dualstack-ip-allow-force-AAAA yes",
 	} {
