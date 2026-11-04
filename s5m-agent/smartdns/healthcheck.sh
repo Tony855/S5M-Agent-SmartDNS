@@ -32,7 +32,7 @@ run_dns_probe "primary TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +sh
 if grep -Fqx 'bind 127.0.0.1:6054 -group china-dot' /data/smartdns.conf; then
   grep -Fqx 'bind-tcp 127.0.0.1:6054 -group china-dot' /data/smartdns.conf || fail "domestic TCP listener is missing"
   run_dns_probe "domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
-  run_dns_probe "domestic UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com AAAA
+  run_dns_probe "domestic UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
   run_dns_probe "domestic TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
-  run_dns_probe "domestic TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com AAAA
+  run_dns_probe "domestic TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
 fi
