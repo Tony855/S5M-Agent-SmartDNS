@@ -137,8 +137,16 @@ func hashConfig(yml string) string {
 }
 
 func (a *App) handleGetMihomoTemplate(w http.ResponseWriter, r *http.Request) {
-	draft, _ := a.store.GetSetting("mihomo_template_draft")
-	currentRaw, _ := a.store.GetSetting("mihomo_template_current_version")
+	draft, err := a.store.GetSetting("mihomo_template_draft")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取模板草稿失败")
+		return
+	}
+	currentRaw, err := a.store.GetSetting("mihomo_template_current_version")
+	if err != nil && err != sql.ErrNoRows {
+		writeErr(w, http.StatusInternalServerError, "读取当前模板版本失败")
+		return
+	}
 	current := 0
 	fmt.Sscanf(currentRaw, "%d", &current)
 	rows, err := a.store.db.Query("SELECT version, sha256, note, created_at FROM mihomo_template_versions ORDER BY version DESC")
@@ -209,7 +217,10 @@ func (a *App) handlePublishMihomoTemplate(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback()
 	var current int
-	_ = tx.QueryRow("SELECT COALESCE(MAX(version),0) FROM mihomo_template_versions").Scan(&current)
+	if err := tx.QueryRow("SELECT COALESCE(MAX(version),0) FROM mihomo_template_versions").Scan(&current); err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取当前模板版本失败")
+		return
+	}
 	next := current + 1
 	created := time.Now().UTC().Format(time.RFC3339)
 	if _, err = tx.Exec("INSERT INTO mihomo_template_versions(version,yaml_text,sha256,note,created_at) VALUES(?,?,?,?,?)", next, draft, hashConfig(draft), strings.TrimSpace(in.Note), created); err != nil {
@@ -490,10 +501,16 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 	}
 	defer tx.Rollback()
 	var oldYAML string
-	_ = tx.QueryRow("SELECT yaml_text FROM node_configs WHERE machine_code=?", code).Scan(&oldYAML)
+	if err := tx.QueryRow("SELECT yaml_text FROM node_configs WHERE machine_code=?", code).Scan(&oldYAML); err != nil && err != sql.ErrNoRows {
+		writeErr(w, http.StatusInternalServerError, "读取原节点配置失败")
+		return
+	}
 	var oldVersion int
 	var oldSource string
-	_ = tx.QueryRow("SELECT template_version,source FROM node_template_bindings WHERE machine_code=?", code).Scan(&oldVersion, &oldSource)
+	if err := tx.QueryRow("SELECT template_version,source FROM node_template_bindings WHERE machine_code=?", code).Scan(&oldVersion, &oldSource); err != nil && err != sql.ErrNoRows {
+		writeErr(w, http.StatusInternalServerError, "读取原节点模板版本信息失败")
+		return
+	}
 	if oldSource == "" {
 		oldSource = "independent"
 	}
