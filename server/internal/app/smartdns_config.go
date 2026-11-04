@@ -64,6 +64,8 @@ func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (stri
 		fmt.Fprintf(&b, "server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google -group %s -proxy %s\n", groupName, proxyName)
 		fmt.Fprintf(&b, "group-match -client-ip %s -g %s\n\n", cidr, groupName)
 	}
-	b.WriteString("# Preserve A and AAAA answers; allow IPv6-only domains on dual-stack resolvers.\\n")\n\tb.WriteString("dualstack-ip-selection yes\\ndualstack-ip-selection-threshold 10\\ndualstack-ip-allow-force-AAAA yes\\n")\n\tb.WriteString("cache-size 16384\nprefetch-domain yes\nserve-expired yes\nlog-level info\nlog-console yes\nlog-syslog no\n")
+	b.WriteString("# Preserve A and AAAA answers; allow IPv6-only domains on dual-stack resolvers.\n")
+	b.WriteString("dualstack-ip-selection yes\ndualstack-ip-selection-threshold 10\ndualstack-ip-allow-force-AAAA yes\n")
+	b.WriteString("cache-size 16384\nprefetch-domain yes\nserve-expired yes\nlog-level info\nlog-console yes\nlog-syslog no\n")
 	return b.String(), nil
 }
