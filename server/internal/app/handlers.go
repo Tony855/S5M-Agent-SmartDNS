@@ -172,7 +172,7 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 func isInternalSettingKey(key string) bool {
 	for _, prefix := range []string{
 		"agent_machine_", "agent_mihomo_secret_", "agent_secret_", "agent_command_",
-		"agent_command_result_", "smartdns_config_", "agent_lastseen_", "agent_status_", "mihomo_secret_",
+		"agent_command_result_", "smartdns_config_", "smartdns_enabled_", "agent_lastseen_", "agent_status_", "mihomo_secret_",
 	} {
 		if strings.HasPrefix(key, prefix) {
 			return true
@@ -358,6 +358,34 @@ func (a *App) handleSetMachineProxyMode(w http.ResponseWriter, r *http.Request) 
 	if err := a.store.SetMachineProxyMode(code, in.RoutingMode); err != nil { writeErr(w, http.StatusBadRequest, err.Error()); return }
 	if err := a.syncAuthorizedNodeConfigs(); err != nil { writeErr(w, http.StatusInternalServerError, "机器模式已保存，但节点配置同步失败: "+err.Error()); return }
 	writeJSON(w, http.StatusOK, map[string]string{"machine_code": code, "routing_mode": strings.ToLower(strings.TrimSpace(in.RoutingMode)), "message": "机器代理模式已保存并同步"})
+}
+
+func (a *App) handleSetMachineSmartDNSEnabled(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	if user == nil || user.Role != "admin" {
+		writeErr(w, http.StatusForbidden, "仅管理员可以启停节点 SmartDNS")
+		return
+	}
+	code := strings.TrimSpace(r.PathValue("code"))
+	if code == "" || code == "__GLOBAL__" || len(code) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(code) {
+		writeErr(w, http.StatusBadRequest, "机器码格式无效")
+		return
+	}
+	var in struct { Enabled *bool `json:"enabled"` }
+	if err := decodeLimited(r, 8<<10, "8 KiB", &in); err != nil || in.Enabled == nil {
+		writeErr(w, http.StatusBadRequest, "必须明确提供 enabled 布尔值")
+		return
+	}
+	if err := a.queueAgentSmartDNSEnabled(code, *in.Enabled); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	state := "禁用"
+	if *in.Enabled { state = "启用" }
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"machine_code": code, "enabled": *in.Enabled,
+		"message": "SmartDNS " + state + "命令已排队，等待 Agent 执行并完成 DNS 健康验证",
+	})
 }
 
 func (a *App) handleListProxies(w http.ResponseWriter, r *http.Request) {
