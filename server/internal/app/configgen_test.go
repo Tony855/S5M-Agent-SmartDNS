@@ -1913,14 +1913,14 @@ func TestBuildConfigRejectsUnsafeProxyNames(t *testing.T) {
 }
 
 
-// TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback verifies that
-// every Agent gets an independent fallback group containing only enabled
-// global and machine-bound nodes, including in return mode.
-func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
+// TestBuildConfigForMachineExplicitlyEnablesScopedSmartDNSURLTest verifies
+// that the opt-in policy contains only enabled global and machine-bound nodes.
+func TestBuildConfigForMachineExplicitlyEnablesScopedSmartDNSURLTest(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-default-fallback.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{"smartdns_routing_config": `{"mode":"shared","strategy":"url-test"}`}); err != nil { t.Fatal(err) }
 	proxies := []Proxy{
 		{Name: "24587", Type: "vmess", Server: "192.0.2.10", Port: 24587, MachineCode: "__GLOBAL__", Enabled: true},
 		{Name: "24588", Type: "vmess", Server: "192.0.2.11", Port: 24588, MachineCode: "node-a", Enabled: true},
@@ -1941,7 +1941,7 @@ func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
 		group := raw.(map[string]any)
 		if group["name"] == SmartDNSGroupName { smart = group }
 	}
-	if smart == nil { t.Fatalf("default SmartDNS fallback group missing: %#v", groups) }
+	if smart == nil { t.Fatalf("explicitly enabled SmartDNS url-test group missing: %#v", groups) }
 	if smart["type"] != "url-test" || smart["url"] != "https://www.gstatic.com/generate_204" ||
 		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 || smart["tolerance"] != 50 {
 		t.Fatalf("unexpected automatic latency-test settings: %#v", smart)
@@ -1966,8 +1966,25 @@ func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
 	if !manual { t.Fatalf("ordinary manual PROXY select group was changed or removed: %#v", groups) }
 }
 
-// An explicitly stored empty setting is the backwards-compatible opt-out.
-func TestBuildConfigForMachineExplicitlyDisablesDefaultSmartDNSFallback(t *testing.T) {
+// A missing setting is the upgrade path for existing nodes: do not inject
+// SmartDNS process rules or a dedicated proxy group unless an administrator opts in.
+func TestBuildConfigForMachinePreservesLegacySmartDNSRoutingWhenUnset(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-unset-legacy.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	if strings.Contains(got, SmartDNSGroupName) || strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("unset SmartDNS routing setting changed legacy node behavior:\\n%s", got)
+	}
+	if !strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("legacy return-mode fallback was unexpectedly changed:\\n%s", got)
+	}
+}
+
+// A missing setting preserves legacy routing; an explicitly empty setting also remains an opt-out.
+func TestBuildConfigForMachineExplicitlyDisablesSmartDNSRouting(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-fallback-optout.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
@@ -1981,13 +1998,14 @@ func TestBuildConfigForMachineExplicitlyDisablesDefaultSmartDNSFallback(t *testi
 	if strings.Contains(got, "PROCESS-NAME,smartdns,") { t.Fatalf("explicit opt-out changed legacy return-mode process routing:\n%s", got) }
 }
 
-// With no enabled eligible proxy, the default policy must reject SmartDNS
+// With SmartDNS routing explicitly enabled but no eligible proxy, reject SmartDNS
 // rather than allowing return-mode MATCH,DIRECT to leak overseas DNS upstreams.
 func TestBuildConfigForMachineRejectsSmartDNSWhenNoEligibleProxy(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-no-proxy.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{"smartdns_routing_config": `{"mode":"shared","strategy":"url-test"}`}); err != nil { t.Fatal(err) }
 	p := Proxy{Name: "foreign-only", Type: "vmess", Server: "192.0.2.20", Port: 24587, MachineCode: "node-b", Enabled: true}
 	if err := store.CreateProxy(&p); err != nil { t.Fatal(err) }
 	got, err := (&App{store: store}).BuildConfigForMachine("node-a")

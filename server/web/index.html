@@ -394,7 +394,7 @@
             </el-select>
             <el-button type="primary" :loading="savingSmartDNSRouting" @click="saveSmartDNSRoutingStrategy">保存 SmartDNS 出口策略</el-button>
           </div>
-          <p class="section-hint">自动优选为新配置默认策略。旧节点会在主控同步配置后切换；已明确保存的 fallback 策略不会被覆盖。</p>
+          <p class="section-hint">未保存策略时保持节点原有 DNS/SmartDNS 路由行为，不会因升级自动切换。保存策略后才会在主控下次同步配置时启用；已保存的 fallback 策略不会被覆盖。</p>
         </div>
         <div class="card-panel">
           <div class="card-title">当前配置节点</div>
