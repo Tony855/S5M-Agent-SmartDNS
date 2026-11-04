@@ -233,6 +233,10 @@ jobs:
           ! grep -q '^authentication:' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '127.0.0.1:6053' s5m-agent/default-config.yaml
           grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '^ipv6: true' s5m-agent/default-config.yaml
+          grep -q '^  ipv6: true' s5m-agent/default-config.yaml
+          grep -q '^ipv6: true' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '^  ipv6: true' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'enable: true' s5m-agent/default-config.yaml
           grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
@@ -314,6 +318,8 @@ jobs:
             apk add --no-cache bind-tools >/dev/null
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+            # Verify AAAA survives the complete Mihomo DNS -> SmartDNS path, not just SmartDNS alone.
+            dig +time=6 +tries=1 @127.0.0.1 -p 5353 cloudflare.com AAAA | grep -q "ANSWER SECTION"
             dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
           '
@@ -451,6 +457,8 @@ jobs:
             apk add --no-cache bind-tools >/dev/null
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+            # Verify AAAA survives the complete Mihomo DNS -> SmartDNS path, not just SmartDNS alone.
+            dig +time=6 +tries=1 @127.0.0.1 -p 5353 cloudflare.com AAAA | grep -q "ANSWER SECTION"
             dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
           '
