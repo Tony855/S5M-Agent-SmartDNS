@@ -281,6 +281,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 			if err := persistSmartDNSDisabled(false); err != nil { return err }
 			if err := smartDNSServiceStart(); err != nil {
 				_ = persistSmartDNSDisabled(true)
+				_ = smartDNSServiceStop()
 				return fmt.Errorf("启动 SmartDNS s6 服务失败: %w", err)
 			}
 		}
