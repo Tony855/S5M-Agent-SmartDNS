@@ -107,6 +107,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 	oldWriteController := transactionWriteControllerConfig
 	oldRemoveBackup := transactionRemoveBackup
 	oldSnapshotFile := transactionSnapshotFile
+	oldProbeFallbackDNS := transactionProbeMihomoDNS
 	restore := func() {
 		smartDNSConfigPath = oldSmartPath
 		transactionMergeMihomo = oldMerge
@@ -117,6 +118,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 		transactionWriteControllerConfig = oldWriteController
 		transactionRemoveBackup = oldRemoveBackup
 		transactionSnapshotFile = oldSnapshotFile
+		transactionProbeMihomoDNS = oldProbeFallbackDNS
 	}
 	t.Cleanup(restore)
 
@@ -504,3 +506,27 @@ func TestConfigTransactionSkipsSmartDNSHealthWhenExplicitlyDisabled(t *testing.T
 		t.Fatalf("disabled SmartDNS must not be health-checked/restarted: waits=%d restarts=%d", waitCalls, restartCalls)
 	}
 }
+
+
+func TestConfigTransactionRollsBackWhenFallbackDNSProbeFails(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+	if err := persistSmartDNSDisabled(true); err != nil { t.Fatal(err) }
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
+		return true, atomicWriteFile(mihomoConfigPath(), []byte("candidate-fallback"), 0600)
+	}
+	reloads := 0
+	transactionReloadMihomo = func() error { reloads++; return nil }
+	transactionProbeMihomoDNS = func([]byte) bool { return false }
+	transactionWriteControllerConfig = func([]byte) error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { t.Fatal("disabled SmartDNS must not be probed"); return false }
+	transactionRestartSmartDNS = func() error { t.Fatal("disabled SmartDNS must not be restarted during rollback"); return nil }
+	err := applyAgentConfigTransactionWithFallbackProbe([]byte("fallback-yaml"), nil, false, "", true)
+	if err == nil || !strings.Contains(err.Error(), "备用 DNS") { t.Fatalf("expected fallback DNS probe failure, got %v", err) }
+	got, readErr := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if readErr != nil || string(got) != "old-mihomo" { t.Fatalf("failed fallback probe must restore old Mihomo config: %q err=%v", got, readErr) }
+	if reloads != 2 { t.Fatalf("expected candidate and rollback reload, got %d", reloads) }
+}
+
