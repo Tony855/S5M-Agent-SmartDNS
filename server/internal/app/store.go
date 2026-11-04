@@ -438,7 +438,11 @@ func (s *Store) CreateInstance(i *Instance) error {
 	if err != nil {
 		return err
 	}
-	i.ID, _ = res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("读取新建实例 ID 失败: %w", err)
+	}
+	i.ID = id
 	return nil
 }
 
@@ -530,12 +534,19 @@ func (s *Store) GetProxy(id int64) (*Proxy, error) {
 func (s *Store) CreateProxy(p *Proxy) error {
 	// Legacy mode is retained in the DB only for one-time migration compatibility.
 	p.Mode = "rule"
-	extra, _ := json.Marshal(p.Extra)
+	extra, err := json.Marshal(p.Extra)
+	if err != nil {
+		return fmt.Errorf("序列化代理扩展配置失败: %w", err)
+	}
 	res, err := s.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,source_cidr,machine_code,config_json,enabled) VALUES(?,?,?,?,?,?,?,?,?)`, p.Name, p.Mode, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled))
 	if err != nil {
 		return err
 	}
-	p.ID, _ = res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("读取新建代理 ID 失败: %w", err)
+	}
+	p.ID = id
 	return nil
 }
 
