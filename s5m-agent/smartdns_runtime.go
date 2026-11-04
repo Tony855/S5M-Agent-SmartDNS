@@ -278,8 +278,8 @@ func validateSmartDNSConfig(data []byte) error {
 		if directive == "cache-checkpoint-time" && (len(fields) != 2 || fields[1] != "3600") {
 			return fmt.Errorf("第 %d 行 cache-checkpoint-time 仅允许 3600 秒", lineNo+1)
 		}
-		if directive == "dualstack-ip-selection" && (len(fields) != 2 || fields[1] != "yes") {
-			return fmt.Errorf("第 %d 行 dualstack-ip-selection 仅允许 yes", lineNo+1)
+		if directive == "dualstack-ip-selection" && (len(fields) != 2 || fields[1] != "no") {
+			return fmt.Errorf("第 %d 行 dualstack-ip-selection 仅允许 no，避免按 Agent 主机 IPv6 可达性过滤客户端 AAAA", lineNo+1)
 		}
 		if directive == "dualstack-ip-selection-threshold" && (len(fields) != 2 || fields[1] != "10") {
 			return fmt.Errorf("第 %d 行 dualstack-ip-selection-threshold 仅允许 10", lineNo+1)
