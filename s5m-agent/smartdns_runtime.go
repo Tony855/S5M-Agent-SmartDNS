@@ -38,28 +38,6 @@ var smartDNSServiceStop = func() error {
 // probeMihomoDNSFallback verifies that Mihomo's own local DNS listener
 // can resolve both address families without relying on the SmartDNS daemon.
 func probeMihomoDNSFallback(mihomoConfig []byte) bool {
-	var config struct {
-		DNS struct {
-			Listen string `yaml:"listen"`
-			IPv6   bool   `yaml:"ipv6"`
-		} `yaml:"dns"`
-	}
-	if err := yaml.Unmarshal(mihomoConfig, &config); err != nil { return false }
-	host, port, err := net.SplitHostPort(strings.TrimSpace(config.DNS.Listen))
-	if err != nil || strings.TrimSpace(port) == "" { return false }
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || (!ip.IsLoopback() && !ip.IsUnspecified()) { return false }
-	probeHost := host
-	if ip.IsUnspecified() {
-		if ip.To4() != nil { probeHost = "127.0.0.1" } else { probeHost = "::1" }
-	}
-	queries := []struct{ domain, qtype string; family int }{
-		{domain: "example.com", qtype: "A", family: 4},
-		{domain: "www.baidu.com", qtype: "A", family: 4},
-	}
-	if config.DNS.IPv6 {
-		queries = append(queries, struct{ domain, qtype string; family int }{domain: "cloudflare.com", qtype: "AAAA", family: 6})
-	}
 	return probeMihomoDNSFallbackWithDig(mihomoConfig, func(args ...string) ([]byte, error) {
 		return exec.Command("dig", args...).CombinedOutput()
 	})
