@@ -323,6 +323,10 @@ func (a *App) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.store.DeleteInstance(id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "实例不存在")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "删除实例失败")
 		return
 	}
