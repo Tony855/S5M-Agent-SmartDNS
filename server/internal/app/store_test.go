@@ -511,3 +511,44 @@ func TestStoreMutationsReturnNoRowsForMissingRecords(t *testing.T) {
 		t.Errorf("UpdateVersionStatus(existing) = %v, want nil", err)
 	}
 }
+
+func TestDeleteAgentBindingRejectsMissingCredential(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "missing-agent-binding.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	if err := store.DeleteAgentBinding("unknown-node"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("DeleteAgentBinding(missing) = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO settings(key,value) VALUES(?,?)`, "agent_status_unknown-node", "{}"); err != nil {
+		t.Fatalf("seed orphan status: %v", err)
+	}
+	if err := store.DeleteAgentBinding("unknown-node"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("DeleteAgentBinding(orphan status only) = %v, want sql.ErrNoRows", err)
+	}
+	var status string
+	if err := store.db.QueryRow(`SELECT value FROM settings WHERE key=?`, "agent_status_unknown-node").Scan(&status); err != nil {
+		t.Fatalf("missing-binding cleanup should roll back: %v", err)
+	}
+	if status != "{}" {
+		t.Fatalf("orphan status = %q, want unchanged because transaction rolled back", status)
+	}
+
+	if _, err := store.db.Exec(`INSERT INTO settings(key,value) VALUES(?,?)`, "agent_machine_known-node", "node-token"); err != nil {
+		t.Fatalf("seed credential: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO settings(key,value) VALUES(?,?)`, "agent_status_known-node", "{}"); err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+	if err := store.DeleteAgentBinding("known-node"); err != nil {
+		t.Fatalf("DeleteAgentBinding(existing) = %v, want nil", err)
+	}
+	if _, err := store.GetSetting("agent_machine_known-node"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("credential after revoke error = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := store.GetSetting("agent_status_known-node"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("status after revoke error = %v, want sql.ErrNoRows", err)
+	}
+}
