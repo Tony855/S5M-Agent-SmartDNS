@@ -541,6 +541,8 @@ func collectSmartDNSStatus(status map[string]any) {
 // every status and failure path can be tested without a live SmartDNS daemon.
 func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSStatusDependencies) {
 	status["smartdns_available"] = false
+	status["smartdns_control_supported"] = false
+	status["smartdns_domestic_listener"] = false
 	status["smartdns_enabled"] = false
 	status["smartdns_running"] = false
 	status["smartdns_dns_healthy"] = false
@@ -563,6 +565,11 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
+		domesticListener := smartDNSConfigHasDomesticListener(data)
+		status["smartdns_domestic_listener"] = domesticListener
+		if !domesticListener {
+			appendSmartDNSStatusError(status, "SmartDNS 缺少完整的 UDP/TCP china-dot 6054 国内监听")
+		}
 		if configErr := validateSmartDNSConfig(data); configErr != nil {
 			appendSmartDNSStatusError(status, "SmartDNS 配置未通过加密上游策略校验: "+safeSmartDNSDiagnostic(configErr.Error()))
 		} else {
