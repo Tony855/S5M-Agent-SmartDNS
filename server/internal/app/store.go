@@ -427,6 +427,9 @@ func (s *Store) ListInstances() ([]Instance, error) {
 		}
 		out = append(out, i)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历实例记录失败: %w", err)
+	}
 	return out, nil
 }
 
@@ -435,7 +438,11 @@ func (s *Store) CreateInstance(i *Instance) error {
 	if err != nil {
 		return err
 	}
-	i.ID, _ = res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("读取新建实例 ID 失败: %w", err)
+	}
+	i.ID = id
 	return nil
 }
 
@@ -490,8 +497,16 @@ func (s *Store) ListProxies() ([]Proxy, error) {
 		}
 		p.Enabled = en == 1
 		p.Extra = map[string]any{}
-		_ = json.Unmarshal([]byte(extra), &p.Extra)
+		if err := json.Unmarshal([]byte(extra), &p.Extra); err != nil {
+			return nil, fmt.Errorf("解析代理 %d 的扩展配置失败: %w", p.ID, err)
+		}
+		if p.Extra == nil {
+			p.Extra = map[string]any{}
+		}
 		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历代理记录失败: %w", err)
 	}
 	return out, nil
 }
@@ -507,19 +522,31 @@ func (s *Store) GetProxy(id int64) (*Proxy, error) {
 	}
 	p.Enabled = en == 1
 	p.Extra = map[string]any{}
-	_ = json.Unmarshal([]byte(extra), &p.Extra)
+	if err := json.Unmarshal([]byte(extra), &p.Extra); err != nil {
+		return nil, fmt.Errorf("解析代理 %d 的扩展配置失败: %w", p.ID, err)
+	}
+	if p.Extra == nil {
+		p.Extra = map[string]any{}
+	}
 	return &p, nil
 }
 
 func (s *Store) CreateProxy(p *Proxy) error {
 	// Legacy mode is retained in the DB only for one-time migration compatibility.
 	p.Mode = "rule"
-	extra, _ := json.Marshal(p.Extra)
+	extra, err := json.Marshal(p.Extra)
+	if err != nil {
+		return fmt.Errorf("序列化代理扩展配置失败: %w", err)
+	}
 	res, err := s.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,source_cidr,machine_code,config_json,enabled) VALUES(?,?,?,?,?,?,?,?,?)`, p.Name, p.Mode, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled))
 	if err != nil {
 		return err
 	}
-	p.ID, _ = res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("读取新建代理 ID 失败: %w", err)
+	}
+	p.ID = id
 	return nil
 }
 
@@ -677,6 +704,9 @@ func (s *Store) ListVersions(limit int) ([]ConfigVersion, error) {
 			return nil, err
 		}
 		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历配置版本记录失败: %w", err)
 	}
 	return out, nil
 }
