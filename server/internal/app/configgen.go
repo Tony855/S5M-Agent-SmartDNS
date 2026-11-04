@@ -1522,6 +1522,8 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 }
 
 func (a *App) Publish() (*ConfigVersion, error) {
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	yml, err := a.BuildConfig()
 	if err != nil {
 		return nil, err
@@ -1617,6 +1619,8 @@ func (a *App) Publish() (*ConfigVersion, error) {
 }
 
 func (a *App) Rollback(version int) (*ConfigVersion, error) {
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	yml, err := a.store.VersionYAML(version)
 	if err != nil {
 		return nil, fmt.Errorf("版本不存在: %w", err)

@@ -29,6 +29,7 @@ type App struct {
 	browserWSClients   map[*browserEventClient]struct{}
 	browserTicketMu    sync.Mutex
 	browserTickets     map[string]browserWSTicket
+	configPublishMu    sync.Mutex
 	mihomoUpdateMu     sync.Mutex
 	mihomoUpdateTask   *mihomoUpdateTask
 	mihomoUpdateTasks  map[string]*mihomoUpdateTask
