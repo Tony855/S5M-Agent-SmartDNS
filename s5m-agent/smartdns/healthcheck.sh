@@ -27,6 +27,102 @@ if [ -f /data/smartdns.disabled ]; then
   if pidof smartdns >/dev/null 2>&1; then
     fail "SmartDNS is marked disabled but its daemon is still running"
   fi
+  run_dns_probe "fallback UDP A" '^[0-9]{1,3}(\\.[0-9]{1,3}){3}
+fi
+pidof smartdns >/dev/null 2>&1 || fail "SmartDNS process is not running"
+
+# Require real A and AAAA address records over both transports.
+run_dns_probe "primary UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+run_dns_probe "primary TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+
+# The domestic listener must be tested with a domain covered by the china-dot policy.
+if grep -Fqx 'bind 127.0.0.1:6054 -group china-dot' /data/smartdns.conf; then
+  grep -Fqx 'bind-tcp 127.0.0.1:6054 -group china-dot' /data/smartdns.conf || fail "domestic TCP listener is missing"
+  run_dns_probe "domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+  run_dns_probe "domestic TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+fi
+ dig +time=3 +tries=1 +short @127.0.0.1 -p 5353 example.com A
+  run_dns_probe "fallback TCP A" '^[0-9]{1,3}(\\.[0-9]{1,3}){3}
+fi
+pidof smartdns >/dev/null 2>&1 || fail "SmartDNS process is not running"
+
+# Require real A and AAAA address records over both transports.
+run_dns_probe "primary UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+run_dns_probe "primary TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+
+# The domestic listener must be tested with a domain covered by the china-dot policy.
+if grep -Fqx 'bind 127.0.0.1:6054 -group china-dot' /data/smartdns.conf; then
+  grep -Fqx 'bind-tcp 127.0.0.1:6054 -group china-dot' /data/smartdns.conf || fail "domestic TCP listener is missing"
+  run_dns_probe "domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+  run_dns_probe "domestic TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+fi
+ dig +tcp +time=3 +tries=1 +short @127.0.0.1 -p 5353 example.com A
+  if grep -Eq '^  ipv6:[[:space:]]*true
+fi
+pidof smartdns >/dev/null 2>&1 || fail "SmartDNS process is not running"
+
+# Require real A and AAAA address records over both transports.
+run_dns_probe "primary UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+run_dns_probe "primary TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+
+# The domestic listener must be tested with a domain covered by the china-dot policy.
+if grep -Fqx 'bind 127.0.0.1:6054 -group china-dot' /data/smartdns.conf; then
+  grep -Fqx 'bind-tcp 127.0.0.1:6054 -group china-dot' /data/smartdns.conf || fail "domestic TCP listener is missing"
+  run_dns_probe "domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+  run_dns_probe "domestic TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+fi
+ /data/config.yaml; then
+    run_dns_probe "fallback UDP AAAA" '^[0-9a-fA-F:]+
+fi
+pidof smartdns >/dev/null 2>&1 || fail "SmartDNS process is not running"
+
+# Require real A and AAAA address records over both transports.
+run_dns_probe "primary UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+run_dns_probe "primary TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+
+# The domestic listener must be tested with a domain covered by the china-dot policy.
+if grep -Fqx 'bind 127.0.0.1:6054 -group china-dot' /data/smartdns.conf; then
+  grep -Fqx 'bind-tcp 127.0.0.1:6054 -group china-dot' /data/smartdns.conf || fail "domestic TCP listener is missing"
+  run_dns_probe "domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+  run_dns_probe "domestic TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+fi
+ dig +time=3 +tries=1 +short @127.0.0.1 -p 5353 cloudflare.com AAAA
+    run_dns_probe "fallback TCP AAAA" '^[0-9a-fA-F:]+
+fi
+pidof smartdns >/dev/null 2>&1 || fail "SmartDNS process is not running"
+
+# Require real A and AAAA address records over both transports.
+run_dns_probe "primary UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+run_dns_probe "primary TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A
+run_dns_probe "primary TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 cloudflare.com AAAA
+
+# The domestic listener must be tested with a domain covered by the china-dot policy.
+if grep -Fqx 'bind 127.0.0.1:6054 -group china-dot' /data/smartdns.conf; then
+  grep -Fqx 'bind-tcp 127.0.0.1:6054 -group china-dot' /data/smartdns.conf || fail "domestic TCP listener is missing"
+  run_dns_probe "domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+  run_dns_probe "domestic TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A
+  run_dns_probe "domestic TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.qq.com AAAA
+fi
+ dig +tcp +time=3 +tries=1 +short @127.0.0.1 -p 5353 cloudflare.com AAAA
+  fi
   exit 0
 fi
 pidof smartdns >/dev/null 2>&1 || fail "SmartDNS process is not running"
