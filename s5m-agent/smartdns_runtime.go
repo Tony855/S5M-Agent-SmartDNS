@@ -42,7 +42,7 @@ func smartDNSRuntimeEnabled() bool {
 func persistSmartDNSDisabled(disabled bool) error {
 	if disabled {
 		if err := os.MkdirAll(filepath.Dir(smartDNSDisabledPath), 0700); err != nil { return fmt.Errorf("创建 SmartDNS 状态目录失败: %w", err) }
-		return atomicWriteFile(smartDNSDisabledPath, []byte("disabled\\n"), 0600)
+		return atomicWriteFile(smartDNSDisabledPath, []byte("disabled\n"), 0600)
 	}
 	if err := os.Remove(smartDNSDisabledPath); err != nil && !os.IsNotExist(err) { return fmt.Errorf("清除 SmartDNS 禁用标记失败: %w", err) }
 	dir, err := os.Open(filepath.Dir(smartDNSDisabledPath))
