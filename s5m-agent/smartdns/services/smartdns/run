@@ -3,6 +3,7 @@ set -eu
 # The disabled marker is persistent in /data, so s6 never starts SmartDNS
 # automatically after a container restart when the operator disabled it.
 if [ -f /data/smartdns.disabled ]; then
-  exit 0
+  # Keep the s6 service quiescent without running the SmartDNS daemon.
+  exec sleep 2147483647
 fi
 exec /usr/sbin/smartdns -f -x -c /data/smartdns.conf
