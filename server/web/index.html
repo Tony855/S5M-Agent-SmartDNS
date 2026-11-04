@@ -382,7 +382,6 @@
                     :model-value="item.smartdnsEnabled"
                     active-text="启用"
                     inactive-text="禁用"
-                    :loading="savingMachineSmartDNS[item.code] === true"
                     :disabled="!item.online || !!(item.pendingCommand && item.pendingCommand.type === 'set_smartdns_enabled') || savingMachineSmartDNS[item.code] === true"
                     @change="enabled => setMachineSmartDNS(item.code, enabled)"
                   ></el-switch>
