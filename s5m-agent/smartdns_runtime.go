@@ -929,6 +929,12 @@ func probeSmartDNSDNS() bool {
 }
 
 func probeSmartDNSDNSAt(address string) bool {
+	// A and AAAA are separate dataplanes in SmartDNS. A successful IPv4
+	// lookup must not mask a broken IPv6/AAAA path.
+	return probeSmartDNSDNSAtType(address, 1) && probeSmartDNSDNSAtType(address, 28)
+}
+
+func probeSmartDNSDNSAtType(address string, qtype uint16) bool {
 	conn, err := net.DialTimeout("udp", address, 800*time.Millisecond)
 	if err != nil {
 		return false
@@ -943,7 +949,7 @@ func probeSmartDNSDNSAt(address string) bool {
 		query = append(query, byte(len(label)))
 		query = append(query, label...)
 	}
-	query = append(query, 0, 0, 1, 0, 1) // QNAME terminator, A, IN
+	query = append(query, 0, byte(qtype>>8), byte(qtype), 0, 1) // QNAME terminator, requested type, IN
 	if _, err := conn.Write(query); err != nil {
 		return false
 	}
@@ -956,9 +962,6 @@ func probeSmartDNSDNSAt(address string) bool {
 		return false
 	}
 	flags := binary.BigEndian.Uint16(response[2:4])
-	// A healthy A lookup must be a complete DNS response with NOERROR and
-	// at least one answer. Reject mismatched IDs, truncated responses,
-	// NXDOMAIN, REFUSED, SERVFAIL, and empty NOERROR responses.
 	answerCount := binary.BigEndian.Uint16(response[6:8])
 	questionCount := binary.BigEndian.Uint16(response[4:6])
 	return flags&0x8000 != 0 && flags&0x0200 == 0 &&
@@ -969,6 +972,12 @@ func probeSmartDNSDNSAt(address string) bool {
 // probeSmartDNSDNSTCPAt verifies a complete DNS-over-TCP response, including
 // the two-byte message length and matching transaction ID.
 func probeSmartDNSDNSTCPAt(address string) bool {
+	return probeSmartDNSDNSTCPAtType(address, 1) && probeSmartDNSDNSTCPAtType(address, 28)
+}
+
+// probeSmartDNSDNSTCPAtType verifies a complete DNS-over-TCP response for the
+// requested RR type, including framing and transaction ID.
+func probeSmartDNSDNSTCPAtType(address string, qtype uint16) bool {
 	conn, err := net.DialTimeout("tcp", address, 800*time.Millisecond)
 	if err != nil {
 		return false
@@ -983,7 +992,7 @@ func probeSmartDNSDNSTCPAt(address string) bool {
 		query = append(query, byte(len(label)))
 		query = append(query, label...)
 	}
-	query = append(query, 0, 0, 1, 0, 1)
+	query = append(query, 0, byte(qtype>>8), byte(qtype), 0, 1)
 	frame := make([]byte, 2+len(query))
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(query)))
 	copy(frame[2:], query)
@@ -1002,16 +1011,12 @@ func probeSmartDNSDNSTCPAt(address string) bool {
 	if _, err := io.ReadFull(conn, response); err != nil {
 		return false
 	}
-	// Reject responses that do not belong to this query. A stray or
-	// spoofed TCP DNS frame must not make the resolver look healthy.
 	if binary.BigEndian.Uint16(response[:2]) != binary.BigEndian.Uint16(query[:2]) {
 		return false
 	}
 	flags := binary.BigEndian.Uint16(response[2:4])
 	questionCount := binary.BigEndian.Uint16(response[4:6])
 	answerCount := binary.BigEndian.Uint16(response[6:8])
-	// Keep TCP health criteria aligned with the UDP probe: only a complete,
-	// standard NOERROR response to our single question with an answer is healthy.
 	return flags&0x8000 != 0 && flags&0x0200 == 0 &&
 		flags&0x7800 == 0 && flags&0x000f == 0 &&
 		questionCount == 1 && answerCount > 0
