@@ -1966,6 +1966,23 @@ func TestBuildConfigForMachineExplicitlyEnablesScopedSmartDNSURLTest(t *testing.
 	if !manual { t.Fatalf("ordinary manual PROXY select group was changed or removed: %#v", groups) }
 }
 
+// A missing setting is the upgrade path for existing nodes: do not inject
+// SmartDNS process rules or a dedicated proxy group unless an administrator opts in.
+func TestBuildConfigForMachinePreservesLegacySmartDNSRoutingWhenUnset(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-unset-legacy.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	if strings.Contains(got, SmartDNSGroupName) || strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("unset SmartDNS routing setting changed legacy node behavior:\\n%s", got)
+	}
+	if !strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("legacy return-mode fallback was unexpectedly changed:\\n%s", got)
+	}
+}
+
 // A missing setting preserves legacy routing; an explicitly empty setting also remains an opt-out.
 func TestBuildConfigForMachineExplicitlyDisablesSmartDNSRouting(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-fallback-optout.db"))
