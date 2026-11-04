@@ -326,6 +326,10 @@ jobs:
             printf "%s\n" "$AAAA_RESULT" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "Mihomo DNS did not return an AAAA answer" >&2; exit 1; }
             dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
+          '; then
+            docker logs "$container" >&2
+            exit 1
+          fi
           # Verify SmartDNS writes its cache to the persistent /data volume on graceful shutdown.
           docker restart "$container" >/dev/null
           for attempt in $(seq 1 30); do
