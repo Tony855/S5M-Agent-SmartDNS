@@ -492,6 +492,26 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	if err := json.Unmarshal([]byte(value), &status); err != nil {
 		return false
 	}
+	// A just-ACKed enable command already completed local UDP/TCP DNS probes.
+	// Trust that verified result until a newer heartbeat supersedes it, avoiding
+	// a stale "disabled" heartbeat reverting the just-applied Mihomo config.
+	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil {
+		if desired == "false" { return false }
+		if desired == "true" {
+			var result map[string]any
+			if raw, readErr := a.store.GetSetting("agent_command_result_" + machineCode); readErr == nil &&
+				json.Unmarshal([]byte(raw), &result) == nil &&
+				result["type"] == "set_smartdns_enabled" && result["status"] == "success" && result["enabled"] == true {
+				if updatedAt, ok := result["updated_at"].(float64); ok && updatedAt > 0 && updatedAt <= 9.0e15 {
+					commandAge := time.Since(time.Unix(int64(updatedAt), 0))
+					receivedAt, _ := status["received_at"].(float64)
+					if commandAge >= -30*time.Second && commandAge <= agentWSHeartbeatTTL && updatedAt >= receivedAt {
+						return true
+					}
+				}
+			}
+		}
+	}
 	// A stale healthy heartbeat must never keep the local SmartDNS endpoint
 	// selected after an Agent disconnects or stops reporting health. Use the
 	// server-stamped received_at field, not agent_lastseen (config requests also
