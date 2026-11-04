@@ -371,7 +371,7 @@ func (a *App) validateProxy(p *Proxy) string {
 	}
 	// Per-proxy routing mode is deprecated; routing is configured once per machine.
 	p.Mode = "rule"
-	p.Type = strings.ToLower(strings.TrimSpace(p.Type))
+	p.Type = normalizeProxyType(p.Type)
 	p.Server = strings.TrimSpace(p.Server)
 	switch p.Type { case "socks5", "http", "ss", "vmess", "vless", "trojan": default: return "代理类型无效，必须是 socks5、http、ss、vmess、vless 或 trojan" }
 	if p.Server == "" { return "代理必须填写类型、服务器和端口" }
@@ -1335,6 +1335,18 @@ func proxyPort(value any) (int, error) {
 	}
 }
 
+// normalizeProxyType handles the socks5h URI alias without broadening the
+// accepted protocol set of the proxy CRUD API. Mihomo's SOCKS5 outbound sends
+// the original destination hostname in the SOCKS5 request whenever hostname
+// metadata is available, so proxy-side DNS resolution needs no custom YAML key.
+func normalizeProxyType(value string) string {
+	protocol := strings.ToLower(strings.TrimSpace(value))
+	if protocol == "socks5h" {
+		return "socks5"
+	}
+	return protocol
+}
+
 func parseProxyLine(line string) (*Proxy, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -1350,7 +1362,7 @@ func parseProxyLine(line string) (*Proxy, error) {
 	if schemeIdx == -1 {
 		return nil, fmt.Errorf("缺少协议前缀")
 	}
-	p.Type = strings.ToLower(strings.TrimSpace(line[:schemeIdx]))
+	p.Type = normalizeProxyType(line[:schemeIdx])
 	if p.Type == "socks" {
 		p.Type = "socks5"
 	}
