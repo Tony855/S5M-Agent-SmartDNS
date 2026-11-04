@@ -1311,7 +1311,8 @@ createApp({
               ? item.smartdns_enabled
               : (status.smartdns_enabled === true || (status.smartdns_enabled === undefined && status.smartdns_running === true)),
             smartdnsRunning: status.smartdns_running === true,
-            smartdnsDNSHealthy: status.smartdns_dns_healthy === true,
+            smartdnsDomesticListener: status.smartdns_domestic_listener === true,
+            smartdnsDNSHealthy: status.smartdns_dns_healthy === true && status.smartdns_domestic_listener === true,
             smartdnsLastError: String(status.smartdns_last_error || ''),
             runtimeReported,
             runtimeMessage,
