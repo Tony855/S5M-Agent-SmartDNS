@@ -55,3 +55,38 @@ func TestHTTPAgentCommandAckRejectsStaleIDWhenReplacementIsPending(t *testing.T)
 		t.Fatalf("previous command result changed: got %q, want %q", settings["agent_command_result_"+code], string(oldResultJSON))
 	}
 }
+
+func TestHTTPAgentCommandAckRedactsSensitiveDiagnostics(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	if err := app.store.UpdateSettings(map[string]string{
+		"agent_command_" + code: `{"id":"redact-ack","type":"update_mihomo"}`,
+	}); err != nil {
+		t.Fatalf("seed pending command: %v", err)
+	}
+
+	body := `{"id":"redact-ack","status":"failed","message":"password=supersecret /etc/s5m/agent.conf"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/command/ack", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	app.handleAgentCommandAck(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	stored, err := app.store.GetSetting("agent_command_result_" + code)
+	if err != nil {
+		t.Fatalf("read command result: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stored), &result); err != nil {
+		t.Fatalf("decode command result: %v", err)
+	}
+	message, _ := result["message"].(string)
+	if strings.Contains(message, "supersecret") || strings.Contains(message, "/etc/s5m/agent.conf") {
+		t.Fatalf("sensitive diagnostic was persisted: %q", message)
+	}
+	if !strings.Contains(message, "[已隐藏]") || !strings.Contains(message, "[路径已隐藏]") {
+		t.Fatalf("expected credential and path redaction, got %q", message)
+	}
+}
