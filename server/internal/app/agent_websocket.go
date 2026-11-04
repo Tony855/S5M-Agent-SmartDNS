@@ -684,8 +684,14 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 		return fmt.Errorf("目标 Agent 离线或心跳已超时，不能切换 SmartDNS")
 	}
 	var status map[string]any
-	if err := json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &status); err != nil || status["smartdns_available"] != true || status["smartdns_control_supported"] != true {
-		return fmt.Errorf("目标节点未确认安装 SmartDNS；普通 Agent 镜像不支持此操作")
+	if err := json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &status); err != nil {
+		return fmt.Errorf("读取节点 SmartDNS 能力状态失败")
+	}
+	if status["smartdns_available"] != true {
+		return fmt.Errorf("目标节点未安装 SmartDNS；普通 Agent 镜像不支持此操作")
+	}
+	if status["smartdns_control_supported"] != true {
+		return fmt.Errorf("目标节点已安装 SmartDNS，但 Agent 版本过旧，请先升级 Agent")
 	}
 	config := strings.TrimSpace(settings["smartdns_config_"+machineCode])
 	if enabled && config == "" {
