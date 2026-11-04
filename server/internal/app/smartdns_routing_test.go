@@ -15,7 +15,7 @@ func TestBuildSmartDNSRoutingPlanSharedFallbackIsDynamicAndDeterministic(t *test
 	proxies := []SmartDNSProxyRef{{Name:"node-z", Enabled:true}, {Name:"node-a", Enabled:true}, {Name:"disabled", Enabled:false}}
 	got, err := BuildSmartDNSRoutingPlan(cfg, proxies)
 	if err != nil { t.Fatal(err) }
-	if got.Strategy != "fallback" || got.GroupName != "SMARTDNS-PROXY" { t.Fatalf("unexpected shared plan: %#v", got) }
+	if got.Strategy != SmartDNSDefaultStrategy || got.GroupName != "SMARTDNS-PROXY" { t.Fatalf("unexpected shared plan: %#v", got) }
 	if len(got.ProxyNames) != 2 || got.ProxyNames[0] != "node-a" || got.ProxyNames[1] != "node-z" {
 		t.Fatalf("enabled proxy references must be sorted and dynamic: %#v", got.ProxyNames)
 	}
@@ -87,5 +87,27 @@ func TestBuildSmartDNSRoutingPlanAcceptsMinimumUnprivilegedListenerPort(t *testi
 	}
 	if _, err := BuildSmartDNSRoutingPlan(cfg, []SmartDNSProxyRef{{Name: "node-a", Enabled: true}}); err != nil {
 		t.Fatalf("port 1024 should be accepted: %v", err)
+	}
+}
+
+func TestBuildSmartDNSRoutingPlanSelectUsesManagedPROXYGroup(t *testing.T) {
+	got, err := BuildSmartDNSRoutingPlan(
+		SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect},
+		[]SmartDNSProxyRef{{Name: "node-a", Enabled: true}},
+	)
+	if err != nil { t.Fatal(err) }
+	if got.GroupName != "PROXY" || got.Strategy != SmartDNSStrategySelect {
+		t.Fatalf("manual strategy must follow the managed PROXY selection group: %#v", got)
+	}
+}
+
+func TestBuildSmartDNSRoutingPlanURLTestIsDefault(t *testing.T) {
+	got, err := BuildSmartDNSRoutingPlan(
+		SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared},
+		[]SmartDNSProxyRef{{Name: "node-a", Enabled: true}},
+	)
+	if err != nil { t.Fatal(err) }
+	if got.Strategy != SmartDNSStrategyURLTest || got.GroupName != SmartDNSGroupName {
+		t.Fatalf("new shared SmartDNS routing must default to latency-based URL testing: %#v", got)
 	}
 }

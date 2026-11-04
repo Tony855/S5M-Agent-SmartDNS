@@ -1942,9 +1942,9 @@ func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
 		if group["name"] == SmartDNSGroupName { smart = group }
 	}
 	if smart == nil { t.Fatalf("default SmartDNS fallback group missing: %#v", groups) }
-	if smart["type"] != "fallback" || smart["url"] != "https://www.gstatic.com/generate_204" ||
-		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 {
-		t.Fatalf("unexpected fallback health-check settings: %#v", smart)
+	if smart["type"] != "url-test" || smart["url"] != "https://www.gstatic.com/generate_204" ||
+		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 || smart["tolerance"] != 50 {
+		t.Fatalf("unexpected automatic latency-test settings: %#v", smart)
 	}
 	members := smart["proxies"].([]any)
 	if len(members) != 2 || members[0] != "24587" || members[1] != "24588" {
@@ -2400,5 +2400,25 @@ func TestApplyAgentRuntimeDNSFallbackFiltersOnlySmartDNSFromMixedLists(t *testin
 	policy := dns["nameserver-policy"].(map[string]any)
 	if got := policy["geosite:cn"].([]any); len(got) != 1 || got[0] != "223.5.5.5" {
 		t.Fatalf("mixed nameserver-policy list not safely filtered: %#v", got)
+	}
+}
+
+func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T) {
+	custom := []any{map[string]any{
+		"name": SmartDNSGroupName, "type": "url-test",
+		"proxies": []any{"old-node"}, "url": "https://www.gstatic.com/generate_204", "interval": 30,
+	}}
+	generated := []any{map[string]any{
+		"name": SmartDNSGroupName, "type": "url-test",
+		"proxies": []any{"new-node"}, "url": "https://www.gstatic.com/generate_204",
+		"interval": 30, "tolerance": 50,
+	}}
+	got, err := mergeManagedProxyGroupValues(custom, generated)
+	if err != nil { t.Fatal(err) }
+	if len(got) != 1 { t.Fatalf("expected one managed group, got %#v", got) }
+	group := got[0].(map[string]any)
+	members := group["proxies"].([]any)
+	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 {
+		t.Fatalf("url-test group was not refreshed atomically: %#v", group)
 	}
 }

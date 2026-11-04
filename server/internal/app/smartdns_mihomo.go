@@ -15,8 +15,8 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 	if plan.Mode != SmartDNSProxyModeShared {
 		return document, nil
 	}
-	if plan.Strategy != "" && plan.Strategy != SmartDNSDefaultStrategy {
-		return "", fmt.Errorf("SmartDNS shared fallback 策略无效")
+	if plan.Strategy != "" && plan.Strategy != SmartDNSStrategyFallback && plan.Strategy != SmartDNSStrategyURLTest && plan.Strategy != SmartDNSStrategySelect {
+		return "", fmt.Errorf("SmartDNS shared proxy 策略无效: %q", plan.Strategy)
 	}
 	var root map[string]any
 	if err := yaml.Unmarshal([]byte(document), &root); err != nil {
@@ -27,13 +27,15 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 	}
 	groups, _ := root["proxy-groups"].([]any)
 	// Refuse to silently replace an operator-owned group with the reserved name.
+	if plan.Strategy != SmartDNSStrategySelect {
 	for _, raw := range groups {
 		group, ok := raw.(map[string]any)
 		if ok && group["name"] == SmartDNSGroupName {
 			return "", fmt.Errorf("代理组名称 %q 已被占用", SmartDNSGroupName)
 		}
 	}
-	if len(plan.ProxyNames) > 0 {
+	}
+	if len(plan.ProxyNames) > 0 && plan.Strategy != SmartDNSStrategySelect {
 		proxies := make([]any, 0, len(plan.ProxyNames))
 		for _, name := range plan.ProxyNames {
 			if strings.TrimSpace(name) == "" {
@@ -41,17 +43,49 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 			}
 			proxies = append(proxies, name)
 		}
-		groups = append(groups, map[string]any{
+		group := map[string]any{
 			"name": SmartDNSGroupName,
-			"type": "fallback",
+			"type": plan.Strategy,
 			"proxies": proxies,
-			"url": "https://www.gstatic.com/generate_204",
-			"interval": 30,
-			"timeout": 5000,
-			"lazy": false,
-			"expected-status": 204,
-		})
+		}
+		// url-test continuously probes every eligible proxy and automatically
+		// selects the lowest-latency healthy egress. fallback preserves ordered
+		// failover, while select exposes a persistent operator-controlled choice.
+		if plan.Strategy == SmartDNSStrategyURLTest || plan.Strategy == SmartDNSStrategyFallback {
+			group["url"] = "https://www.gstatic.com/generate_204"
+			group["interval"] = 30
+			group["timeout"] = 5000
+			group["lazy"] = false
+			group["expected-status"] = 204
+		}
+		if plan.Strategy == SmartDNSStrategyURLTest {
+			group["tolerance"] = 50
+		}
+		groups = append(groups, group)
 		root["proxy-groups"] = groups
+	}
+	if plan.Strategy == SmartDNSStrategySelect && len(plan.ProxyNames) > 0 {
+		foundSelectableProxyGroup := false
+		for _, raw := range groups {
+			group, ok := raw.(map[string]any)
+			if !ok || group["name"] != "PROXY" { continue }
+			if group["type"] != "select" {
+				return "", fmt.Errorf("SmartDNS 手动出口模式要求 PROXY 分组类型为 select")
+			}
+			members, ok := group["proxies"].([]any)
+			if !ok { return "", fmt.Errorf("PROXY 手动选择分组缺少有效节点列表") }
+			memberSet := make(map[string]bool, len(members))
+			for _, member := range members {
+				if name, ok := member.(string); ok { memberSet[name] = true }
+			}
+			foundSelectableProxyGroup = true
+			for _, name := range plan.ProxyNames {
+				if !memberSet[name] {
+					return "", fmt.Errorf("PROXY 手动选择分组缺少启用的代理 %q", name)
+				}
+			}
+		}
+		if !foundSelectableProxyGroup { return "", fmt.Errorf("SmartDNS 手动出口模式需要存在 PROXY 选择分组") }
 	}
 
 	rules, ok := root["rules"].([]any)
@@ -73,7 +107,8 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 			if replaced {
 				continue
 			}
-			target := SmartDNSGroupName
+			target := plan.GroupName
+			if target == "" { target = SmartDNSGroupName }
 			if len(plan.ProxyNames) == 0 {
 				target = "REJECT"
 			}
@@ -114,7 +149,8 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		}
 		rules = append(rules, nil)
 		copy(rules[insertAt+1:], rules[insertAt:])
-		target := SmartDNSGroupName
+		target := plan.GroupName
+		if target == "" { target = SmartDNSGroupName }
 		if len(plan.ProxyNames) == 0 { target = "REJECT" }
 		rules[insertAt] = "PROCESS-NAME,smartdns," + target
 	}

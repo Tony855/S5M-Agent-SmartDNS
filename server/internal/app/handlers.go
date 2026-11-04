@@ -236,11 +236,13 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, "SmartDNS 模式必须是 shared；留空可恢复旧行为")
 				return
 			}
-			if cfg.Strategy != "" && cfg.Strategy != SmartDNSDefaultStrategy {
-				writeErr(w, http.StatusBadRequest, "当前 SmartDNS 统一代理策略仅支持 fallback")
+			if cfg.Strategy != "" && cfg.Strategy != SmartDNSStrategyFallback && cfg.Strategy != SmartDNSStrategyURLTest && cfg.Strategy != SmartDNSStrategySelect {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 策略必须是 fallback、url-test 或 select")
 				return
 			}
-			cfg.Strategy = SmartDNSDefaultStrategy
+			if cfg.Strategy == "" {
+				cfg.Strategy = SmartDNSDefaultStrategy
+			}
 			normalized, err := json.Marshal(cfg)
 			if err != nil {
 				writeErr(w, http.StatusBadRequest, "SmartDNS 路由设置无法序列化")

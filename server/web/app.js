@@ -112,6 +112,8 @@ createApp({
     const applyingSmartDNS = ref(false);
     const smartdnsResult = ref('');
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
+    const smartdnsRoutingStrategy = ref('url-test');
+    const savingSmartDNSRouting = ref(false);
     let smartdnsLoadGeneration = 0;
     let smartdnsApplyGeneration = 0;
     watch(selectedConfigNode, (code) => {
@@ -1754,6 +1756,51 @@ createApp({
       } catch (e) {
         subUrl.value = fallback;
       }
+      try {
+        const res = await api('/api/v1/settings');
+        const settings = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(settings.error || '读取 SmartDNS 出口策略失败');
+        const hasRoutingSetting = Object.prototype.hasOwnProperty.call(settings, 'smartdns_routing_config');
+        const raw = String(settings.smartdns_routing_config || '').trim();
+        if (!hasRoutingSetting) {
+          smartdnsRoutingStrategy.value = 'url-test';
+        } else if (!raw) {
+          smartdnsRoutingStrategy.value = 'legacy';
+        } else {
+          const routing = JSON.parse(raw);
+          smartdnsRoutingStrategy.value = ['url-test', 'select', 'fallback'].includes(routing.strategy)
+            ? routing.strategy : 'url-test';
+        }
+      } catch (e) {
+        console.warn('读取 SmartDNS 上游出口策略失败', e);
+      }
+    };
+
+    const saveSmartDNSRoutingStrategy = async () => {
+      if (savingSmartDNSRouting.value) return;
+      const strategy = String(smartdnsRoutingStrategy.value || 'url-test');
+      if (!['url-test', 'select', 'fallback', 'legacy'].includes(strategy)) {
+        showMsg('SmartDNS 出口策略无效', 'error');
+        return;
+      }
+      savingSmartDNSRouting.value = true;
+      try {
+        const routing = strategy === 'legacy' ? '' : JSON.stringify({ mode: 'shared', strategy });
+        const res = await api('/api/v1/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ smartdns_routing_config: routing })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.message || '保存 SmartDNS 出口策略失败');
+        showMsg(data.message || 'SmartDNS 出口策略已保存，节点配置已同步', 'success');
+        await loadSettings();
+      } catch (e) {
+        showMsg(e.message || '保存 SmartDNS 出口策略失败', 'error');
+        await loadSettings();
+      } finally {
+        savingSmartDNSRouting.value = false;
+      }
     };
 
     onMounted(() => {
@@ -1785,6 +1832,7 @@ createApp({
       configYaml, configTunEnabled, configDnsEnabled, configDnsNameservers, syncConfigQuickSettingsFromYaml, applyConfigQuickSettings,
       selectedConfigNode, savingConfig, publishing, updatingKernel,
       smartdnsYaml, loadingSmartDNS, applyingSmartDNS, smartdnsResult, smartdnsStatus, loadSmartDNSConfig, applySmartDNSConfig,
+      smartdnsRoutingStrategy, savingSmartDNSRouting, saveSmartDNSRoutingStrategy,
       kernelUpdateDialog, kernelUpdateMachineCode, kernelUpdateVersion, kernelUpdateSHA256, queueingKernelUpdate, kernelUpdateInfo, kernelUpdateInfoLoading,
       openAgentKernelUpdate, loadAgentKernelUpdateInfo, queueAgentKernelUpdate,
       systemLogs, loadingSystemLogs, restoringBackup, loadSystemLogs, downloadBackup, restoreBackup,
