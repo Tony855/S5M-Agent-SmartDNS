@@ -451,3 +451,30 @@ func TestProxyReadsRejectCorruptExtensionJSON(t *testing.T) {
 		t.Fatalf("GetProxy error = %v, want extension JSON error", err)
 	}
 }
+
+func TestCreateProxyRejectsUnserializableExtensionConfig(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-json-marshal.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	proxy := &Proxy{
+		Name: "invalid-extra",
+		Type: "socks5",
+		Server: "127.0.0.1",
+		Port: 1080,
+		Enabled: true,
+		Extra: map[string]any{"unsupported": make(chan int)},
+	}
+	if err := store.CreateProxy(proxy); err == nil || !strings.Contains(err.Error(), "序列化") {
+		t.Fatalf("CreateProxy error = %v, want serialization error", err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM proxies WHERE name='invalid-extra'`).Scan(&count); err != nil {
+		t.Fatalf("count proxy rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("invalid proxy rows = %d, want 0", count)
+	}
+}
