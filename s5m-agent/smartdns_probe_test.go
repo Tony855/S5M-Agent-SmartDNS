@@ -91,7 +91,7 @@ func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 				done <- err
 			}()
 
-			got := probeSmartDNSDNSAt(conn.LocalAddr().String())
+			got := probeSmartDNSDNSAtType(conn.LocalAddr().String(), 1)
 			if got != tt.want {
 				t.Errorf("probeSmartDNSDNSAt() = %v, want %v", got, tt.want)
 			}
@@ -104,6 +104,146 @@ func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 				t.Fatal("DNS test server did not finish")
 			}
 		})
+	}
+}
+
+func TestSmartDNSResponseRequiresRequestedAddressRecord(t *testing.T) {
+	makeResponse := func(rrType uint16, rdata []byte) []byte {
+		message := make([]byte, 12)
+		binary.BigEndian.PutUint16(message[0:2], 0x534d)
+		binary.BigEndian.PutUint16(message[2:4], 0x8180)
+		binary.BigEndian.PutUint16(message[4:6], 1)
+		binary.BigEndian.PutUint16(message[6:8], 1)
+		message = append(message, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+		message = append(message, 0, 28, 0, 1)
+		message = append(message, 0xc0, 0x0c)
+		record := make([]byte, 10)
+		binary.BigEndian.PutUint16(record[0:2], rrType)
+		binary.BigEndian.PutUint16(record[2:4], 1)
+		binary.BigEndian.PutUint32(record[4:8], 60)
+		binary.BigEndian.PutUint16(record[8:10], uint16(len(rdata)))
+		message = append(message, record...)
+		message = append(message, rdata...)
+		return message
+	}
+
+	t.Run("AAAA address record passes", func(t *testing.T) {
+		response := makeResponse(28, make([]byte, net.IPv6len))
+		if !smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("valid AAAA answer was rejected")
+		}
+	})
+	t.Run("CNAME only does not pass AAAA health", func(t *testing.T) {
+		response := makeResponse(5, []byte{0xc0, 0x0c})
+		if smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("CNAME-only response incorrectly passed AAAA health")
+		}
+	})
+	t.Run("wrong address family does not pass", func(t *testing.T) {
+		response := makeResponse(1, make([]byte, net.IPv4len))
+		if smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("A record incorrectly passed AAAA health")
+		}
+	})
+}
+
+func TestProbeSmartDNSDNSAtQueriesAAAAAfterA(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 2; i++ {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			query := make([]byte, 1500)
+			n, client, readErr := conn.ReadFromUDP(query)
+			if readErr != nil {
+				done <- readErr
+				return
+			}
+			qtype := binary.BigEndian.Uint16(query[n-4 : n-2])
+			response := append([]byte(nil), query[:n]...)
+			binary.BigEndian.PutUint16(response[2:4], 0x8180)
+			// Return a complete, valid A RR, but an empty NOERROR AAAA response.
+			if qtype == 1 {
+				binary.BigEndian.PutUint16(response[6:8], 1)
+				response = append(response, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+			} else {
+				binary.BigEndian.PutUint16(response[6:8], 0)
+			}
+			if _, writeErr := conn.WriteToUDP(response, client); writeErr != nil {
+				done <- writeErr
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	if probeSmartDNSDNSAt(conn.LocalAddr().String()) {
+		t.Fatal("A success must not hide an empty AAAA response")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProbeSmartDNSDNSTCPAtQueriesAAAAAfterA(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 2; i++ {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				done <- acceptErr
+				return
+			}
+			var size [2]byte
+			if _, readErr := io.ReadFull(conn, size[:]); readErr != nil {
+				conn.Close()
+				done <- readErr
+				return
+			}
+			query := make([]byte, int(binary.BigEndian.Uint16(size[:])))
+			if _, readErr := io.ReadFull(conn, query); readErr != nil {
+				conn.Close()
+				done <- readErr
+				return
+			}
+			qtype := binary.BigEndian.Uint16(query[len(query)-4 : len(query)-2])
+			binary.BigEndian.PutUint16(query[2:4], 0x8180)
+			if qtype == 1 {
+				binary.BigEndian.PutUint16(query[6:8], 1)
+				query = append(query, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+			} else {
+				binary.BigEndian.PutUint16(query[6:8], 0)
+			}
+			binary.BigEndian.PutUint16(size[:], uint16(len(query)))
+			_, writeErr := conn.Write(size[:])
+			if writeErr == nil {
+				_, writeErr = conn.Write(query)
+			}
+			conn.Close()
+			if writeErr != nil {
+				done <- writeErr
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
+		t.Fatal("A success must not hide an empty AAAA TCP response")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -132,7 +272,7 @@ func TestProbeSmartDNSDNSAtRejectsMismatchedTransactionID(t *testing.T) {
 		done <- err
 	}()
 
-	if probeSmartDNSDNSAt(conn.LocalAddr().String()) {
+	if probeSmartDNSDNSAtType(conn.LocalAddr().String(), 1) {
 		t.Fatal("probe accepted a response with a mismatched transaction ID")
 	}
 	if err := <-done; err != nil {
@@ -177,7 +317,7 @@ func TestProbeSmartDNSDNSTCPAt(t *testing.T) {
 				}
 				done <- err
 			}()
-			got := probeSmartDNSDNSTCPAt(listener.Addr().String())
+			got := probeSmartDNSDNSTCPAtType(listener.Addr().String(), 1)
 			if got != (answerCount > 0) {
 				t.Fatalf("probe = %v, want %v", got, answerCount > 0)
 			}
@@ -552,7 +692,7 @@ func TestProbeSmartDNSDNSTCPAtRejectsInvalidDNSResponses(t *testing.T) {
 				if _, err = conn.Write(size[:]); err == nil { _, err = conn.Write(query) }
 				done <- err
 			}()
-			if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
+			if probeSmartDNSDNSTCPAtType(listener.Addr().String(), 1) {
 				t.Fatal("probe accepted an invalid DNS response")
 			}
 			if err := <-done; err != nil { t.Fatal(err) }
@@ -596,7 +736,7 @@ func TestProbeSmartDNSDNSTCPAtRejectsMismatchedTransactionID(t *testing.T) {
 		done <- err
 	}()
 
-	if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
+	if probeSmartDNSDNSTCPAtType(listener.Addr().String(), 1) {
 		t.Fatal("probe accepted a response with a mismatched transaction ID")
 	}
 	if err := <-done; err != nil {
@@ -775,7 +915,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		collectSmartDNSStatusWithDependencies(status, deps)
 		assert(t, status, "smartdns_running", true)
 		assert(t, status, "smartdns_dns_healthy", false)
-		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
+		assert(t, status, "smartdns_last_error", "SmartDNS A/AAAA UDP/TCP DNS 查询探测失败")
 	})
 
 	t.Run("stopped process is restarted by s6 before controller fallback", func(t *testing.T) {

@@ -481,7 +481,7 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		if !processHealthy {
 			appendSmartDNSStatusError(status, "SmartDNS 进程未运行或进程检测失败")
 		} else {
-			appendSmartDNSStatusError(status, "SmartDNS UDP/TCP DNS 查询探测失败")
+			appendSmartDNSStatusError(status, "SmartDNS A/AAAA UDP/TCP DNS 查询探测失败")
 		}
 		return
 	}
@@ -929,6 +929,12 @@ func probeSmartDNSDNS() bool {
 }
 
 func probeSmartDNSDNSAt(address string) bool {
+	// A and AAAA are separate dataplanes in SmartDNS. A successful IPv4
+	// lookup must not mask a broken IPv6/AAAA path.
+	return probeSmartDNSDNSAtType(address, 1) && probeSmartDNSDNSAtType(address, 28)
+}
+
+func probeSmartDNSDNSAtType(address string, qtype uint16) bool {
 	conn, err := net.DialTimeout("udp", address, 800*time.Millisecond)
 	if err != nil {
 		return false
@@ -943,7 +949,7 @@ func probeSmartDNSDNSAt(address string) bool {
 		query = append(query, byte(len(label)))
 		query = append(query, label...)
 	}
-	query = append(query, 0, 0, 1, 0, 1) // QNAME terminator, A, IN
+	query = append(query, 0, byte(qtype>>8), byte(qtype), 0, 1) // QNAME terminator, requested type, IN
 	if _, err := conn.Write(query); err != nil {
 		return false
 	}
@@ -955,20 +961,112 @@ func probeSmartDNSDNSAt(address string) bool {
 	if binary.BigEndian.Uint16(response[0:2]) != binary.BigEndian.Uint16(query[0:2]) {
 		return false
 	}
-	flags := binary.BigEndian.Uint16(response[2:4])
-	// A healthy A lookup must be a complete DNS response with NOERROR and
-	// at least one answer. Reject mismatched IDs, truncated responses,
-	// NXDOMAIN, REFUSED, SERVFAIL, and empty NOERROR responses.
-	answerCount := binary.BigEndian.Uint16(response[6:8])
-	questionCount := binary.BigEndian.Uint16(response[4:6])
-	return flags&0x8000 != 0 && flags&0x0200 == 0 &&
-		flags&0x7800 == 0 && flags&0x000f == 0 &&
-		questionCount == 1 && answerCount > 0
+	return smartDNSResponseHasAnswer(response[:n], binary.BigEndian.Uint16(query[:2]), qtype)
+}
+
+
+// smartDNSResponseHasAnswer validates the DNS envelope and requires an actual
+// IN answer RR of the requested type. A CNAME-only response must not make an
+// AAAA health probe pass when the target has no AAAA record.
+func smartDNSResponseHasAnswer(message []byte, transactionID, qtype uint16) bool {
+	if len(message) < 12 ||
+		binary.BigEndian.Uint16(message[0:2]) != transactionID {
+		return false
+	}
+	flags := binary.BigEndian.Uint16(message[2:4])
+	questionCount := binary.BigEndian.Uint16(message[4:6])
+	answerCount := binary.BigEndian.Uint16(message[6:8])
+	if flags&0x8000 == 0 || flags&0x0200 != 0 ||
+		flags&0x7800 != 0 || flags&0x000f != 0 ||
+		questionCount != 1 || answerCount == 0 {
+		return false
+	}
+
+	offset, ok := skipSmartDNSName(message, 12)
+	if !ok || offset+4 > len(message) ||
+		binary.BigEndian.Uint16(message[offset:offset+2]) != qtype ||
+		binary.BigEndian.Uint16(message[offset+2:offset+4]) != 1 {
+		return false
+	}
+	offset += 4
+
+	for i := 0; i < int(answerCount); i++ {
+		offset, ok = skipSmartDNSName(message, offset)
+		if !ok || offset+10 > len(message) {
+			return false
+		}
+		rrType := binary.BigEndian.Uint16(message[offset : offset+2])
+		rrClass := binary.BigEndian.Uint16(message[offset+2 : offset+4])
+		rdataLength := int(binary.BigEndian.Uint16(message[offset+8 : offset+10]))
+		offset += 10
+		if offset+rdataLength > len(message) {
+			return false
+		}
+		validLength := qtype != 1 && qtype != 28 ||
+			(qtype == 1 && rdataLength == net.IPv4len) ||
+			(qtype == 28 && rdataLength == net.IPv6len)
+		if rrType == qtype && rrClass == 1 && validLength {
+			return true
+		}
+		offset += rdataLength
+	}
+	return false
+}
+
+// skipSmartDNSName advances over a DNS name, including compressed names.
+func skipSmartDNSName(message []byte, offset int) (int, bool) {
+	position := offset
+	next := -1
+	jumps := 0
+	for {
+		if position >= len(message) {
+			return 0, false
+		}
+		length := int(message[position])
+		if length&0xc0 == 0xc0 {
+			if position+1 >= len(message) {
+				return 0, false
+			}
+			pointer := (length&0x3f)<<8 | int(message[position+1])
+			if pointer >= len(message) {
+				return 0, false
+			}
+			if next < 0 {
+				next = position + 2
+			}
+			position = pointer
+			jumps++
+			if jumps > 128 {
+				return 0, false
+			}
+			continue
+		}
+		if length&0xc0 != 0 || length > 63 {
+			return 0, false
+		}
+		position++
+		if length == 0 {
+			if next >= 0 {
+				return next, true
+			}
+			return position, true
+		}
+		if position+length > len(message) {
+			return 0, false
+		}
+		position += length
+	}
 }
 
 // probeSmartDNSDNSTCPAt verifies a complete DNS-over-TCP response, including
 // the two-byte message length and matching transaction ID.
 func probeSmartDNSDNSTCPAt(address string) bool {
+	return probeSmartDNSDNSTCPAtType(address, 1) && probeSmartDNSDNSTCPAtType(address, 28)
+}
+
+// probeSmartDNSDNSTCPAtType verifies a complete DNS-over-TCP response for the
+// requested RR type, including framing and transaction ID.
+func probeSmartDNSDNSTCPAtType(address string, qtype uint16) bool {
 	conn, err := net.DialTimeout("tcp", address, 800*time.Millisecond)
 	if err != nil {
 		return false
@@ -983,7 +1081,7 @@ func probeSmartDNSDNSTCPAt(address string) bool {
 		query = append(query, byte(len(label)))
 		query = append(query, label...)
 	}
-	query = append(query, 0, 0, 1, 0, 1)
+	query = append(query, 0, byte(qtype>>8), byte(qtype), 0, 1)
 	frame := make([]byte, 2+len(query))
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(query)))
 	copy(frame[2:], query)
@@ -1002,17 +1100,8 @@ func probeSmartDNSDNSTCPAt(address string) bool {
 	if _, err := io.ReadFull(conn, response); err != nil {
 		return false
 	}
-	// Reject responses that do not belong to this query. A stray or
-	// spoofed TCP DNS frame must not make the resolver look healthy.
 	if binary.BigEndian.Uint16(response[:2]) != binary.BigEndian.Uint16(query[:2]) {
 		return false
 	}
-	flags := binary.BigEndian.Uint16(response[2:4])
-	questionCount := binary.BigEndian.Uint16(response[4:6])
-	answerCount := binary.BigEndian.Uint16(response[6:8])
-	// Keep TCP health criteria aligned with the UDP probe: only a complete,
-	// standard NOERROR response to our single question with an answer is healthy.
-	return flags&0x8000 != 0 && flags&0x0200 == 0 &&
-		flags&0x7800 == 0 && flags&0x000f == 0 &&
-		questionCount == 1 && answerCount > 0
+	return smartDNSResponseHasAnswer(response, binary.BigEndian.Uint16(query[:2]), qtype)
 }

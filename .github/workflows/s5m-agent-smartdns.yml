@@ -131,6 +131,11 @@ jobs:
           grep -q 'GetMachineProxyMode(machineCode)' server/internal/app/configgen.go
           grep -q 'CREATE TABLE IF NOT EXISTS machine_proxy_settings' server/internal/app/store.go
           grep -q 'DOMAIN-SUFFIX,v2net.cc,DIRECT' server/internal/app/configgen.go
+          grep -q 'PROCESS-NAME,smartdns,%s' server/internal/app/configgen.go
+          grep -q 'MATCH,REJECT' s5m-agent/smartdns/default-config-smartdns.yaml
+          ! grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
+          grep -q 'MATCH,REJECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
           grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/default-config.yaml
           grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'bind 127.0.0.1:6054 -group china-dot' s5m-agent/smartdns/smartdns.conf
@@ -191,6 +196,9 @@ jobs:
 
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh
+
+      - name: Validate standalone SmartDNS smoke-test shell syntax
+        run: sh -n docker/smartdns/tests/smoke-test.sh
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -277,11 +285,25 @@ jobs:
           }
           trap cleanup EXIT
 
+          # CI-only fixture routes SmartDNS directly while keeping all other
+          # traffic fail-closed. Production configs still require a selected proxy.
+          install -m 0600 "$GITHUB_WORKSPACE/s5m-agent/smartdns/tests/ci-mihomo-config.yaml" "$data_dir/config.yaml"
+
+          # The combined image defaults to TUN enabled; provide the same
+          # device and capability that the production Compose deployment grants.
+          sudo modprobe tun || true
+          if [[ ! -c /dev/net/tun ]]; then
+            sudo mkdir -p /dev/net
+            sudo mknod /dev/net/tun c 10 200
+            sudo chmod 600 /dev/net/tun
+          fi
           # The runner's default bridge is IPv4-only. Fake-IP IPv6 must be tested
           # in a namespace with a real IPv6 interface, not loopback-only IPv6.
           docker network create --ipv6 --subnet fd42:534d:5:1::/64 "$network" >/dev/null
           docker run -d --name "$container" --restart no \
             --network "$network" \
+            --cap-add=NET_ADMIN \
+            --device=/dev/net/tun:/dev/net/tun \
             --sysctl net.ipv6.conf.all.disable_ipv6=0 \
             --sysctl net.ipv6.conf.default.disable_ipv6=0 \
             -p 127.0.0.1::80/tcp \
@@ -296,7 +318,13 @@ jobs:
             sleep 2
           done
 
-          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+          if [[ "$health" != "healthy" ]]; then
+            echo "Container healthcheck did not become healthy: $health" >&2
+            docker inspect "$container" --format '{{json .State.Health}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
           docker exec "$container" pidof mihomo >/dev/null
           docker exec "$container" pidof smartdns >/dev/null
 
@@ -308,7 +336,13 @@ jobs:
             if [[ "$health" == "healthy" ]] && docker exec "$container" pidof smartdns >/dev/null 2>&1; then break; fi
             sleep 2
           done
-          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+          if [[ "$health" != "healthy" ]]; then
+            echo "Container healthcheck did not become healthy: $health" >&2
+            docker inspect "$container" --format '{{json .State.Health}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
           docker exec "$container" pidof mihomo >/dev/null
           docker exec "$container" pidof smartdns >/dev/null
           docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
@@ -328,15 +362,35 @@ jobs:
           # Test the loopback-only resolver from a helper sharing the Agent network namespace.
           docker exec "$container" sh -ec 'printf "%s\n" "mode: rule" "log-level: debug" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml; mkdir -p /tmp/mihomo-ipv6-smoke; /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml'
           docker exec -d "$container" sh -c '/usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml > /tmp/mihomo-ipv6-smoke.log 2>&1'
-          if ! docker run --rm --network "container:$container" alpine:3.24 sh -ec '
-            apk add --no-cache bind-tools >/dev/null
-            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
-            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
-            dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
-            dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
+          if ! docker exec "$container" sh -ec '
+            dig +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}(\.[0-9]{1,3}){3}$"
+            dig +tcp +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}(\.[0-9]{1,3}){3}$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 example.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 example.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
             SMARTDNS_AAAA="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS AAAA answer: %s\n" "$SMARTDNS_AAAA"
             printf "%s\n" "$SMARTDNS_AAAA" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS did not return an AAAA answer" >&2; exit 1; }
+            SMARTDNS_AAAA_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
+            printf "SmartDNS TCP AAAA answer: %s\n" "$SMARTDNS_AAAA_TCP"
+            printf "%s\n" "$SMARTDNS_AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP did not return an AAAA answer" >&2; exit 1; }
+            # Match the healthcheck domestic-policy listener coverage on ARM64.
+            for rrtype in A AAAA; do
+              domestic_domain=www.baidu.com
+              if [ "$rrtype" = AAAA ]; then domestic_domain=www.qq.com; fi
+              DOMESTIC_UDP="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 "$domestic_domain" "$rrtype" || true)"
+              DOMESTIC_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 "$domestic_domain" "$rrtype" || true)"
+              if [ "$rrtype" = AAAA ]; then
+                printf "%s\n" "$DOMESTIC_UDP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "Domestic UDP AAAA query failed" >&2; exit 1; }
+                printf "%s\n" "$DOMESTIC_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "Domestic TCP AAAA query failed" >&2; exit 1; }
+              else
+                printf "%s\n" "$DOMESTIC_UDP" | grep -Eq "^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$" || { echo "Domestic UDP A query failed" >&2; exit 1; }
+                printf "%s\n" "$DOMESTIC_TCP" | grep -Eq "^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$" || { echo "Domestic TCP A query failed" >&2; exit 1; }
+              fi
+            done
             # The isolated Mihomo process runs in the Agent container with TUN disabled for CI.
             A_RESULT=""
             for attempt in $(seq 1 20); do
@@ -354,14 +408,30 @@ jobs:
             docker exec "$container" cat /tmp/mihomo-ipv6-smoke.log >&2 || true
             exit 1
           fi
-          # Verify SmartDNS writes its cache to the persistent /data volume on graceful shutdown.
-          docker restart "$container" >/dev/null
+          # s6 needs 15s plus its 5s kill grace to flush SmartDNS persistent cache.
+          docker restart --time 30 "$container" >/dev/null
+          healthy=0
           for attempt in $(seq 1 30); do
-            if docker exec "$container" /healthcheck.sh; then break; fi
+            if docker exec "$container" /healthcheck.sh; then healthy=1; break; fi
             sleep 2
           done
-          docker exec "$container" test -s /data/smartdns.cache
-          docker run --rm --network "container:$container" alpine:3.24 sh -ec 'apk add --no-cache bind-tools >/dev/null; dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"'
+          if [[ "$healthy" != "1" ]]; then
+            echo "Container did not recover healthy after graceful restart" >&2
+            docker inspect "$container" --format '{{json .State}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker exec "$container" test -s /data/smartdns.cache; then
+            echo "SmartDNS persistent cache file missing after graceful restart" >&2
+            docker exec "$container" ls -la /data >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker exec "$container" sh -ec 'dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"'; then
+            echo "Domestic DNS listener failed after graceful restart" >&2
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
 
           # Verify the exact s6 service path used by Agent self-recovery.
           docker exec "$container" /command/s6-svc -r /run/service/smartdns
@@ -376,9 +446,8 @@ jobs:
           smartdns_pid="$(docker exec "$container" pidof smartdns | awk '{print $1}')"
           [[ -n "$smartdns_pid" ]]
           docker exec "$container" kill -STOP "$smartdns_pid"
-          if docker run --rm --network "container:$container" alpine:3.24 sh -ec '
-            apk add --no-cache bind-tools >/dev/null
-            ! dig +time=1 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          if docker exec "$container" sh -ec '
+            ! dig +short +time=1 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
           '; then
             :
           else
@@ -445,9 +514,21 @@ jobs:
           }
           trap cleanup EXIT
 
+          # Use the same isolated, test-only SmartDNS egress fixture as AMD64.
+          install -m 0600 "$GITHUB_WORKSPACE/s5m-agent/smartdns/tests/ci-mihomo-config.yaml" "$data_dir/config.yaml"
+
+          # Match production TUN permissions for the default TUN-enabled image.
+          sudo modprobe tun || true
+          if [[ ! -c /dev/net/tun ]]; then
+            sudo mkdir -p /dev/net
+            sudo mknod /dev/net/tun c 10 200
+            sudo chmod 600 /dev/net/tun
+          fi
           docker network create --ipv6 --subnet fd42:534d:5:2::/64 "$network" >/dev/null
           docker run -d --name "$container" --restart no \
             --network "$network" \
+            --cap-add=NET_ADMIN \
+            --device=/dev/net/tun:/dev/net/tun \
             --sysctl net.ipv6.conf.all.disable_ipv6=0 \
             --sysctl net.ipv6.conf.default.disable_ipv6=0 \
             -p 127.0.0.1::80/tcp \
@@ -461,7 +542,13 @@ jobs:
             sleep 2
           done
 
-          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+          if [[ "$health" != "healthy" ]]; then
+            echo "Container healthcheck did not become healthy: $health" >&2
+            docker inspect "$container" --format '{{json .State.Health}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
           docker exec "$container" sh -ec 'test "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" = 0; ip -6 addr show dev eth0 | grep -q "fd42:534d:5:2:"'
           docker exec "$container" /healthcheck.sh
           docker exec "$container" pidof mihomo >/dev/null
@@ -475,7 +562,13 @@ jobs:
             if [[ "$health" == "healthy" ]] && docker exec "$container" pidof smartdns >/dev/null 2>&1; then break; fi
             sleep 2
           done
-          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+          if [[ "$health" != "healthy" ]]; then
+            echo "Container healthcheck did not become healthy: $health" >&2
+            docker inspect "$container" --format '{{json .State.Health}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
           docker exec "$container" pidof mihomo >/dev/null
           docker exec "$container" pidof smartdns >/dev/null
           docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
@@ -492,12 +585,15 @@ jobs:
           # Exercise real UDP and TCP DNS queries through SmartDNS in ARM64 too.
           docker exec "$container" sh -ec 'printf "%s\n" "mode: rule" "log-level: info" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml; mkdir -p /tmp/mihomo-ipv6-smoke; /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml'
           docker exec -d "$container" sh -c '/usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml > /tmp/mihomo-ipv6-smoke.log 2>&1'
-          if ! docker run --rm --network "container:$container" alpine:3.24 sh -ec '
-            apk add --no-cache bind-tools >/dev/null
-            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
-            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
-            dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
-            dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
+          if ! docker exec "$container" sh -ec '
+            dig +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +tcp +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
             SMARTDNS_AAAA="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS AAAA answer: %s\n" "$SMARTDNS_AAAA"
             printf "%s\n" "$SMARTDNS_AAAA" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS did not return an AAAA answer" >&2; exit 1; }
@@ -514,14 +610,30 @@ jobs:
             docker exec "$container" cat /tmp/mihomo-ipv6-smoke.log >&2 || true
             exit 1
           fi
-          # Verify SmartDNS writes its cache to the persistent /data volume on graceful shutdown.
-          docker restart "$container" >/dev/null
+          # s6 needs 15s plus its 5s kill grace to flush SmartDNS persistent cache.
+          docker restart --time 30 "$container" >/dev/null
+          healthy=0
           for attempt in $(seq 1 30); do
-            if docker exec "$container" /healthcheck.sh; then break; fi
+            if docker exec "$container" /healthcheck.sh; then healthy=1; break; fi
             sleep 2
           done
-          docker exec "$container" test -s /data/smartdns.cache
-          docker run --rm --network "container:$container" alpine:3.24 sh -ec 'apk add --no-cache bind-tools >/dev/null; dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"'
+          if [[ "$healthy" != "1" ]]; then
+            echo "Container did not recover healthy after graceful restart" >&2
+            docker inspect "$container" --format '{{json .State}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker exec "$container" test -s /data/smartdns.cache; then
+            echo "SmartDNS persistent cache file missing after graceful restart" >&2
+            docker exec "$container" ls -la /data >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker exec "$container" sh -ec 'dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"'; then
+            echo "Domestic DNS listener failed after graceful restart" >&2
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
 
           if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
             echo "Mihomo controller API 8088 must not be published" >&2
