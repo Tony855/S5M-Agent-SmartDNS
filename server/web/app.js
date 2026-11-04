@@ -1305,7 +1305,8 @@ createApp({
             mihomoRunning: online && (status.mihomo_process_running === true || (status.mihomo_process_running === undefined && status.mihomo_healthy === true)),
             mihomoApiHealthy: online && (status.mihomo_api_healthy === true || status.mihomo_healthy === true),
             mihomoVersion,
-            smartdnsAvailable: status.smartdns_available === true,
+            smartdnsBinaryAvailable: status.smartdns_available === true,
+            smartdnsAvailable: status.smartdns_available === true && status.smartdns_control_supported === true,
             smartdnsEnabled: typeof item.smartdns_enabled === 'boolean'
               ? item.smartdns_enabled
               : (status.smartdns_enabled === true || (status.smartdns_enabled === undefined && status.smartdns_running === true)),
