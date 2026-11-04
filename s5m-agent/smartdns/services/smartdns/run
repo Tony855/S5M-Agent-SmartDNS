@@ -1,3 +1,8 @@
 #!/command/with-contenv sh
 set -eu
+# The disabled marker is persistent in /data, so s6 never starts SmartDNS
+# automatically after a container restart when the operator disabled it.
+if [ -f /data/smartdns.disabled ]; then
+  exit 0
+fi
 exec /usr/sbin/smartdns -f -x -c /data/smartdns.conf
