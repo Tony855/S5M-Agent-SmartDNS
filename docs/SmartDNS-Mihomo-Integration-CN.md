@@ -1,6 +1,6 @@
 # SmartDNS 缓存接入说明（S5M / Mihomo）
 
-本方案把 SmartDNS 作为可选的本地缓存上游；Mihomo 仍然是客户端 DNS 入口和 Fake-IP/TUN 路由控制器。主控默认配置必须同时启用顶层 `ipv6: true` 与 `dns.ipv6: true`，并由 TUN 自动路由接管 IPv6 流量；只在 SmartDNS 上启用 AAAA 不代表客户端链路支持 IPv6。
+本方案把 SmartDNS 作为可选的本地缓存上游；Mihomo 仍然是客户端 DNS 入口和 Fake-IP/TUN 路由控制器。主控默认配置必须同时启用顶层 `ipv6: true`、`dns.ipv6: true`，并设置 `dns.fake-ip-range6` IPv6 地址池，并由 TUN 自动路由接管 IPv6 流量；只在 SmartDNS 上启用 AAAA 不代表客户端链路支持 IPv6。
 
 ## 推荐拓扑
 
@@ -32,6 +32,7 @@ dns:
   listen: 127.0.0.1:5353
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
+  fake-ip-range6: fdfe:dcba:9876::1/64
   respect-rules: true
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query
