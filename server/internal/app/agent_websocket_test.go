@@ -1775,3 +1775,45 @@ func TestShouldLogAgentTelemetryRateLimitsPerNode(t *testing.T) {
 		t.Fatal("non-positive interval must disable logging")
 	}
 }
+
+
+
+func TestAgentWebSocketHandshakeRevalidatesBindingAfterUpgrade(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+
+	// Hold the session/revocation mutex so the handler completes its initial
+	// JWT check and HTTP upgrade, then blocks before registering the socket.
+	app.agentWSMu.Lock()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+	if err != nil {
+		app.agentWSMu.Unlock()
+		t.Fatalf("dial authenticated WebSocket: err=%v response=%v", err, response)
+	}
+	defer conn.Close()
+
+	// Model the revocation transaction winning the lock race after the first
+	// authentication check but before the upgraded socket can register.
+	if err := app.store.DeleteAgentBinding(code); err != nil {
+		app.agentWSMu.Unlock()
+		t.Fatalf("revoke binding during handshake: %v", err)
+	}
+	app.agentWSMu.Unlock()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var welcome map[string]any
+	if err := conn.ReadJSON(&welcome); err == nil {
+		t.Fatalf("revoked Agent unexpectedly received WebSocket frame: %#v", welcome)
+	}
+
+	settings, err := app.store.GetSettings()
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if settings["agent_lastseen_"+code] != "" || settings["agent_status_"+code] != "" {
+		t.Fatalf("revoked handshake mutated Agent state: lastseen=%q status=%q", settings["agent_lastseen_"+code], settings["agent_status_"+code])
+	}
+}
