@@ -280,11 +280,21 @@ jobs:
           }
           trap cleanup EXIT
 
+          # The combined image defaults to TUN enabled; provide the same
+          # device and capability that the production Compose deployment grants.
+          sudo modprobe tun || true
+          if [[ ! -c /dev/net/tun ]]; then
+            sudo mkdir -p /dev/net
+            sudo mknod /dev/net/tun c 10 200
+            sudo chmod 600 /dev/net/tun
+          fi
           # The runner's default bridge is IPv4-only. Fake-IP IPv6 must be tested
           # in a namespace with a real IPv6 interface, not loopback-only IPv6.
           docker network create --ipv6 --subnet fd42:534d:5:1::/64 "$network" >/dev/null
           docker run -d --name "$container" --restart no \
             --network "$network" \
+            --cap-add=NET_ADMIN \
+            --device=/dev/net/tun:/dev/net/tun \
             --sysctl net.ipv6.conf.all.disable_ipv6=0 \
             --sysctl net.ipv6.conf.default.disable_ipv6=0 \
             -p 127.0.0.1::80/tcp \
@@ -497,9 +507,18 @@ jobs:
           }
           trap cleanup EXIT
 
+          # Match production TUN permissions for the default TUN-enabled image.
+          sudo modprobe tun || true
+          if [[ ! -c /dev/net/tun ]]; then
+            sudo mkdir -p /dev/net
+            sudo mknod /dev/net/tun c 10 200
+            sudo chmod 600 /dev/net/tun
+          fi
           docker network create --ipv6 --subnet fd42:534d:5:2::/64 "$network" >/dev/null
           docker run -d --name "$container" --restart no \
             --network "$network" \
+            --cap-add=NET_ADMIN \
+            --device=/dev/net/tun:/dev/net/tun \
             --sysctl net.ipv6.conf.all.disable_ipv6=0 \
             --sysctl net.ipv6.conf.default.disable_ipv6=0 \
             -p 127.0.0.1::80/tcp \
