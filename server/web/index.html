@@ -386,7 +386,7 @@
                     @change="enabled => setMachineSmartDNS(item.code, enabled)"
                   ></el-switch>
                   <span class="instance-summary-mihomo" :class="item.smartdnsRunning && item.smartdnsDNSHealthy ? 'is-running' : (item.smartdnsEnabled ? 'is-unknown' : 'is-stopped')">
-                    {{ !item.online ? 'Agent 离线' : (item.pendingCommand && item.pendingCommand.type === 'set_smartdns_enabled' ? '启停命令执行中' : (!item.smartdnsEnabled ? (item.smartdnsRunning ? '已禁用 · 检测到残留进程' : '已禁用 · 进程已停止') : (item.smartdnsRunning ? (item.smartdnsDNSHealthy ? '运行中 · DNS 健康' : (item.smartdnsDomesticListener ? '进程运行中 · DNS 异常' : '进程运行中 · 缺少国内 DNS 监听')) : '已启用 · 等待健康上报'))) }}
+                    {{ !item.online ? 'Agent 离线' : (item.pendingCommand && item.pendingCommand.type === 'set_smartdns_enabled' ? '启停命令执行中' : (!item.smartdnsEnabled ? (item.smartdnsRunning ? '已禁用 · 检测到残留进程' : '已禁用 · 进程已停止') : (item.smartdnsRunning ? (item.smartdnsDNSHealthy ? '运行中 · DNS 健康' : (item.smartdnsDomesticReported && !item.smartdnsDomesticListener ? '进程运行中 · 缺少国内 DNS 监听' : '进程运行中 · DNS 异常')) : '已启用 · 等待健康上报'))) }}
                   </span>
                   <span v-if="item.smartdnsLastError" class="instance-summary-error">{{ item.smartdnsLastError }}</span>
                   <span v-if="item.commandResult && item.commandResult.type === 'set_smartdns_enabled'" class="section-hint">
