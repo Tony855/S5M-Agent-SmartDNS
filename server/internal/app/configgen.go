@@ -532,17 +532,18 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 		status["smartdns_dns_healthy"] == true
 }
 
-func (a *App) agentHasDomesticSmartDNS(machineCode string) bool {
-	if strings.TrimSpace(machineCode) == "" { return false }
-	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil && desired == "false" { return false }
+func (a *App) agentSmartDNSDomesticListenerStatus(machineCode string) (bool, bool) {
+	if strings.TrimSpace(machineCode) == "" { return false, false }
 	value, err := a.store.GetSetting("agent_status_" + machineCode)
 	if err == nil && strings.TrimSpace(value) != "" {
 		var status map[string]any
 		if json.Unmarshal([]byte(value), &status) == nil {
-			if domestic, reported := status["smartdns_domestic_listener"].(bool); reported { return domestic }
+			if domestic, reported := status["smartdns_domestic_listener"].(bool); reported {
+				return domestic, true
+			}
 		}
 	}
-	// A fresh enable ACK proves that the Agent validated and probed both listeners.
+	// A successful enable ACK proves that the Agent validated and probed both listeners.
 	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil && desired == "true" {
 		var result map[string]any
 		if raw, readErr := a.store.GetSetting("agent_command_result_" + machineCode); readErr == nil &&
@@ -550,21 +551,28 @@ func (a *App) agentHasDomesticSmartDNS(machineCode string) bool {
 			result["type"] == "set_smartdns_enabled" && result["status"] == "success" && result["enabled"] == true {
 			if updatedAt, ok := result["updated_at"].(float64); ok && updatedAt > 0 && updatedAt <= 9.0e15 {
 				commandAge := time.Since(time.Unix(int64(updatedAt), 0))
-				if commandAge >= -30*time.Second && commandAge <= agentWSHeartbeatTTL { return true }
+				if commandAge >= -30*time.Second && commandAge <= agentWSHeartbeatTTL { return true, true }
 			}
 		}
 	}
-	return false
+	return false, false
 }
 
 // applyAgentRuntimeDNS derives the outgoing Agent config without mutating its persisted source.
 func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool, domesticListener ...bool) (string, error) {
 	if smartDNSHealthy {
-		if len(domesticListener) > 0 && domesticListener[0] {
-			return routeAgentDNSViaSmartDNSWithDomestic(yml)
+		if len(domesticListener) > 0 {
+			if domesticListener[0] {
+				return routeAgentDNSViaSmartDNSWithDomestic(yml)
+			}
+			// A new Agent explicitly reports that the domestic listener is
+			// absent: keep primary SmartDNS, but restore domestic fallback DNS.
+			fallback, err := routeAgentDNSFallbackIfSmartDNS(yml)
+			if err != nil { return "", err }
+			return routeAgentDNSViaSmartDNS(fallback)
 		}
 		// Older Agent builds do not report the domestic listener capability.
-		// Preserve their historical primary-listener-only routing.
+		// Preserve their exact historical primary-only routing and policy.
 		return routeAgentDNSViaSmartDNS(yml)
 	}
 	// Never leave the generated SmartDNS loopback as the only resolver when
