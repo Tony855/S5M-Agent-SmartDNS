@@ -1760,9 +1760,12 @@ createApp({
         const res = await api('/api/v1/settings');
         const settings = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(settings.error || '读取 SmartDNS 出口策略失败');
+        const hasRoutingSetting = Object.prototype.hasOwnProperty.call(settings, 'smartdns_routing_config');
         const raw = String(settings.smartdns_routing_config || '').trim();
-        if (!raw) {
+        if (!hasRoutingSetting) {
           smartdnsRoutingStrategy.value = 'url-test';
+        } else if (!raw) {
+          smartdnsRoutingStrategy.value = 'legacy';
         } else {
           const routing = JSON.parse(raw);
           smartdnsRoutingStrategy.value = ['url-test', 'select', 'fallback'].includes(routing.strategy)
@@ -1776,13 +1779,13 @@ createApp({
     const saveSmartDNSRoutingStrategy = async () => {
       if (savingSmartDNSRouting.value) return;
       const strategy = String(smartdnsRoutingStrategy.value || 'url-test');
-      if (!['url-test', 'select', 'fallback'].includes(strategy)) {
+      if (!['url-test', 'select', 'fallback', 'legacy'].includes(strategy)) {
         showMsg('SmartDNS 出口策略无效', 'error');
         return;
       }
       savingSmartDNSRouting.value = true;
       try {
-        const routing = JSON.stringify({ mode: 'shared', strategy });
+        const routing = strategy === 'legacy' ? '' : JSON.stringify({ mode: 'shared', strategy });
         const res = await api('/api/v1/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
