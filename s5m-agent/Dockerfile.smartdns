@@ -109,5 +109,5 @@ ENV S6_KEEP_ENV=1 \
 VOLUME ["/data"]
 EXPOSE 80 6053/udp 6053/tcp
 STOPSIGNAL SIGTERM
-HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 CMD ["/healthcheck.sh"]
+HEALTHCHECK --interval=30s --timeout=20s --start-period=25s --retries=3 CMD ["/healthcheck.sh"]
 ENTRYPOINT ["/init"]
