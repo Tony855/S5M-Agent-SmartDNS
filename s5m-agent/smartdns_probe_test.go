@@ -1439,12 +1439,12 @@ esac
 `
 	if err := os.WriteFile(dig, []byte(script), 0700); err != nil { t.Fatal(err) }
 	t.Setenv("PATH", dir)
-	config := []byte("dns:\\n  listen: 127.0.0.1:5353\\n  ipv6: true\\n")
+	config := []byte("dns:\n  listen: 127.0.0.1:5353\n  ipv6: true\n")
 	if !probeMihomoDNSFallback(config) { t.Fatal("valid local A/AAAA fallback probes should pass") }
-	if probeMihomoDNSFallback([]byte("dns:\\n  listen: 8.8.8.8:53\\n  ipv6: true\\n")) {
+	if probeMihomoDNSFallback([]byte("dns:\n  listen: 8.8.8.8:53\n  ipv6: true\n")) {
 		t.Fatal("remote DNS listener must not be treated as a local fallback resolver")
 	}
-	if probeMihomoDNSFallback([]byte("dns:\\n  ipv6: true\\n")) {
+	if probeMihomoDNSFallback([]byte("dns:\n  ipv6: true\n")) {
 		t.Fatal("missing local DNS listener must fail closed")
 	}
 }
