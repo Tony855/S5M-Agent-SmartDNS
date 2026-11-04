@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -365,6 +366,14 @@ func (a *App) handleListProxies(w http.ResponseWriter, r *http.Request) {
 func (a *App) validateProxy(p *Proxy) string {
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" { return "名称不能为空" }
+	if len(p.Name) > 100 { return "代理名称不能超过 100 个字符" }
+	if strings.Contains(p.Name, ",") || strings.IndexFunc(p.Name, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return "代理名称不能包含逗号或控制字符"
+	}
+	switch strings.ToUpper(p.Name) {
+	case "PROXY", "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL":
+		return "代理名称与 Mihomo 内置策略或托管分组名称冲突"
+	}
 	p.MachineCode = strings.TrimSpace(p.MachineCode)
 	if p.MachineCode != "" && p.MachineCode != "__GLOBAL__" && (len(p.MachineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(p.MachineCode)) {
 		return "关联机器码格式错误；留空表示未绑定，或选择全局节点"
@@ -374,7 +383,7 @@ func (a *App) validateProxy(p *Proxy) string {
 	p.Type = normalizeProxyType(p.Type)
 	p.Server = strings.TrimSpace(p.Server)
 	switch p.Type { case "socks5", "http", "ss", "vmess", "vless", "trojan": default: return "代理类型无效，必须是 socks5、http、ss、vmess、vless 或 trojan" }
-	if p.Server == "" { return "代理必须填写类型、服务器和端口" }
+	if p.Server == "" || strings.ContainsAny(p.Server, " \t\r\n") { return "代理必须填写有效的服务器地址和端口，服务器地址不能包含空白字符" }
 	if p.Port < 1 || p.Port > 65535 { return "代理端口必须在 1-65535 之间" }
 	p.SourceCIDR = strings.TrimSpace(p.SourceCIDR)
 	if p.SourceCIDR == "" { p.SourceCIDR = "0.0.0.0/0" }
@@ -427,7 +436,11 @@ func (a *App) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 		p.Extra = map[string]any{}
 	}
 	if err := a.store.UpdateProxy(&p); err != nil {
-		writeErr(w, 409, err.Error())
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "代理不存在")
+		} else {
+			writeErr(w, http.StatusConflict, "更新代理失败: "+err.Error())
+		}
 		return
 	}
 	if err := a.syncAuthorizedNodeConfigs(); err != nil {
@@ -446,7 +459,11 @@ func (a *App) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.store.DeleteProxy(id); err != nil {
-		writeErr(w, http.StatusInternalServerError, "删除代理失败")
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "代理不存在")
+		} else {
+			writeErr(w, http.StatusInternalServerError, "删除代理失败: "+err.Error())
+		}
 		return
 	}
 	if err := a.syncAuthorizedNodeConfigs(); err != nil {
@@ -1347,6 +1364,57 @@ func normalizeProxyType(value string) string {
 	return protocol
 }
 
+func parseShadowsocksPlugin(raw string) (string, map[string]any, error) {
+	parts := strings.Split(raw, ";")
+	name := strings.ToLower(strings.TrimSpace(parts[0]))
+	if name == "" { return "", nil, fmt.Errorf("Shadowsocks 插件名称不能为空") }
+	values := make(map[string]string)
+	flags := make(map[string]bool)
+	for _, item := range parts[1:] {
+		item = strings.TrimSpace(item)
+		if item == "" { continue }
+		key, value, hasValue := strings.Cut(item, "=")
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" { return "", nil, fmt.Errorf("Shadowsocks 插件参数无效") }
+		if _, exists := values[key]; exists { return "", nil, fmt.Errorf("Shadowsocks 插件参数重复: %s", key) }
+		if _, exists := flags[key]; exists { return "", nil, fmt.Errorf("Shadowsocks 插件参数重复: %s", key) }
+		if hasValue { values[key] = value } else { flags[key] = true }
+	}
+	toBool := func(key string) (bool, error) {
+		if v, ok := values[key]; ok {
+			parsed, err := strconv.ParseBool(v)
+			if err != nil { return false, fmt.Errorf("Shadowsocks 插件参数 %s 必须是布尔值", key) }
+			return parsed, nil
+		}
+		return flags[key], nil
+	}
+	opts := make(map[string]any)
+	switch name {
+	case "obfs-local", "simple-obfs", "obfs":
+		name = "obfs"
+		mode := values["obfs"]
+		if mode == "" { mode = values["mode"] }
+		if mode != "http" && mode != "tls" { return "", nil, fmt.Errorf("Shadowsocks obfs 插件必须指定 obfs=http 或 obfs=tls") }
+		opts["mode"] = mode
+		if host := values["obfs-host"]; host != "" { opts["host"] = host } else if host := values["host"]; host != "" { opts["host"] = host }
+		for key := range values { if key != "obfs" && key != "mode" && key != "obfs-host" && key != "host" { return "", nil, fmt.Errorf("不支持的 Shadowsocks obfs 参数: %s", key) } }
+		for key := range flags { return "", nil, fmt.Errorf("不支持的 Shadowsocks obfs 标记: %s", key) }
+	case "v2ray-plugin":
+		if mode := values["mode"]; mode != "" { opts["mode"] = mode } else { opts["mode"] = "websocket" }
+		for _, key := range []string{"host", "path"} { if value := values[key]; value != "" { opts[key] = value } }
+		for _, key := range []string{"tls", "mux", "skip-cert-verify"} {
+			value, err := toBool(key); if err != nil { return "", nil, err }
+			if value { opts[key] = true }
+		}
+		for key := range values { if key != "mode" && key != "host" && key != "path" && key != "tls" && key != "mux" && key != "skip-cert-verify" { return "", nil, fmt.Errorf("不支持的 v2ray-plugin 参数: %s", key) } }
+		for key := range flags { if key != "tls" && key != "mux" && key != "skip-cert-verify" { return "", nil, fmt.Errorf("不支持的 v2ray-plugin 标记: %s", key) } }
+		if opts["mode"] == "websocket" { /* Mihomo's documented default transport */ }
+	default:
+		return "", nil, fmt.Errorf("暂不支持 Shadowsocks 插件: %s", name)
+	}
+	return name, opts, nil
+}
+
 func parseProxyLine(line string) (*Proxy, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -1450,42 +1518,46 @@ func parseProxyLine(line string) (*Proxy, error) {
 		}
 	} else if p.Type == "ss" {
 		payload := line[schemeIdx+3:]
+		// SIP002 plugin parameters live outside the encoded credentials. Keep
+		// the query separately so both URI encodings retain plugin settings.
+		queryValues := url.Values{}
+		if q := strings.IndexByte(payload, '?'); q >= 0 {
+			queryRaw := strings.SplitN(payload[q+1:], "#", 2)[0]
+			var queryErr error
+			queryValues, queryErr = url.ParseQuery(queryRaw)
+			if queryErr != nil { return nil, fmt.Errorf("Shadowsocks 查询参数无效: %w", queryErr) }
+			payload = payload[:q]
+		}
 		if at := strings.LastIndex(payload, "@"); at != -1 {
 			auth, hostpart := payload[:at], payload[at+1:]
-			if decoded, err := decodeProxyBase64(auth); err == nil {
-				auth = string(decoded)
-			}
+			if decoded, err := decodeProxyBase64(auth); err == nil { auth = string(decoded) }
 			method, password, ok := strings.Cut(auth, ":")
-			if !ok {
-				return nil, fmt.Errorf("Shadowsocks 认证信息无效")
-			}
+			if !ok || method == "" || password == "" { return nil, fmt.Errorf("Shadowsocks 认证信息无效") }
 			p.Extra["cipher"], p.Extra["password"] = method, password
 			payload = hostpart
 		} else {
-			// SIP002 also permits the entire method:password@host:port to be Base64 encoded.
-			decoded, err := decodeProxyBase64(strings.SplitN(payload, "?", 2)[0])
-			if err != nil {
-				return nil, fmt.Errorf("Shadowsocks URI 缺少认证信息")
-			}
+			decoded, err := decodeProxyBase64(payload)
+			if err != nil { return nil, fmt.Errorf("Shadowsocks URI 缺少认证信息") }
 			decodedText := string(decoded)
 			at = strings.LastIndex(decodedText, "@")
-			if at < 0 {
-				return nil, fmt.Errorf("Shadowsocks 认证信息无效")
-			}
+			if at < 0 { return nil, fmt.Errorf("Shadowsocks 认证信息无效") }
 			auth := decodedText[:at]
 			method, password, ok := strings.Cut(auth, ":")
-			if !ok {
-				return nil, fmt.Errorf("Shadowsocks 认证信息无效")
-			}
+			if !ok || method == "" || password == "" { return nil, fmt.Errorf("Shadowsocks 认证信息无效") }
 			p.Extra["cipher"], p.Extra["password"] = method, password
 			payload = decodedText[at+1:]
 		}
 		parsed, err := url.Parse("ss://" + payload)
-		if err != nil {
-			return nil, fmt.Errorf("Shadowsocks URI 无效")
+		if err != nil || parsed.Hostname() == "" { return nil, fmt.Errorf("Shadowsocks URI 无效") }
+		port, portErr := strconv.Atoi(parsed.Port())
+		if portErr != nil || port < 1 || port > 65535 { return nil, fmt.Errorf("Shadowsocks 端口无效") }
+		p.Server, p.Port = parsed.Hostname(), port
+		if plugin := queryValues.Get("plugin"); plugin != "" {
+			pluginName, pluginOpts, pluginErr := parseShadowsocksPlugin(plugin)
+			if pluginErr != nil { return nil, pluginErr }
+			p.Extra["plugin"], p.Extra["plugin-opts"] = pluginName, pluginOpts
 		}
-		p.Server = parsed.Hostname()
-		p.Port, _ = strconv.Atoi(parsed.Port())
+
 	} else {
 		parsed, err := url.Parse(line)
 		if err != nil {

@@ -500,14 +500,37 @@ func (s *Store) CreateProxy(p *Proxy) error {
 }
 
 func (s *Store) UpdateProxy(p *Proxy) error {
-	extra, _ := json.Marshal(p.Extra)
-	_, err := s.db.Exec(`UPDATE proxies SET name=?,type=?,server=?,port=?,source_cidr=?,machine_code=?,config_json=?,enabled=? WHERE id=?`, p.Name, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled), p.ID)
-	return err
+	extra, err := json.Marshal(p.Extra)
+	if err != nil {
+		return fmt.Errorf("序列化代理配置失败: %w", err)
+	}
+	result, err := s.db.Exec(`UPDATE proxies SET name=?,type=?,server=?,port=?,source_cidr=?,machine_code=?,config_json=?,enabled=? WHERE id=?`, p.Name, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled), p.ID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) DeleteProxy(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM proxies WHERE id=?`, id)
-	return err
+	result, err := s.db.Exec(`DELETE FROM proxies WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) DeleteProxies(ids []int64) error {

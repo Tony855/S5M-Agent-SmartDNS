@@ -151,3 +151,27 @@ func TestBindProxiesToMachineRejectsInvalidMachineCode(t *testing.T) {
 	if err != nil { t.Fatalf("GetProxy: %v", err) }
 	if got.MachineCode != "" { t.Fatalf("invalid machine code mutated proxy: machine_code=%q", got.MachineCode) }
 }
+
+
+func TestUpdateProxyAndDeleteProxyRejectMissingIDs(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "proxy-crud-missing.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	p := &Proxy{Name: "proxy-a", Type: "socks5", Server: "127.0.0.1", Port: 1080, SourceCIDR: "0.0.0.0/0", Extra: map[string]any{}, Enabled: true}
+	if err := store.CreateProxy(p); err != nil { t.Fatalf("CreateProxy: %v", err) }
+
+	missing := *p
+	missing.ID = p.ID + 999
+	missing.Name = "missing-proxy"
+	if err := store.UpdateProxy(&missing); err == nil {
+		t.Fatal("UpdateProxy should reject a missing ID")
+	}
+	if err := store.DeleteProxy(p.ID + 999); err == nil {
+		t.Fatal("DeleteProxy should reject a missing ID")
+	}
+	got, err := store.GetProxy(p.ID)
+	if err != nil || got.Name != "proxy-a" {
+		t.Fatalf("existing proxy unexpectedly changed: got=%#v err=%v", got, err)
+	}
+}
