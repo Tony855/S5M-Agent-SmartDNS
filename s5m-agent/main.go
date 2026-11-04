@@ -1297,7 +1297,7 @@ type agentCommand struct {
 	Version string `json:"version"`
 	SHA256  string `json:"sha256"`
 	Config       string `json:"config"`
-	Enabled      bool   `json:"enabled"`
+	Enabled      *bool  `json:"enabled"`
 	MihomoConfig string `json:"mihomo_config"`
 }
 
@@ -1382,9 +1382,13 @@ func processAgentCommandWebSocket(cfg Config) error {
 			message = "SmartDNS 配置已校验并应用，SHA-256: " + configHash
 		}
 	case "set_smartdns_enabled":
-		runErr = applyAgentSmartDNSEnabled(cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
-		if runErr == nil {
-			if cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
+		if cmd.Enabled == nil {
+			runErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
+		} else {
+			runErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+			if runErr == nil {
+				if *cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
+			}
 		}
 	default:
 		runErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
@@ -2276,9 +2280,13 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 					message = "SmartDNS/Mihomo 联合配置已应用并通过健康检查，SmartDNS SHA-256: " + hex.EncodeToString(sum[:])
 				}
 			case "set_smartdns_enabled":
-				commandErr = applyAgentSmartDNSEnabled(cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
-				if commandErr == nil {
-					if cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
+				if cmd.Enabled == nil {
+					commandErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
+				} else {
+					commandErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+					if commandErr == nil {
+						if *cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
+					}
 				}
 			default:
 				commandErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
