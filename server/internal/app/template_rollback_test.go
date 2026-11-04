@@ -19,7 +19,7 @@ func newTemplateRollbackTestApp(t *testing.T) (*App, func()) {
 		store.db.Close()
 		t.Fatalf("ensureTemplateSchema: %v", err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO settings(key,value) VALUES('agent_token','global'),('agent_machine_node-a','dedicated')`); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO settings(key,value) VALUES('agent_token','global'),('agent_machine_node-a','dedicated') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
 		store.db.Close()
 		t.Fatalf("seed credentials: %v", err)
 	}
