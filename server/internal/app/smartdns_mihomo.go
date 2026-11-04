@@ -69,13 +69,23 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		for _, raw := range groups {
 			group, ok := raw.(map[string]any)
 			if !ok || group["name"] != "PROXY" { continue }
+			if group["type"] != "select" {
+				return "", fmt.Errorf("SmartDNS 手动出口模式要求 PROXY 分组类型为 select")
+			}
 			members, ok := group["proxies"].([]any)
 			if !ok { return "", fmt.Errorf("PROXY 手动选择分组缺少有效节点列表") }
+			memberSet := make(map[string]bool, len(members))
 			for _, member := range members {
-				if name, ok := member.(string); ok && name != "DIRECT" && name != "REJECT" { foundSelectableProxyGroup = true; break }
+				if name, ok := member.(string); ok { memberSet[name] = true }
+			}
+			foundSelectableProxyGroup = true
+			for _, name := range plan.ProxyNames {
+				if !memberSet[name] {
+					return "", fmt.Errorf("PROXY 手动选择分组缺少启用的代理 %q", name)
+				}
 			}
 		}
-		if !foundSelectableProxyGroup { return "", fmt.Errorf("SmartDNS 手动出口模式需要存在包含可用代理的 PROXY 选择分组") }
+		if !foundSelectableProxyGroup { return "", fmt.Errorf("SmartDNS 手动出口模式需要存在 PROXY 选择分组") }
 	}
 
 	rules, ok := root["rules"].([]any)
@@ -98,6 +108,7 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 				continue
 			}
 			target := plan.GroupName
+			if target == "" { target = SmartDNSGroupName }
 			if len(plan.ProxyNames) == 0 {
 				target = "REJECT"
 			}
@@ -139,6 +150,7 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		rules = append(rules, nil)
 		copy(rules[insertAt+1:], rules[insertAt:])
 		target := plan.GroupName
+		if target == "" { target = SmartDNSGroupName }
 		if len(plan.ProxyNames) == 0 { target = "REJECT" }
 		rules[insertAt] = "PROCESS-NAME,smartdns," + target
 	}
