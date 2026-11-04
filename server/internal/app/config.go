@@ -10,15 +10,15 @@ import (
 
 type Config struct {
 	Addr             string
-	DBPath           string
-	ConfigPath       string
-	BackupDir        string
-	JWTSecret        string
-	AdminUser        string
-	AdminPass        string
-	MihomoAPI        string
-	MihomoSecret     string
-	MihomoConfigPath string
+	DBPath            string
+	ConfigPath        string
+	BackupDir         string
+	JWTSecret         string
+	AdminUser         string
+	AdminPass         string
+	MihomoAPI         string
+	MihomoSecret      string
+	MihomoConfigPath  string
 }
 
 func env(k, def string) string {
@@ -51,13 +51,23 @@ func randomHex(n int) string {
 	return value
 }
 
+// jwtSecret chooses the configured secret before generating a fallback.
+// Keeping random generation lazy avoids making a healthy explicit secret depend
+// on an unrelated entropy read during configuration loading.
+func jwtSecret(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	return randomHex(32)
+}
+
 func LoadEnv() Config {
 	return Config{
 		Addr:             env("S5M_ADDR", ":80"),
 		DBPath:           env("S5M_DB", "/var/lib/s5m-server/s5m.db"),
 		ConfigPath:       env("S5M_CONFIG", "/var/lib/s5m-server/config.yaml"),
 		BackupDir:        env("S5M_BACKUP", "/var/lib/s5m-server/backups"),
-		JWTSecret:        env("S5M_JWT_SECRET", randomHex(32)),
+		JWTSecret:        jwtSecret(env("S5M_JWT_SECRET", "")),
 		AdminUser:        env("S5M_ADMIN_USER", "admin"),
 		AdminPass:        env("S5M_ADMIN_PASSWORD", ""),
 		MihomoAPI:        env("MIHOMO_API", "http://127.0.0.1:8088"),
