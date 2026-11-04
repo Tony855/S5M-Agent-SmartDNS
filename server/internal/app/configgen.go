@@ -525,6 +525,7 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 		return false
 	}
 	return status["smartdns_available"] == true &&
+		status["smartdns_domestic_listener"] == true &&
 		status["smartdns_running"] == true &&
 		status["smartdns_dns_healthy"] == true
 }
