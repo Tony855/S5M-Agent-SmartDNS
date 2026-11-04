@@ -170,6 +170,15 @@ func (a *App) handleBrowserEventsWebSocket(w http.ResponseWriter, r *http.Reques
 			fmt.Printf("browser_ws: refresh deadline user=%q: %v\n", client.username, err)
 			return
 		}
+		// Browser tickets authenticate the handshake only. Re-check the account
+		// before every privileged RPC so disabling an admin or revoking its role
+		// takes effect immediately instead of waiting for the socket to disconnect.
+		currentUser, authErr := a.store.UserByUsername(client.username)
+		if authErr != nil || currentUser == nil || !currentUser.Enabled || currentUser.Role != "admin" {
+			_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": strings.TrimSpace(message.RequestID), "ok": false, "error": "管理员账户已失效，请重新登录"})
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "admin authorization revoked"), time.Now().Add(time.Second))
+			return
+		}
 		if strings.TrimSpace(message.RequestID) == "" {
 			_ = client.writeJSON(map[string]any{"type": "request.result", "request_id": "", "ok": false, "error": "缺少 request_id，无法关联操作结果"})
 			continue
