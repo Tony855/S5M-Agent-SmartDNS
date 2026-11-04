@@ -365,6 +365,14 @@ func (a *App) handleListProxies(w http.ResponseWriter, r *http.Request) {
 func (a *App) validateProxy(p *Proxy) string {
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" { return "名称不能为空" }
+	if len(p.Name) > 100 { return "代理名称不能超过 100 个字符" }
+	if strings.Contains(p.Name, ",") || strings.IndexFunc(p.Name, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return "代理名称不能包含逗号或控制字符"
+	}
+	switch strings.ToUpper(p.Name) {
+	case "PROXY", "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL":
+		return "代理名称与 Mihomo 内置策略或托管分组名称冲突"
+	}
 	p.MachineCode = strings.TrimSpace(p.MachineCode)
 	if p.MachineCode != "" && p.MachineCode != "__GLOBAL__" && (len(p.MachineCode) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(p.MachineCode)) {
 		return "关联机器码格式错误；留空表示未绑定，或选择全局节点"
@@ -374,7 +382,7 @@ func (a *App) validateProxy(p *Proxy) string {
 	p.Type = normalizeProxyType(p.Type)
 	p.Server = strings.TrimSpace(p.Server)
 	switch p.Type { case "socks5", "http", "ss", "vmess", "vless", "trojan": default: return "代理类型无效，必须是 socks5、http、ss、vmess、vless 或 trojan" }
-	if p.Server == "" { return "代理必须填写类型、服务器和端口" }
+	if p.Server == "" || strings.ContainsAny(p.Server, " \t\r\n") { return "代理必须填写有效的服务器地址和端口，服务器地址不能包含空白字符" }
 	if p.Port < 1 || p.Port > 65535 { return "代理端口必须在 1-65535 之间" }
 	p.SourceCIDR = strings.TrimSpace(p.SourceCIDR)
 	if p.SourceCIDR == "" { p.SourceCIDR = "0.0.0.0/0" }
