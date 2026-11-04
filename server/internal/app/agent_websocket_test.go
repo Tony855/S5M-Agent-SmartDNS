@@ -1875,6 +1875,12 @@ func TestQueueAgentSmartDNSRejectsUnsupportedAndRequiresSavedConfig(t *testing.T
 	}
 	status["smartdns_available"] = true
 	status["smartdns_control_supported"] = true
+	status["smartdns_domestic_listener"] = false
+	raw, _ = json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{"agent_status_"+code: string(raw)}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, true); err == nil || !strings.Contains(err.Error(), "6054") {
+		t.Fatalf("enable must reject missing domestic listener, got %v", err)
+	}
 	status["smartdns_domestic_listener"] = true
 	raw, _ = json.Marshal(status)
 	if err := app.store.UpdateSettings(map[string]string{"agent_status_"+code: string(raw)}); err != nil { t.Fatal(err) }
