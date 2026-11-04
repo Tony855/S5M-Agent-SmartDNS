@@ -109,58 +109,100 @@ func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 
 func TestProbeSmartDNSDNSAtQueriesAAAAAfterA(t *testing.T) {
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer conn.Close()
+
 	done := make(chan error, 1)
 	go func() {
 		for i := 0; i < 2; i++ {
 			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 			query := make([]byte, 1500)
 			n, client, readErr := conn.ReadFromUDP(query)
-			if readErr != nil { done <- readErr; return }
-			qtype := binary.BigEndian.Uint16(query[n-4:n-2])
+			if readErr != nil {
+				done <- readErr
+				return
+			}
+			qtype := binary.BigEndian.Uint16(query[n-4 : n-2])
 			response := append([]byte(nil), query[:n]...)
 			binary.BigEndian.PutUint16(response[2:4], 0x8180)
 			// Simulate a healthy A answer but a broken AAAA path.
-			if qtype == 1 { binary.BigEndian.PutUint16(response[6:8], 1) } else { binary.BigEndian.PutUint16(response[6:8], 0) }
-			if _, writeErr := conn.WriteToUDP(response, client); writeErr != nil { done <- writeErr; return }
+			if qtype == 1 {
+				binary.BigEndian.PutUint16(response[6:8], 1)
+			} else {
+				binary.BigEndian.PutUint16(response[6:8], 0)
+			}
+			if _, writeErr := conn.WriteToUDP(response, client); writeErr != nil {
+				done <- writeErr
+				return
+			}
 		}
 		done <- nil
 	}()
+
 	if probeSmartDNSDNSAt(conn.LocalAddr().String()) {
 		t.Fatal("A success must not hide an empty AAAA response")
 	}
-	if err := <-done; err != nil { t.Fatal(err) }
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProbeSmartDNSDNSTCPAtQueriesAAAAAfterA(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer listener.Close()
+
 	done := make(chan error, 1)
 	go func() {
 		for i := 0; i < 2; i++ {
 			conn, acceptErr := listener.Accept()
-			if acceptErr != nil { done <- acceptErr; return }
+			if acceptErr != nil {
+				done <- acceptErr
+				return
+			}
 			var size [2]byte
-			if _, readErr := io.ReadFull(conn, size[:]); readErr != nil { conn.Close(); done <- readErr; return }
+			if _, readErr := io.ReadFull(conn, size[:]); readErr != nil {
+				conn.Close()
+				done <- readErr
+				return
+			}
 			query := make([]byte, int(binary.BigEndian.Uint16(size[:])))
-			if _, readErr := io.ReadFull(conn, query); readErr != nil { conn.Close(); done <- readErr; return }
-			qtype := binary.BigEndian.Uint16(query[len(query)-4:len(query)-2])
+			if _, readErr := io.ReadFull(conn, query); readErr != nil {
+				conn.Close()
+				done <- readErr
+				return
+			}
+			qtype := binary.BigEndian.Uint16(query[len(query)-4 : len(query)-2])
 			binary.BigEndian.PutUint16(query[2:4], 0x8180)
-			if qtype == 1 { binary.BigEndian.PutUint16(query[6:8], 1) } else { binary.BigEndian.PutUint16(query[6:8], 0) }
+			if qtype == 1 {
+				binary.BigEndian.PutUint16(query[6:8], 1)
+			} else {
+				binary.BigEndian.PutUint16(query[6:8], 0)
+			}
 			binary.BigEndian.PutUint16(size[:], uint16(len(query)))
 			_, writeErr := conn.Write(size[:])
-			if writeErr == nil { _, writeErr = conn.Write(query) }
+			if writeErr == nil {
+				_, writeErr = conn.Write(query)
+			}
 			conn.Close()
-			if writeErr != nil { done <- writeErr; return }
+			if writeErr != nil {
+				done <- writeErr
+				return
+			}
 		}
 		done <- nil
 	}()
+
 	if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
 		t.Fatal("A success must not hide an empty AAAA TCP response")
 	}
-	if err := <-done; err != nil { t.Fatal(err) }
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProbeSmartDNSDNSAtRejectsMismatchedTransactionID(t *testing.T) {
