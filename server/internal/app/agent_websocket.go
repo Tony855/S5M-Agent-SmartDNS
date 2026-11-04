@@ -757,10 +757,22 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// The credential may have been revoked after the initial JWT check but
+	// before the WebSocket upgrade completed. Revalidate under the same lock
+	// used by revocation before registering this socket: telemetry intentionally
+	// relies on the registered session generation instead of querying SQLite
+	// for every frame.
+	a.agentWSMu.Lock()
+	currentCode, authErr := a.agentMachineFromRequest(r)
+	if authErr != nil || currentCode != machineCode {
+		a.agentWSMu.Unlock()
+		closeAgentWebSocket(conn, "Agent binding is no longer authorized")
+		return
+	}
+
 	// A newly authenticated connection supersedes any older connection for the
 	// same Agent. Older sockets may still be blocked in ReadJSON, so every
 	// heartbeat must verify its generation before it can mutate persisted state.
-	a.agentWSMu.Lock()
 	if a.agentWSGeneration == nil {
 		a.agentWSGeneration = make(map[string]uint64)
 	}
