@@ -257,6 +257,7 @@ def url_test_main():
     node_a, node_b = proxy_a.port, proxy_b.port
     controller = free_port()
     mixed = free_port()
+    states["a"], states["b"] = 204, 204
     delays["a"], delays["b"] = 0.18, 0.01
 
     with tempfile.TemporaryDirectory(prefix="mihomo-url-test-") as temp:
