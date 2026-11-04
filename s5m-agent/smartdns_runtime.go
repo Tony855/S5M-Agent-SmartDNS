@@ -961,12 +961,101 @@ func probeSmartDNSDNSAtType(address string, qtype uint16) bool {
 	if binary.BigEndian.Uint16(response[0:2]) != binary.BigEndian.Uint16(query[0:2]) {
 		return false
 	}
-	flags := binary.BigEndian.Uint16(response[2:4])
-	answerCount := binary.BigEndian.Uint16(response[6:8])
-	questionCount := binary.BigEndian.Uint16(response[4:6])
-	return flags&0x8000 != 0 && flags&0x0200 == 0 &&
-		flags&0x7800 == 0 && flags&0x000f == 0 &&
-		questionCount == 1 && answerCount > 0
+	return smartDNSResponseHasAnswer(response[:n], binary.BigEndian.Uint16(query[:2]), qtype)
+}
+
+
+// smartDNSResponseHasAnswer validates the DNS envelope and requires an actual
+// IN answer RR of the requested type. A CNAME-only response must not make an
+// AAAA health probe pass when the target has no AAAA record.
+func smartDNSResponseHasAnswer(message []byte, transactionID, qtype uint16) bool {
+	if len(message) < 12 ||
+		binary.BigEndian.Uint16(message[0:2]) != transactionID {
+		return false
+	}
+	flags := binary.BigEndian.Uint16(message[2:4])
+	questionCount := binary.BigEndian.Uint16(message[4:6])
+	answerCount := binary.BigEndian.Uint16(message[6:8])
+	if flags&0x8000 == 0 || flags&0x0200 != 0 ||
+		flags&0x7800 != 0 || flags&0x000f != 0 ||
+		questionCount != 1 || answerCount == 0 {
+		return false
+	}
+
+	offset, ok := skipSmartDNSName(message, 12)
+	if !ok || offset+4 > len(message) ||
+		binary.BigEndian.Uint16(message[offset:offset+2]) != qtype ||
+		binary.BigEndian.Uint16(message[offset+2:offset+4]) != 1 {
+		return false
+	}
+	offset += 4
+
+	for i := 0; i < int(answerCount); i++ {
+		offset, ok = skipSmartDNSName(message, offset)
+		if !ok || offset+10 > len(message) {
+			return false
+		}
+		rrType := binary.BigEndian.Uint16(message[offset : offset+2])
+		rrClass := binary.BigEndian.Uint16(message[offset+2 : offset+4])
+		rdataLength := int(binary.BigEndian.Uint16(message[offset+8 : offset+10]))
+		offset += 10
+		if offset+rdataLength > len(message) {
+			return false
+		}
+		validLength := qtype != 1 && qtype != 28 ||
+			(qtype == 1 && rdataLength == net.IPv4len) ||
+			(qtype == 28 && rdataLength == net.IPv6len)
+		if rrType == qtype && rrClass == 1 && validLength {
+			return true
+		}
+		offset += rdataLength
+	}
+	return false
+}
+
+// skipSmartDNSName advances over a DNS name, including compressed names.
+func skipSmartDNSName(message []byte, offset int) (int, bool) {
+	position := offset
+	next := -1
+	jumps := 0
+	for {
+		if position >= len(message) {
+			return 0, false
+		}
+		length := int(message[position])
+		if length&0xc0 == 0xc0 {
+			if position+1 >= len(message) {
+				return 0, false
+			}
+			pointer := (length&0x3f)<<8 | int(message[position+1])
+			if pointer >= len(message) {
+				return 0, false
+			}
+			if next < 0 {
+				next = position + 2
+			}
+			position = pointer
+			jumps++
+			if jumps > 128 {
+				return 0, false
+			}
+			continue
+		}
+		if length&0xc0 != 0 || length > 63 {
+			return 0, false
+		}
+		position++
+		if length == 0 {
+			if next >= 0 {
+				return next, true
+			}
+			return position, true
+		}
+		if position+length > len(message) {
+			return 0, false
+		}
+		position += length
+	}
 }
 
 // probeSmartDNSDNSTCPAt verifies a complete DNS-over-TCP response, including
@@ -1014,10 +1103,5 @@ func probeSmartDNSDNSTCPAtType(address string, qtype uint16) bool {
 	if binary.BigEndian.Uint16(response[:2]) != binary.BigEndian.Uint16(query[:2]) {
 		return false
 	}
-	flags := binary.BigEndian.Uint16(response[2:4])
-	questionCount := binary.BigEndian.Uint16(response[4:6])
-	answerCount := binary.BigEndian.Uint16(response[6:8])
-	return flags&0x8000 != 0 && flags&0x0200 == 0 &&
-		flags&0x7800 == 0 && flags&0x000f == 0 &&
-		questionCount == 1 && answerCount > 0
+	return smartDNSResponseHasAnswer(response, binary.BigEndian.Uint16(query[:2]), qtype)
 }
