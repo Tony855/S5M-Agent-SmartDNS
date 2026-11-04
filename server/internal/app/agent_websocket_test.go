@@ -1825,3 +1825,36 @@ func TestAgentWebSocketHandshakeRevalidatesBindingAfterUpgrade(t *testing.T) {
 		t.Fatalf("revoked handshake mutated Agent state: lastseen=%q status=%q", settings["agent_lastseen_"+code], settings["agent_status_"+code])
 	}
 }
+
+
+func TestSmartDNSToggleAckPersistsDesiredStateOnlyAfterSuccess(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	payload, err := json.Marshal(map[string]any{
+		"id": "smartdns-toggle-success", "type": "set_smartdns_enabled", "enabled": true,
+		"config": "", "mihomo_config": "dns: {}",
+	})
+	if err != nil { t.Fatal(err) }
+	if err := app.store.QueueAuthorizedAgentCommand(code, string(payload)); err != nil { t.Fatalf("queue toggle: %v", err) }
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-toggle-success", "failed", "simulated failure", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("failed ACK: matched=%v err=%v", matched, err)
+	}
+	if _, err := app.store.GetSetting("smartdns_enabled_" + code); err == nil {
+		t.Fatal("failed command must not persist desired SmartDNS state")
+	}
+	payload, err = json.Marshal(map[string]any{
+		"id": "smartdns-toggle-success-2", "type": "set_smartdns_enabled", "enabled": true,
+		"config": "", "mihomo_config": "dns: {}",
+	})
+	if err != nil { t.Fatal(err) }
+	if err := app.store.QueueAuthorizedAgentCommand(code, string(payload)); err != nil { t.Fatalf("queue second toggle: %v", err) }
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-toggle-success-2", "success", "enabled", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("successful ACK: matched=%v err=%v", matched, err)
+	}
+	got, err := app.store.GetSetting("smartdns_enabled_" + code)
+	if err != nil || got != "true" { t.Fatalf("desired state = %q err=%v, want true", got, err) }
+	settings, err := app.store.GetSettings()
+	if err != nil { t.Fatal(err) }
+	var result map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_command_result_"+code]), &result); err != nil { t.Fatal(err) }
+	if result["enabled"] != true { t.Fatalf("command result did not expose enabled state: %#v", result) }
+}
