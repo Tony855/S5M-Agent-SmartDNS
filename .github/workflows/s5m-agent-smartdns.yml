@@ -351,8 +351,8 @@ jobs:
             dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 example.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
             dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
             dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
-            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
-            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
             SMARTDNS_AAAA="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS AAAA answer: %s\n" "$SMARTDNS_AAAA"
             printf "%s\n" "$SMARTDNS_AAAA" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS did not return an AAAA answer" >&2; exit 1; }
@@ -361,8 +361,8 @@ jobs:
             printf "%s\n" "$SMARTDNS_AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP did not return an AAAA answer" >&2; exit 1; }
             # Match the healthcheck's domestic-policy listener coverage on ARM64.
             for rrtype in A AAAA; do
-              DOMESTIC_UDP="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com "$rrtype" || true)"
-              DOMESTIC_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com "$rrtype" || true)"
+              DOMESTIC_UDP="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 "$domestic_domain" "$rrtype" || true)"
+              DOMESTIC_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 "$domestic_domain" "$rrtype" || true)"
               if [ "$rrtype" = AAAA ]; then
                 printf "%s\n" "$DOMESTIC_UDP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "Domestic UDP AAAA query failed" >&2; exit 1; }
                 printf "%s\n" "$DOMESTIC_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "Domestic TCP AAAA query failed" >&2; exit 1; }
@@ -562,8 +562,8 @@ jobs:
             dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
             dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
             dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
-            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
-            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.qq.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
             SMARTDNS_AAAA="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS AAAA answer: %s\n" "$SMARTDNS_AAAA"
             printf "%s\n" "$SMARTDNS_AAAA" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS did not return an AAAA answer" >&2; exit 1; }
