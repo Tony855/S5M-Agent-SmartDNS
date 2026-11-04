@@ -60,18 +60,51 @@ func probeMihomoDNSFallback(mihomoConfig []byte) bool {
 	if config.DNS.IPv6 {
 		queries = append(queries, struct{ domain, qtype string; family int }{domain: "cloudflare.com", qtype: "AAAA", family: 6})
 	}
+	return probeMihomoDNSFallbackWithDig(mihomoConfig, func(args ...string) ([]byte, error) {
+		return exec.Command("dig", args...).CombinedOutput()
+	})
+}
+
+func probeMihomoDNSFallbackWithDig(mihomoConfig []byte, runDig func(...string) ([]byte, error)) bool {
+	if runDig == nil { return false }
+	var config struct {
+		DNS struct {
+			Listen string `yaml:"listen"`
+			IPv6   bool   `yaml:"ipv6"`
+		} `yaml:"dns"`
+	}
+	if err := yaml.Unmarshal(mihomoConfig, &config); err != nil { return false }
+	host, port, err := net.SplitHostPort(strings.TrimSpace(config.DNS.Listen))
+	if err != nil || strings.TrimSpace(port) == "" { return false }
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || (!ip.IsLoopback() && !ip.IsUnspecified()) { return false }
+	probeHost := host
+	if ip.IsUnspecified() {
+		if ip.To4() != nil { probeHost = "127.0.0.1" } else { probeHost = "::1" }
+	}
+	queries := []struct{ domain, qtype string; family int }{
+		{domain: "example.com", qtype: "A", family: 4},
+		{domain: "www.baidu.com", qtype: "A", family: 4},
+	}
+	if config.DNS.IPv6 {
+		queries = append(queries, struct{ domain, qtype string; family int }{domain: "cloudflare.com", qtype: "AAAA", family: 6})
+	}
 	for _, query := range queries {
-		args := []string{"+time=3", "+tries=1", "+short", "@" + probeHost, "-p", port, query.domain, query.qtype}
-		output, err := exec.Command("dig", args...).CombinedOutput()
-		if err != nil { return false }
-		found := false
-		for _, field := range strings.Fields(string(output)) {
-			address := net.ParseIP(strings.TrimSpace(field))
-			if address == nil { continue }
-			if query.family == 4 && address.To4() != nil { found = true; break }
-			if query.family == 6 && address.To4() == nil && address.To16() != nil { found = true; break }
+		for _, tcp := range []bool{false, true} {
+			args := []string{"+time=3", "+tries=1", "+short"}
+			if tcp { args = append(args, "+tcp") }
+			args = append(args, "@"+probeHost, "-p", port, query.domain, query.qtype)
+			output, err := runDig(args...)
+			if err != nil { return false }
+			found := false
+			for _, field := range strings.Fields(string(output)) {
+				address := net.ParseIP(strings.TrimSpace(field))
+				if address == nil { continue }
+				if query.family == 4 && address.To4() != nil { found = true; break }
+				if query.family == 6 && address.To4() == nil && address.To16() != nil { found = true; break }
+			}
+			if !found { return false }
 		}
-		if !found { return false }
 	}
 	return true
 }
