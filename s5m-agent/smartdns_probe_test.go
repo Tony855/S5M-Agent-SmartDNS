@@ -1376,3 +1376,52 @@ func TestBackupSmartDNSConfigRemovesNewSidecarAfterPostRenameSyncFailure(t *test
 		t.Fatalf("failed first-install snapshot left sidecar behind, stat error=%v", statErr)
 	}
 }
+
+
+func TestPersistSmartDNSDisabledMarkerIsDurableAndReversible(t *testing.T) {
+	oldPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldPath })
+	if !smartDNSRuntimeEnabled() { t.Fatal("SmartDNS should default to enabled when no disable marker exists") }
+	if err := persistSmartDNSDisabled(true); err != nil { t.Fatalf("persist disabled state: %v", err) }
+	if smartDNSRuntimeEnabled() { t.Fatal("disable marker did not disable SmartDNS runtime state") }
+	if err := persistSmartDNSDisabled(false); err != nil { t.Fatalf("clear disabled state: %v", err) }
+	if !smartDNSRuntimeEnabled() { t.Fatal("clearing disable marker did not restore enabled state") }
+}
+
+func TestCollectSmartDNSStatusDoesNotRestartExplicitlyDisabledService(t *testing.T) {
+	config := []byte(`bind 127.0.0.1:6053
+bind-tcp 127.0.0.1:6053
+bind 127.0.0.1:6054 -group china-dot
+bind-tcp 127.0.0.1:6054 -group china-dot
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
+server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google
+server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+dualstack-ip-selection no
+dualstack-ip-selection-threshold 10
+dualstack-ip-allow-force-AAAA yes
+`)
+	bin := filepath.Join(t.TempDir(), "smartdns")
+	if err := os.WriteFile(bin, []byte("test"), 0700); err != nil { t.Fatal(err) }
+	binaryInfo, err := os.Stat(bin)
+	if err != nil { t.Fatal(err) }
+	restarts := 0
+	status := map[string]any{}
+	collectSmartDNSStatusWithDependencies(status, smartDNSStatusDependencies{
+		enabled: func() bool { return false },
+		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
+		readConfig: func(string) ([]byte, error) { return config, nil },
+		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
+		process: func() ([]byte, error) { return []byte("1234"), nil },
+		probe: func() bool { t.Fatal("disabled SmartDNS must not be probed"); return false },
+		restart: func() error { restarts++; return nil },
+		waitHealthy: func(time.Duration) bool { return false },
+	})
+	if status["smartdns_available"] != true || status["smartdns_enabled"] != false {
+		t.Fatalf("unexpected disabled capability state: %#v", status)
+	}
+	if status["smartdns_running"] != true || status["smartdns_dns_healthy"] != false {
+		t.Fatalf("running-but-disabled service should not be reported healthy: %#v", status)
+	}
+	if restarts != 0 { t.Fatalf("disabled SmartDNS was auto-restarted %d times", restarts) }
+}
