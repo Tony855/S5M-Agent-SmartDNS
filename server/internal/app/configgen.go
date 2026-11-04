@@ -524,15 +524,46 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	if age > agentWSHeartbeatTTL || age < -30*time.Second {
 		return false
 	}
+	domesticListener, domesticReported := status["smartdns_domestic_listener"].(bool)
+	if domesticReported && !domesticListener { return false }
 	return status["smartdns_available"] == true &&
-		status["smartdns_domestic_listener"] == true &&
 		status["smartdns_running"] == true &&
 		status["smartdns_dns_healthy"] == true
 }
 
+func (a *App) agentHasDomesticSmartDNS(machineCode string) bool {
+	if strings.TrimSpace(machineCode) == "" { return false }
+	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil && desired == "false" { return false }
+	value, err := a.store.GetSetting("agent_status_" + machineCode)
+	if err == nil && strings.TrimSpace(value) != "" {
+		var status map[string]any
+		if json.Unmarshal([]byte(value), &status) == nil {
+			if domestic, reported := status["smartdns_domestic_listener"].(bool); reported { return domestic }
+		}
+	}
+	// A fresh enable ACK proves that the Agent validated and probed both listeners.
+	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil && desired == "true" {
+		var result map[string]any
+		if raw, readErr := a.store.GetSetting("agent_command_result_" + machineCode); readErr == nil &&
+			json.Unmarshal([]byte(raw), &result) == nil &&
+			result["type"] == "set_smartdns_enabled" && result["status"] == "success" && result["enabled"] == true {
+			if updatedAt, ok := result["updated_at"].(float64); ok && updatedAt > 0 && updatedAt <= 9.0e15 {
+				commandAge := time.Since(time.Unix(int64(updatedAt), 0))
+				if commandAge >= -30*time.Second && commandAge <= agentWSHeartbeatTTL { return true }
+			}
+		}
+	}
+	return false
+}
+
 // applyAgentRuntimeDNS derives the outgoing Agent config without mutating its persisted source.
-func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
+func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool, domesticListener ...bool) (string, error) {
 	if smartDNSHealthy {
+		if len(domesticListener) > 0 && domesticListener[0] {
+			return routeAgentDNSViaSmartDNSWithDomestic(yml)
+		}
+		// Older Agent builds do not report the domestic listener capability.
+		// Preserve their historical primary-listener-only routing.
 		return routeAgentDNSViaSmartDNS(yml)
 	}
 	// Never leave the generated SmartDNS loopback as the only resolver when
@@ -722,6 +753,42 @@ func restoreAgentDNSNameserver(yml, fallbackYML string) (string, bool, error) {
 // routeAgentDNSViaSmartDNS changes only the ordinary nameserver list. Bootstrap
 // and proxy-server DNS stay on literal IP resolvers to avoid resolver loops.
 func routeAgentDNSViaSmartDNS(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 Agent DNS 配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	var dns *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dns" { dns = root.Content[i+1]; break }
+	}
+	if dns == nil || dns.Kind != yaml.MappingNode { return "", fmt.Errorf("Agent DNS 配置缺少 dns 对象") }
+	var nameserver *yaml.Node
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		if dns.Content[i].Value == "nameserver" { nameserver = dns.Content[i+1]; break }
+	}
+	local := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+	}}
+	if nameserver == nil {
+		dns.Content = append(dns.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"}, local)
+	} else if nameserver.Kind != yaml.SequenceNode {
+		return "", fmt.Errorf("dns.nameserver 必须是 YAML 列表")
+	} else {
+		for i := 0; i+1 < len(dns.Content); i += 2 {
+			if dns.Content[i].Value == "nameserver" { dns.Content[i+1] = local; break }
+		}
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil { return "", fmt.Errorf("序列化 Agent DNS 配置失败: %w", err) }
+	return string(out), nil
+}
+
+func routeAgentDNSViaSmartDNSWithDomestic(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
 		return "", fmt.Errorf("解析 Agent DNS 配置失败: %w", err)
