@@ -2,6 +2,8 @@ package app
 
 import (
 	"strings"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -69,5 +71,44 @@ func TestHashConfigIsStable(t *testing.T) {
 	}
 	if hashConfig(yaml) == hashConfig(yaml+"# changed\n") {
 		t.Fatal("different YAML unexpectedly produced the same hash")
+	}
+}
+
+
+func TestPublishMihomoTemplateRejectsMalformedJSON(t *testing.T) {
+	a, cleanup := newTemplateRollbackTestApp(t)
+	defer cleanup()
+	if err := a.store.UpdateSettings(map[string]string{"mihomo_template_draft": defaultMihomoTemplate}); err != nil {
+		t.Fatalf("seed draft: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mihomo/template/publish", strings.NewReader("{"))
+	rec := httptest.NewRecorder()
+	a.handlePublishMihomoTemplate(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	var count int
+	if err := a.store.db.QueryRow("SELECT COUNT(*) FROM mihomo_template_versions").Scan(&count); err != nil {
+		t.Fatalf("count versions: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("malformed publish request created %d versions", count)
+	}
+}
+
+func TestGetNodeTemplateStatusFailsOnConfigReadError(t *testing.T) {
+	a, cleanup := newTemplateRollbackTestApp(t)
+	defer cleanup()
+	if _, err := a.store.db.Exec("INSERT INTO node_template_bindings(machine_code,template_version,config_sha256,source,updated_at) VALUES('node-a',1,'hash','template','now')"); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	if _, err := a.store.db.Exec("DROP TABLE node_configs"); err != nil {
+		t.Fatalf("drop node configs: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mihomo/template/status", nil)
+	rec := httptest.NewRecorder()
+	a.handleGetNodeTemplateStatus(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
