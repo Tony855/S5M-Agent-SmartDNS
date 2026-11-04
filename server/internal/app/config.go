@@ -3,6 +3,8 @@ package app
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"os"
 )
 
@@ -26,10 +28,27 @@ func env(k, def string) string {
 	return def
 }
 
-func randomHex(n int) string {
+// randomHexFrom makes entropy failures explicit and testable. A partially read
+// buffer must never be accepted as a JWT signing secret.
+func randomHexFrom(source io.Reader, n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("随机密钥长度必须大于零")
+	}
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := io.ReadFull(source, b); err != nil {
+		return "", fmt.Errorf("读取安全随机数失败: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func randomHex(n int) string {
+	value, err := randomHexFrom(rand.Reader, n)
+	if err != nil {
+		// Starting with an empty or predictable JWT secret would make every
+		// administrator session forgeable. Fail closed instead.
+		panic(fmt.Errorf("生成 JWT 签名密钥失败: %w", err))
+	}
+	return value
 }
 
 func LoadEnv() Config {
