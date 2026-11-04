@@ -332,8 +332,12 @@ jobs:
             apk add --no-cache bind-tools >/dev/null
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
-            dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
-            dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 example.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 example.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +time=6 +tries=1 @127.0.0.1 -p 6054 example.com A | grep -q "ANSWER SECTION"
+            dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 example.com A | grep -q "ANSWER SECTION"
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 example.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 example.com AAAA | grep -Eq "^[0-9a-fA-F:]+$"
             SMARTDNS_AAAA="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS AAAA answer: %s\n" "$SMARTDNS_AAAA"
             printf "%s\n" "$SMARTDNS_AAAA" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS did not return an AAAA answer" >&2; exit 1; }
