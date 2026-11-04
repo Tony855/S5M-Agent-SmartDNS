@@ -1467,42 +1467,46 @@ func parseProxyLine(line string) (*Proxy, error) {
 		}
 	} else if p.Type == "ss" {
 		payload := line[schemeIdx+3:]
+		// SIP002 plugin parameters live outside the encoded credentials. Keep
+		// the query separately so both URI encodings retain plugin settings.
+		queryValues := url.Values{}
+		if q := strings.IndexByte(payload, '?'); q >= 0 {
+			queryRaw := strings.SplitN(payload[q+1:], "#", 2)[0]
+			var queryErr error
+			queryValues, queryErr = url.ParseQuery(queryRaw)
+			if queryErr != nil { return nil, fmt.Errorf("Shadowsocks 查询参数无效: %w", queryErr) }
+			payload = payload[:q]
+		}
 		if at := strings.LastIndex(payload, "@"); at != -1 {
 			auth, hostpart := payload[:at], payload[at+1:]
-			if decoded, err := decodeProxyBase64(auth); err == nil {
-				auth = string(decoded)
-			}
+			if decoded, err := decodeProxyBase64(auth); err == nil { auth = string(decoded) }
 			method, password, ok := strings.Cut(auth, ":")
-			if !ok {
-				return nil, fmt.Errorf("Shadowsocks 认证信息无效")
-			}
+			if !ok || method == "" || password == "" { return nil, fmt.Errorf("Shadowsocks 认证信息无效") }
 			p.Extra["cipher"], p.Extra["password"] = method, password
 			payload = hostpart
 		} else {
-			// SIP002 also permits the entire method:password@host:port to be Base64 encoded.
-			decoded, err := decodeProxyBase64(strings.SplitN(payload, "?", 2)[0])
-			if err != nil {
-				return nil, fmt.Errorf("Shadowsocks URI 缺少认证信息")
-			}
+			decoded, err := decodeProxyBase64(payload)
+			if err != nil { return nil, fmt.Errorf("Shadowsocks URI 缺少认证信息") }
 			decodedText := string(decoded)
 			at = strings.LastIndex(decodedText, "@")
-			if at < 0 {
-				return nil, fmt.Errorf("Shadowsocks 认证信息无效")
-			}
+			if at < 0 { return nil, fmt.Errorf("Shadowsocks 认证信息无效") }
 			auth := decodedText[:at]
 			method, password, ok := strings.Cut(auth, ":")
-			if !ok {
-				return nil, fmt.Errorf("Shadowsocks 认证信息无效")
-			}
+			if !ok || method == "" || password == "" { return nil, fmt.Errorf("Shadowsocks 认证信息无效") }
 			p.Extra["cipher"], p.Extra["password"] = method, password
 			payload = decodedText[at+1:]
 		}
 		parsed, err := url.Parse("ss://" + payload)
-		if err != nil {
-			return nil, fmt.Errorf("Shadowsocks URI 无效")
+		if err != nil || parsed.Hostname() == "" { return nil, fmt.Errorf("Shadowsocks URI 无效") }
+		port, portErr := strconv.Atoi(parsed.Port())
+		if portErr != nil || port < 1 || port > 65535 { return nil, fmt.Errorf("Shadowsocks 端口无效") }
+		p.Server, p.Port = parsed.Hostname(), port
+		if plugin := queryValues.Get("plugin"); plugin != "" {
+			pluginName, pluginOpts, pluginErr := parseShadowsocksPlugin(plugin)
+			if pluginErr != nil { return nil, pluginErr }
+			p.Extra["plugin"], p.Extra["plugin-opts"] = pluginName, pluginOpts
 		}
-		p.Server = parsed.Hostname()
-		p.Port, _ = strconv.Atoi(parsed.Port())
+
 	} else {
 		parsed, err := url.Parse(line)
 		if err != nil {
