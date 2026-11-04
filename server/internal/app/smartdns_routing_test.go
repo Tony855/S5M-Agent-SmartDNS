@@ -89,3 +89,25 @@ func TestBuildSmartDNSRoutingPlanAcceptsMinimumUnprivilegedListenerPort(t *testi
 		t.Fatalf("port 1024 should be accepted: %v", err)
 	}
 }
+
+func TestBuildSmartDNSRoutingPlanSelectUsesManagedPROXYGroup(t *testing.T) {
+	got, err := BuildSmartDNSRoutingPlan(
+		SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect},
+		[]SmartDNSProxyRef{{Name: "node-a", Enabled: true}},
+	)
+	if err != nil { t.Fatal(err) }
+	if got.GroupName != "PROXY" || got.Strategy != SmartDNSStrategySelect {
+		t.Fatalf("manual strategy must follow the managed PROXY selection group: %#v", got)
+	}
+}
+
+func TestBuildSmartDNSRoutingPlanURLTestIsDefault(t *testing.T) {
+	got, err := BuildSmartDNSRoutingPlan(
+		SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared},
+		[]SmartDNSProxyRef{{Name: "node-a", Enabled: true}},
+	)
+	if err != nil { t.Fatal(err) }
+	if got.Strategy != SmartDNSStrategyURLTest || got.GroupName != SmartDNSGroupName {
+		t.Fatalf("new shared SmartDNS routing must default to latency-based URL testing: %#v", got)
+	}
+}
