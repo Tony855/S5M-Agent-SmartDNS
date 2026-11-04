@@ -107,6 +107,46 @@ func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 	}
 }
 
+func TestSmartDNSResponseRequiresRequestedAddressRecord(t *testing.T) {
+	makeResponse := func(rrType uint16, rdata []byte) []byte {
+		message := make([]byte, 12)
+		binary.BigEndian.PutUint16(message[0:2], 0x534d)
+		binary.BigEndian.PutUint16(message[2:4], 0x8180)
+		binary.BigEndian.PutUint16(message[4:6], 1)
+		binary.BigEndian.PutUint16(message[6:8], 1)
+		message = append(message, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+		message = append(message, 0, 28, 0, 1)
+		message = append(message, 0xc0, 0x0c)
+		record := make([]byte, 10)
+		binary.BigEndian.PutUint16(record[0:2], rrType)
+		binary.BigEndian.PutUint16(record[2:4], 1)
+		binary.BigEndian.PutUint32(record[4:8], 60)
+		binary.BigEndian.PutUint16(record[8:10], uint16(len(rdata)))
+		message = append(message, record...)
+		message = append(message, rdata...)
+		return message
+	}
+
+	t.Run("AAAA address record passes", func(t *testing.T) {
+		response := makeResponse(28, make([]byte, net.IPv6len))
+		if !smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("valid AAAA answer was rejected")
+		}
+	})
+	t.Run("CNAME only does not pass AAAA health", func(t *testing.T) {
+		response := makeResponse(5, []byte{0xc0, 0x0c})
+		if smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("CNAME-only response incorrectly passed AAAA health")
+		}
+	})
+	t.Run("wrong address family does not pass", func(t *testing.T) {
+		response := makeResponse(1, make([]byte, net.IPv4len))
+		if smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("A record incorrectly passed AAAA health")
+		}
+	})
+}
+
 func TestProbeSmartDNSDNSAtQueriesAAAAAfterA(t *testing.T) {
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
