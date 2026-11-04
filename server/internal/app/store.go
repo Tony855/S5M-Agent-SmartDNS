@@ -766,7 +766,20 @@ func (s *Store) DeleteAgentBinding(machineCode string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, key := range []string{"agent_machine_" + machineCode, "agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "smartdns_config_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
+	// The credential row is the authoritative binding. Do not report a
+	// successful revocation for an unknown machine code.
+	credentialResult, err := tx.Exec(`DELETE FROM settings WHERE key=?`, "agent_machine_"+machineCode)
+	if err != nil {
+		return err
+	}
+	credentialRows, err := credentialResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if credentialRows == 0 {
+		return sql.ErrNoRows
+	}
+	for _, key := range []string{"agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "smartdns_config_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
 		if _, err := tx.Exec(`DELETE FROM settings WHERE key=?`, key); err != nil {
 			return err
 		}

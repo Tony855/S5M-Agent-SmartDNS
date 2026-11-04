@@ -2418,6 +2418,10 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	a.agentWSMu.Lock()
 	if err := a.store.DeleteAgentBinding(code); err != nil {
 		a.agentWSMu.Unlock()
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "Agent 绑定不存在")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "删除失败")
 		return
 	}
