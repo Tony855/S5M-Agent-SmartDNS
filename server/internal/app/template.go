@@ -148,7 +148,14 @@ func (a *App) handleGetMihomoTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	current := 0
-	fmt.Sscanf(currentRaw, "%d", &current)
+	if strings.TrimSpace(currentRaw) != "" {
+		parsed, parseErr := strconv.Atoi(strings.TrimSpace(currentRaw))
+		if parseErr != nil || parsed < 0 {
+			writeErr(w, http.StatusInternalServerError, "当前模板版本记录无效")
+			return
+		}
+		current = parsed
+	}
 	rows, err := a.store.db.Query("SELECT version, sha256, note, created_at FROM mihomo_template_versions ORDER BY version DESC")
 	if err != nil {
 		writeErr(w, 500, "读取模板版本失败")
@@ -199,7 +206,10 @@ func (a *App) handlePublishMihomoTemplate(w http.ResponseWriter, r *http.Request
 		Note string `json:"note"`
 	}
 	if r.Body != nil {
-		_ = decodeLimited(r, 16<<10, "16 KiB", &in)
+		if err := decodeLimited(r, 16<<10, "16 KiB", &in); err != nil {
+			writeErr(w, http.StatusBadRequest, "发布请求 JSON 无效或超过 16 KiB")
+			return
+		}
 	}
 	draft, err := a.store.GetSetting("mihomo_template_draft")
 	if err != nil || strings.TrimSpace(draft) == "" {
@@ -371,7 +381,14 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	current := 0
-	fmt.Sscanf(settings["mihomo_template_current_version"], "%d", &current)
+	if raw := strings.TrimSpace(settings["mihomo_template_current_version"]); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 0 {
+			writeErr(w, http.StatusInternalServerError, "当前模板版本记录无效")
+			return
+		}
+		current = parsed
+	}
 	rows, err := a.store.db.Query("SELECT machine_code, template_version, config_sha256, source, updated_at FROM node_template_bindings")
 	if err != nil {
 		writeErr(w, 500, "读取节点模板状态失败")
@@ -404,6 +421,10 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 		}
 		bindings[s.MachineCode] = s
 	}
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取节点模板状态失败")
+		return
+	}
 	codes := make([]string, 0)
 	for key, value := range settings {
 		if strings.HasPrefix(key, "agent_machine_") && value != "" && value != settings["agent_token"] {
@@ -419,7 +440,12 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 		}
 		// Compare the stored configuration hash to identify manual edits after template application.
 		if s.Source != "untracked" && s.Source != "independent" {
-			if cfg, e := a.store.GetNodeConfig(code); e == nil && cfg != nil && hashConfig(cfg.YAML) != s.ConfigSHA256 {
+			cfg, configErr := a.store.GetNodeConfig(code)
+			if configErr != nil {
+				writeErr(w, http.StatusInternalServerError, "读取节点配置以检查模板偏差失败")
+				return
+			}
+			if cfg == nil || hashConfig(cfg.YAML) != s.ConfigSHA256 {
 				s.Status = "drifted"
 			}
 		}
