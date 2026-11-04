@@ -29,7 +29,7 @@ if [ -f /data/smartdns.disabled ]; then
     in_dns && /^[^[:space:]]/ { in_dns=0 }
     in_dns && /^[[:space:]]*listen:[[:space:]]*/ {
       sub(/^[[:space:]]*listen:[[:space:]]*/, "")
-      gsub(/["\\047]/, "")
+      gsub(/"/, "")
       print
       exit
     }
