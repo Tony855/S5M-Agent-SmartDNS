@@ -524,8 +524,9 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	if age > agentWSHeartbeatTTL || age < -30*time.Second {
 		return false
 	}
-	domesticListener, domesticReported := status["smartdns_domestic_listener"].(bool)
-	if domesticReported && !domesticListener { return false }
+	// Primary SmartDNS health remains usable for legacy/custom configs that
+	// intentionally lack the optional domestic listener. The separate
+	// domestic capability check controls whether 6054 is injected.
 	return status["smartdns_available"] == true &&
 		status["smartdns_running"] == true &&
 		status["smartdns_dns_healthy"] == true
