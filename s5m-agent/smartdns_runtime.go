@@ -481,7 +481,7 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		if !processHealthy {
 			appendSmartDNSStatusError(status, "SmartDNS 进程未运行或进程检测失败")
 		} else {
-			appendSmartDNSStatusError(status, "SmartDNS UDP/TCP DNS 查询探测失败")
+			appendSmartDNSStatusError(status, "SmartDNS A/AAAA UDP/TCP DNS 查询探测失败")
 		}
 		return
 	}
