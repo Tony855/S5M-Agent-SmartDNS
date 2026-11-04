@@ -235,8 +235,10 @@ jobs:
           grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '^ipv6: true' s5m-agent/default-config.yaml
           grep -q '^  ipv6: true' s5m-agent/default-config.yaml
+          grep -q '^  fake-ip-range6: fdfe:dcba:9876::1/64' s5m-agent/default-config.yaml
           grep -q '^ipv6: true' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '^  ipv6: true' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q '^  fake-ip-range6: fdfe:dcba:9876::1/64' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'enable: true' s5m-agent/default-config.yaml
           grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           docker run --rm --entrypoint /bin/sh s5m-agent-smartdns:test -ec '
