@@ -660,6 +660,17 @@ func TestParseProxyImportContentPreservesVLESSRealityOptions(t *testing.T) {
 	}
 }
 
+func TestParseProxyImportContentDoesNotInferVMessFromMissingAlterID(t *testing.T) {
+	content := `{"servers":[{"address":"proxy.example.test","port":443,"id":"ambiguous-id"}]}`
+	proxies, failures := parseProxyImportContent(content)
+	if len(proxies) != 0 {
+		t.Fatalf("ambiguous JSON was incorrectly imported as VMess: %#v", proxies)
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "无法根据节点字段识别代理协议") {
+		t.Fatalf("failures = %#v, want protocol inference error", failures)
+	}
+}
+
 func TestParseProxyImportContentLegacyV2RayNServersJSON(t *testing.T) {
 	var content strings.Builder
 	content.WriteString(`{"version":"1.0","remarks":"Mihomo IPv6 配置","servers":[`)
