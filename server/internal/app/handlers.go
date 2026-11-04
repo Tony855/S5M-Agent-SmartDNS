@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -435,7 +436,11 @@ func (a *App) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 		p.Extra = map[string]any{}
 	}
 	if err := a.store.UpdateProxy(&p); err != nil {
-		writeErr(w, 409, err.Error())
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "代理不存在")
+		} else {
+			writeErr(w, http.StatusConflict, "更新代理失败: "+err.Error())
+		}
 		return
 	}
 	if err := a.syncAuthorizedNodeConfigs(); err != nil {
@@ -454,7 +459,11 @@ func (a *App) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.store.DeleteProxy(id); err != nil {
-		writeErr(w, http.StatusInternalServerError, "删除代理失败")
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "代理不存在")
+		} else {
+			writeErr(w, http.StatusInternalServerError, "删除代理失败: "+err.Error())
+		}
 		return
 	}
 	if err := a.syncAuthorizedNodeConfigs(); err != nil {
