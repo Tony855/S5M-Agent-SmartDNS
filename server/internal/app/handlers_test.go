@@ -1546,7 +1546,7 @@ func TestValidateProxyNormalizesSocks5HAlias(t *testing.T) {
 func TestParseProxyImportContentAcceptsOneHundredSocks5HLinks(t *testing.T) {
 	var content strings.Builder
 	for i := 0; i < 100; i++ {
-		fmt.Fprintf(&content, "socks5h://user:pass@proxy.example:%d#node-%03d\\n", 10000+i, i)
+		fmt.Fprintf(&content, "socks5h://user:pass@proxy.example:%d#node-%03d\n", 10000+i, i)
 	}
 	proxies, failures := parseProxyImportContent(content.String())
 	if len(failures) != 0 {
