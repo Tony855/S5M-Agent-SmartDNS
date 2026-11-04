@@ -464,7 +464,6 @@ jobs:
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             # Verify AAAA survives the complete Mihomo DNS -> SmartDNS path.
-            printf "Mihomo AAAA answer: %s\n" "$AAAA_RESULT"
             dig +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -q "ANSWER SECTION"
             dig +time=6 +tries=1 @127.0.0.1 -p 5353 cloudflare.com A || true
