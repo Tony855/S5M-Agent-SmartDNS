@@ -462,6 +462,7 @@ jobs:
           done
 
           [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == "healthy" ]]
+          docker exec "$container" sh -ec 'test "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" = 0; ip -6 addr show dev eth0 | grep -q "fd42:534d:5:2:"'
           docker exec "$container" /healthcheck.sh
           docker exec "$container" pidof mihomo >/dev/null
           docker exec "$container" pidof smartdns >/dev/null
