@@ -1567,3 +1567,72 @@ func TestParseProxyImportContentAcceptsOneHundredSocks5HLinks(t *testing.T) {
 		}
 	}
 }
+
+
+func TestHandleImportProxiesPersistsOneHundredSocks5HNodesAndSkipsDuplicates(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "socks5h-bulk-import.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+	app := &App{store: store}
+
+	var content strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&content, "socks5h://user:pass@proxy.example:%d#node-%03d\\n", 10000+i, i)
+	}
+	body, err := json.Marshal(map[string]string{"content": content.String()})
+	if err != nil {
+		t.Fatalf("marshal import request: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/proxies/import", strings.NewReader(string(body)))
+	recorder := httptest.NewRecorder()
+	app.handleImportProxies(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("first import status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var first map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &first); err != nil {
+		t.Fatalf("decode first import response: %v", err)
+	}
+	if first["success"] != float64(100) || first["fail"] != float64(0) || first["skipped"] != float64(0) {
+		t.Fatalf("first import result = %#v, want 100 success, 0 fail, 0 skipped", first)
+	}
+
+	stored, err := store.ListProxies()
+	if err != nil {
+		t.Fatalf("ListProxies: %v", err)
+	}
+	if len(stored) != 100 {
+		t.Fatalf("stored proxy count = %d, want 100", len(stored))
+	}
+	for i, proxy := range stored {
+		if proxy.Type != "socks5" || proxy.Port != 10000+i {
+			t.Errorf("stored proxy %d has unexpected protocol/port: %#v", i+1, proxy)
+		}
+		if proxy.Extra["username"] != "user" || proxy.Extra["password"] != "pass" {
+			t.Errorf("stored proxy %d lost credentials: %#v", i+1, proxy.Extra)
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/proxies/import", strings.NewReader(string(body)))
+	recorder = httptest.NewRecorder()
+	app.handleImportProxies(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("duplicate import status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var second map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode duplicate import response: %v", err)
+	}
+	if second["success"] != float64(0) || second["fail"] != float64(0) || second["skipped"] != float64(100) {
+		t.Fatalf("duplicate import result = %#v, want 0 success, 0 fail, 100 skipped", second)
+	}
+	stored, err = store.ListProxies()
+	if err != nil {
+		t.Fatalf("ListProxies after duplicate import: %v", err)
+	}
+	if len(stored) != 100 {
+		t.Fatalf("duplicate import changed stored proxy count to %d, want 100", len(stored))
+	}
+}
