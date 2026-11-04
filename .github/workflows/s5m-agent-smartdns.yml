@@ -192,6 +192,9 @@ jobs:
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh
 
+      - name: Validate standalone SmartDNS smoke-test shell syntax
+        run: sh -n docker/smartdns/tests/smoke-test.sh
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
