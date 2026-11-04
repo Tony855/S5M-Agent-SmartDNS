@@ -16,7 +16,12 @@ func TestBuildSmartDNSPerClientConfigUsesExactLoopbackListenerMappings(t *testin
 	}
 	for _, want := range []string{
 		"bind 127.0.0.1:6053",
-		"bind-tcp 127.0.0.1:6053",\n\t\t"bind [::1]:6053",\n\t\t"bind-tcp [::1]:6053",\n\t\t"dualstack-ip-selection yes",\n\t\t"dualstack-ip-selection-threshold 10",\n\t\t"dualstack-ip-allow-force-AAAA yes",
+		"bind-tcp 127.0.0.1:6053",
+		"bind [::1]:6053",
+		"bind-tcp [::1]:6053",
+		"dualstack-ip-selection yes",
+		"dualstack-ip-selection-threshold 10",
+		"dualstack-ip-allow-force-AAAA yes",
 		"proxy-server socks5://127.0.0.1:16000 -name s5m-smartdns-16000",
 		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
 		"server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
