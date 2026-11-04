@@ -711,7 +711,7 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 	}
 	normalized, err := normalizeAgentProxyConfig(yml)
 	if err != nil { return fmt.Errorf("校验节点 Mihomo 配置失败: %w", err) }
-	yml, err = applyAgentRuntimeDNS(normalized, enabled)
+	yml, err = applyAgentRuntimeDNS(normalized, enabled, enabled)
 	if err != nil { return fmt.Errorf("生成 SmartDNS 切换 DNS 配置失败: %w", err) }
 	commandID, err := newAgentCommandID()
 	if err != nil { return err }
