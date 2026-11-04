@@ -166,7 +166,7 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "fake-ip-filter"}, filter)
 		}
 	}
-	// Disable AAAA answers and keep local/private/controller names out of fake-IP.
+	// Preserve AAAA answers and keep local/private/controller names out of fake-IP.
 	setScalar(dns, "ipv6", "true", "!!bool")
 	for _, pattern := range []string{"*.lan", "*.local", "geosite:private", "+.v2net.cc"} {
 		found := false
