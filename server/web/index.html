@@ -390,6 +390,7 @@
               <el-option label="自动优选（动态选择最低延迟节点）" value="url-test"></el-option>
               <el-option label="跟随已选代理（使用 PROXY 手动选择）" value="select"></el-option>
               <el-option label="顺序故障切换（按代理列表顺序）" value="fallback"></el-option>
+              <el-option label="保持旧节点行为（不接管 SmartDNS 出口）" value="legacy"></el-option>
             </el-select>
             <el-button type="primary" :loading="savingSmartDNSRouting" @click="saveSmartDNSRoutingStrategy">保存 SmartDNS 出口策略</el-button>
           </div>
