@@ -672,8 +672,15 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 	if err != nil { return fmt.Errorf("读取 Agent 状态失败: %w", err) }
 	token := strings.TrimSpace(settings["agent_machine_"+machineCode])
 	if token == "" || token == settings["agent_token"] { return fmt.Errorf("目标 Agent 未授权") }
-	lastSeen, _ := strconv.ParseInt(settings["agent_lastseen_"+machineCode], 10, 64)
-	if lastSeen <= 0 || time.Since(time.Unix(lastSeen, 0)) > 90*time.Second {
+	var receivedAt int64
+	if statusRaw := settings["agent_status_"+machineCode]; statusRaw != "" {
+		var latest map[string]any
+		if json.Unmarshal([]byte(statusRaw), &latest) == nil {
+			if value, ok := latest["received_at"].(float64); ok && value > 0 && value <= 9.0e15 { receivedAt = int64(value) }
+		}
+	}
+	age := time.Since(time.Unix(receivedAt, 0))
+	if receivedAt <= 0 || age > 90*time.Second || age < -30*time.Second {
 		return fmt.Errorf("目标 Agent 离线或心跳已超时，不能切换 SmartDNS")
 	}
 	var status map[string]any
