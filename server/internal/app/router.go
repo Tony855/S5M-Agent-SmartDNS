@@ -115,6 +115,7 @@ func (a *App) Router(static fs.FS) http.Handler {
 		"GET /api/v1/nodes/proxy-modes":           a.handleListMachineProxyModes,
 		"GET /api/v1/nodes/{code}/proxy-mode":        a.handleGetMachineProxyMode,
 		"PUT /api/v1/nodes/{code}/proxy-mode":        a.handleSetMachineProxyMode,
+		"PUT /api/v1/nodes/{code}/smartdns":          a.handleSetMachineSmartDNSEnabled,
 		"GET /api/v1/nodes/{code}/config":          a.handleGetNodeConfig,
 		"PUT /api/v1/nodes/{code}/config":          a.handleSaveNodeConfig,
 		"POST /api/v1/nodes/config-sync":           a.handleRetryNodeConfigSync,
