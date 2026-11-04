@@ -2471,3 +2471,34 @@ func TestRouteAgentDNSViaSmartDNSRestoresDomesticPolicyAfterFallback(t *testing.
 		t.Fatalf("unrelated nameserver policy changed: %#v", values)
 	}
 }
+
+
+func TestAgentHasHealthySmartDNSHonorsDesiredStateAndFreshEnableAck(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-desired-state.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	now := time.Now().Unix()
+	staleDisabled := map[string]any{
+		"smartdns_available": true, "smartdns_enabled": false,
+		"smartdns_running": false, "smartdns_dns_healthy": false,
+		"received_at": now - 10,
+	}
+	statusJSON, _ := json.Marshal(staleDisabled)
+	resultJSON, _ := json.Marshal(map[string]any{
+		"type": "set_smartdns_enabled", "status": "success",
+		"enabled": true, "updated_at": now,
+	})
+	if err := store.UpdateSettings(map[string]string{
+		"agent_status_node-a": string(statusJSON),
+		"smartdns_enabled_node-a": "true",
+		"agent_command_result_node-a": string(resultJSON),
+	}); err != nil { t.Fatal(err) }
+	if !app.agentHasHealthySmartDNS("node-a") {
+		t.Fatal("fresh successful enable ACK should bridge the stale pre-enable heartbeat")
+	}
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a": "false"}); err != nil { t.Fatal(err) }
+	if app.agentHasHealthySmartDNS("node-a") {
+		t.Fatal("explicitly disabled node must never use stale healthy SmartDNS telemetry")
+	}
+}
