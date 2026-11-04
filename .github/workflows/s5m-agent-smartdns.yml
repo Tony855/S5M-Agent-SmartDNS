@@ -131,6 +131,11 @@ jobs:
           grep -q 'GetMachineProxyMode(machineCode)' server/internal/app/configgen.go
           grep -q 'CREATE TABLE IF NOT EXISTS machine_proxy_settings' server/internal/app/store.go
           grep -q 'DOMAIN-SUFFIX,v2net.cc,DIRECT' server/internal/app/configgen.go
+          grep -q 'PROCESS-NAME,smartdns,%s' server/internal/app/configgen.go
+          grep -q 'MATCH,REJECT' s5m-agent/smartdns/default-config-smartdns.yaml
+          ! grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
+          grep -q 'MATCH,REJECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
           grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/default-config.yaml
           grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'bind 127.0.0.1:6054 -group china-dot' s5m-agent/smartdns/smartdns.conf
@@ -279,6 +284,10 @@ jobs:
             sudo rm -rf "$data_dir"
           }
           trap cleanup EXIT
+
+          # CI-only fixture routes SmartDNS directly while keeping all other
+          # traffic fail-closed. Production configs still require a selected proxy.
+          install -m 0600 "$GITHUB_WORKSPACE/s5m-agent/smartdns/tests/ci-mihomo-config.yaml" "$data_dir/config.yaml"
 
           # The combined image defaults to TUN enabled; provide the same
           # device and capability that the production Compose deployment grants.
@@ -506,6 +515,9 @@ jobs:
             sudo rm -rf "$data_dir"
           }
           trap cleanup EXIT
+
+          # Use the same isolated, test-only SmartDNS egress fixture as AMD64.
+          install -m 0600 "$GITHUB_WORKSPACE/s5m-agent/smartdns/tests/ci-mihomo-config.yaml" "$data_dir/config.yaml"
 
           # Match production TUN permissions for the default TUN-enabled image.
           sudo modprobe tun || true
