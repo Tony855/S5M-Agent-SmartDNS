@@ -2402,3 +2402,23 @@ func TestApplyAgentRuntimeDNSFallbackFiltersOnlySmartDNSFromMixedLists(t *testin
 		t.Fatalf("mixed nameserver-policy list not safely filtered: %#v", got)
 	}
 }
+
+func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T) {
+	custom := []any{map[string]any{
+		"name": SmartDNSGroupName, "type": "url-test",
+		"proxies": []any{"old-node"}, "url": "https://www.gstatic.com/generate_204", "interval": 30,
+	}}
+	generated := []any{map[string]any{
+		"name": SmartDNSGroupName, "type": "url-test",
+		"proxies": []any{"new-node"}, "url": "https://www.gstatic.com/generate_204",
+		"interval": 30, "tolerance": 50,
+	}}
+	got, err := mergeManagedProxyGroupValues(custom, generated)
+	if err != nil { t.Fatal(err) }
+	if len(got) != 1 { t.Fatalf("expected one managed group, got %#v", got) }
+	group := got[0].(map[string]any)
+	members := group["proxies"].([]any)
+	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 {
+		t.Fatalf("url-test group was not refreshed atomically: %#v", group)
+	}
+}
