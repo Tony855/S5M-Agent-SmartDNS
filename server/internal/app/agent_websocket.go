@@ -1157,7 +1157,12 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
 	// Apply it only to the outgoing payload so health loss immediately falls back
 	// to the original configured nameservers on the next config request.
-	yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode), a.agentHasDomesticSmartDNS(machineCode))
+	domesticListener, domesticReported := a.agentSmartDNSDomesticListenerStatus(machineCode)
+	if domesticReported {
+		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode), domesticListener)
+	} else {
+		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode))
+	}
 	if err != nil {
 		return err
 	}
