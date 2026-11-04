@@ -280,11 +280,13 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 				_ = persistSmartDNSDisabled(true)
 				return fmt.Errorf("启动 SmartDNS s6 服务失败: %w", err)
 			}
-			if !waitForSmartDNSHealthy(5 * time.Second) {
+		}
+		if !waitForSmartDNSHealthy(5 * time.Second) {
+			if !wasEnabled {
 				_ = persistSmartDNSDisabled(true)
 				_ = smartDNSServiceStop()
-				return fmt.Errorf("SmartDNS 启动后未通过 UDP/TCP DNS 健康检查，未切换 Mihomo")
 			}
+			return fmt.Errorf("SmartDNS 当前未通过 UDP/TCP DNS 健康检查，未切换 Mihomo")
 		}
 		if err := applyAgentConfigTransaction(mihomoYAML, smartDNSConfig, true, centralURL); err != nil {
 			if !wasEnabled {
