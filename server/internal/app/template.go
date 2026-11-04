@@ -202,6 +202,9 @@ func (a *App) handleSaveMihomoTemplateDraft(w http.ResponseWriter, r *http.Reque
 }
 
 func (a *App) handlePublishMihomoTemplate(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	var in struct {
 		Note string `json:"note"`
 	}
@@ -250,6 +253,9 @@ func (a *App) handlePublishMihomoTemplate(w http.ResponseWriter, r *http.Request
 
 // handleDeleteMihomoTemplateVersion removes only an unused historical template version.
 func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	version, err := strconv.Atoi(strings.TrimSpace(r.PathValue("version")))
 	if err != nil || version < 1 {
 		writeErr(w, http.StatusBadRequest, "模板版本号无效")
@@ -455,6 +461,9 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 }
 
 func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	var in struct {
 		MachineCode string `json:"machine_code"`
 		Version     int    `json:"version"`
@@ -571,6 +580,9 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 var _ = json.Valid
 
 func (a *App) handleRollbackNodeTemplate(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	var in struct {
 		MachineCode string `json:"machine_code"`
 		Confirm     bool   `json:"confirm"`
