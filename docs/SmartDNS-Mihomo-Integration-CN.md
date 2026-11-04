@@ -6,7 +6,7 @@
 
 ## S5M 自动配置策略
 
-- SmartDNS 健康检查同时执行本机 UDP 和 TCP DNS A 查询；只有进程、配置策略和两种查询均正常时，主控才将 Agent 的普通 `dns.nameserver` 切换到 `127.0.0.1:6053`。
+- SmartDNS 健康检查分别执行本机 UDP 和 TCP DNS A、AAAA 查询；四项查询都成功且进程、配置策略正常时，主控才将 Agent 的普通 `dns.nameserver` 切换到 `127.0.0.1:6053`。
 - SmartDNS 不健康时，下一次 Agent WebSocket 配置同步自动恢复节点原有 `dns.nameserver`；运行时切换不写回节点持久配置。
 - SmartDNS 默认使用 Cloudflare/Google 的 DNS-over-TLS 上游，连接端点使用字面 IP 和明确 TLS 主机名，避免 Bootstrap DNS 递归。
 - Agent 默认生成独立的 `SMARTDNS-PROXY` fallback 组，成员仅为当前机器绑定节点和全局节点中已启用的代理；通过 `PROCESS-NAME,smartdns,SMARTDNS-PROXY` 路由 SmartDNS 的全部上游连接。组内每 30 秒主动探测 HTTPS 204 健康地址，优先使用列表中第一个健康节点；节点失效时自动切换到下一个健康节点。组不包含 `DIRECT`，全部代理不可用时 SmartDNS 上游连接失败关闭，不会直连泄漏。普通 `PROXY` 手动选择组不受影响。按客户端独立出口仍需 SmartDNS 的客户端 IP 分组与隔离运行时，当前不自动启用。显式设置空的 `smartdns_routing_config` 可恢复旧版路由行为。
