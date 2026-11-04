@@ -121,7 +121,7 @@ func TestValidateSmartDNSConfigAcceptsIPv6LoopbackPerClientConfig(t *testing.T) 
 		"bind [::1]:6053",
 		"bind-tcp [::1]:6053",
 		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
-		"dualstack-ip-selection yes",
+		"dualstack-ip-selection no",
 		"dualstack-ip-selection-threshold 10",
 		"dualstack-ip-allow-force-AAAA yes",
 		"",
@@ -153,7 +153,7 @@ func TestValidateSmartDNSConfigRejectsIncompleteOrExposedIPv6Listeners(t *testin
 func TestValidateSmartDNSConfigRestrictsDualStackDirectives(t *testing.T) {
 	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	for _, line := range []string{
-		"dualstack-ip-selection no",
+		"dualstack-ip-selection yes",
 		"dualstack-ip-selection-threshold 999",
 		"dualstack-ip-allow-force-AAAA no",
 	} {
