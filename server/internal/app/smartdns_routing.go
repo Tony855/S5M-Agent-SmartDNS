@@ -10,7 +10,10 @@ import (
 const (
 	SmartDNSProxyModeShared  = "shared"
 	SmartDNSProxyModePerClient = "per_client"
-	SmartDNSDefaultStrategy = "fallback"
+	SmartDNSStrategyFallback = "fallback"
+	SmartDNSStrategyURLTest  = "url-test"
+	SmartDNSStrategySelect   = "select"
+	SmartDNSDefaultStrategy  = SmartDNSStrategyURLTest
 	SmartDNSGroupName = "SMARTDNS-PROXY"
 )
 
@@ -58,8 +61,8 @@ func BuildSmartDNSRoutingPlan(cfg SmartDNSRoutingConfig, proxies []SmartDNSProxy
 	if strategy == "" {
 		strategy = SmartDNSDefaultStrategy
 	}
-	if strategy != SmartDNSDefaultStrategy {
-		return SmartDNSRoutingPlan{}, fmt.Errorf("当前仅支持 fallback 策略，收到: %q", cfg.Strategy)
+	if strategy != SmartDNSStrategyFallback && strategy != SmartDNSStrategyURLTest && strategy != SmartDNSStrategySelect {
+		return SmartDNSRoutingPlan{}, fmt.Errorf("SmartDNS 策略必须是 fallback、url-test 或 select，收到: %q", cfg.Strategy)
 	}
 
 	available := make(map[string]bool, len(proxies))
