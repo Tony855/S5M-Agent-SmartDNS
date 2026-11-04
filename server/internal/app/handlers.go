@@ -1637,7 +1637,7 @@ func parseProxyImportContent(content string) ([]*Proxy, []string) {
 		if protocol == "" {
 			for _, server := range input.Servers {
 				if strings.TrimSpace(server.ID) != "" || strings.TrimSpace(server.UUID) != "" {
-					if strings.TrimSpace(server.Network) != "" || server.AlterID >= 0 {
+					if strings.TrimSpace(server.Network) != "" || server.AlterID > 0 {
 						protocol = "vmess"
 						break
 					}
