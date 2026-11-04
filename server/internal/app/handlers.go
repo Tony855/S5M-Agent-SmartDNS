@@ -2316,6 +2316,11 @@ func (a *App) handleAgentCommandAck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "命令 ID、状态或结果消息无效")
 		return
 	}
+	// Keep the legacy HTTP ACK path consistent with WebSocket ACK handling:
+	// Agent diagnostics are untrusted and must not persist credentials or
+	// machine-local filesystem paths in command history or browser events.
+	in.Message = sanitizeAgentWebSocketText(in.Message)
+
 	// Serialize ACK persistence with Agent binding revocation, then revalidate
 	// the credential while holding the same mutex used by DeleteAgentBinding.
 	// The initial authentication above can become stale while the request is decoded.
