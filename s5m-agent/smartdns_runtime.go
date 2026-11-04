@@ -110,7 +110,8 @@ func validateAgentSmartDNSDNSMode(mihomoYAML []byte, enabled bool) error {
 		for i := 0; i+1 < len(dns.Content); i += 2 {
 			if containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6053") ||
 				containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6054") ||
-				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6053") {
+				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6053") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6054") {
 				return fmt.Errorf("禁用 SmartDNS 的 Mihomo 配置仍引用本地 SmartDNS 监听地址")
 			}
 		}
