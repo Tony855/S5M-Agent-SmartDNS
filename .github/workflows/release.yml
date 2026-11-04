@@ -168,7 +168,9 @@ jobs:
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
             AAAA_UDP="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA)"
-            printf '%s\\n' "$AAAA_UDP" | grep -Eq '^[0-9a-fA-F:]+
+            printf "%s\n" "$AAAA_UDP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS UDP AAAA query failed" >&2; exit 1; }
+            AAAA_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA)"
+            printf "%s\n" "$AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP AAAA query failed" >&2; exit 1; }
           '
           if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
             echo "Unexpected public proxy port 7890" >&2
