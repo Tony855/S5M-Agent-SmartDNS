@@ -1485,3 +1485,38 @@ func TestValidateAgentSmartDNSDNSModeRequiresSafeListenerReferences(t *testing.T
 		t.Fatal("enabled mode must require the domestic SmartDNS listener")
 	}
 }
+
+
+func TestProbeMihomoDNSFallbackRequiresUDPAndTCPForAllEnabledFamilies(t *testing.T) {
+	config := []byte(`dns:
+  listen: 127.0.0.1:1053
+  ipv6: true
+`)
+	calls := make([]string, 0, 6)
+	run := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		if strings.Contains(joined, " AAAA") { return []byte("2001:db8::10\n"), nil }
+		return []byte("203.0.113.10\n"), nil
+	}
+	if !probeMihomoDNSFallbackWithDig(config, run) {
+		t.Fatal("valid UDP/TCP A and AAAA fallback probes should pass")
+	}
+	if len(calls) != 6 { t.Fatalf("probe count = %d, want 6: %#v", len(calls), calls) }
+	udp, tcp := 0, 0
+	for _, call := range calls {
+		if strings.Contains(call, "+tcp") { tcp++ } else { udp++ }
+	}
+	if udp != 3 || tcp != 3 { t.Fatalf("transport probe counts UDP=%d TCP=%d, want 3 each", udp, tcp) }
+
+	failedTCP := func(args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "+tcp") { return nil, errors.New("TCP unavailable") }
+		return []byte("203.0.113.10\n"), nil
+	}
+	if probeMihomoDNSFallbackWithDig([]byte(`dns:
+  listen: 127.0.0.1:1053
+  ipv6: false
+`), failedTCP) {
+		t.Fatal("fallback must not pass when TCP DNS is unavailable")
+	}
+}
