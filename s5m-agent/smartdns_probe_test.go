@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
