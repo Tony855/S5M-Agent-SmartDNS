@@ -2537,7 +2537,7 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		if raw := settings["agent_command_result_"+code]; raw != "" {
 			_ = json.Unmarshal([]byte(raw), &commandResult)
 		}
-		var pendingCommand map[string]string
+		var pendingCommand map[string]any
 		if raw := settings["agent_command_"+code]; raw != "" {
 			_ = json.Unmarshal([]byte(raw), &pendingCommand)
 		}
