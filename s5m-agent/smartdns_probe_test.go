@@ -308,8 +308,8 @@ bind-tcp 127.0.0.1:6053
 bind 127.0.0.1:6054 -group china-dot
 bind-tcp 127.0.0.1:6054 -group china-dot
 server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
-server-tls 223.5.5.5:853 -host-name dns.alidns.co -tls-host-verify dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
-server-tls 1.12.12.12:853 -host-name dot.pu -tls-host-verify dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
+server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
 `)
 	if err := validateSmartDNSConfig(valid); err != nil {
 		t.Fatalf("valid domestic DoT group rejected: %v", err)
@@ -376,8 +376,8 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 		"server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google",
 		"bind 127.0.0.1:6054 -group china-dot",
 		"bind-tcp 127.0.0.1:6054 -group china-dot",
-		"server-tls 223.5.5.5:853 -host-name dns.alidns.co -tls-host-verify dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
-		"server-tls 1.12.12.12:853 -host-name dot.pu -tls-host-verify dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group",
+		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
+		"server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group",
 		"cache-persist yes",
 		"cache-file /data/smartdns.cache",
 		"cache-checkpoint-time 3600",
@@ -1112,7 +1112,7 @@ func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) 
 		{name: "out of range DoT port", line: "server-tls 1.1.1.1:65536 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 		{name: "nonnumeric DoT port", line: "server-tls 1.1.1.1:https -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 		{name: "missing TLS name value", line: "server-tls 1.1.1.1:853 -host-name"},
-		{name: "TLS name parsed as option", line: "server-tls 1.1.1.1:853 -host-name -group -tls-host-verify -group"},
+		{name: "TLS name parsed as option", line: "server-tls 1.1.1.1:853 -host-name -group"},
 		{name: "invalid TLS name", line: "server-tls 1.1.1.1:853 -host-name bad -tls-host-verify bad_name.example"},
 		{name: "duplicate TLS name", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -host-name dns.google -tls-host-verify dns.google"},
 		{name: "missing certificate hostname verification", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com"},
