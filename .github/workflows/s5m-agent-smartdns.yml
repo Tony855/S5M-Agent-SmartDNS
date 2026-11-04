@@ -328,8 +328,11 @@ jobs:
             # The CI runner lacks /dev/net/tun, so this isolated Mihomo process tests DNS/Fake-IP independently.
             printf "%s\n" "mode: rule" "log-level: info" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml
             mkdir -p /tmp/mihomo-ipv6-smoke
+            /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-validate.log 2>&1 || { cat /tmp/mihomo-ipv6-validate.log >&2; exit 1; }
             /usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-smoke.log 2>&1 &
             MIHOMO_TEST_PID=$!
+            sleep 1
+            kill -0 "$MIHOMO_TEST_PID" || { cat /tmp/mihomo-ipv6-smoke.log >&2; exit 1; }
             for attempt in $(seq 1 20); do
               if dig +short +time=1 +tries=1 @127.0.0.1 -p 5354 cloudflare.com A | grep -Eq "^[0-9.]+$"; then break; fi
               sleep 1
@@ -483,8 +486,11 @@ jobs:
             # The CI runner lacks /dev/net/tun, so this isolated Mihomo process tests DNS/Fake-IP independently.
             printf "%s\n" "mode: rule" "log-level: info" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml
             mkdir -p /tmp/mihomo-ipv6-smoke
+            /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-validate.log 2>&1 || { cat /tmp/mihomo-ipv6-validate.log >&2; exit 1; }
             /usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-smoke.log 2>&1 &
             MIHOMO_TEST_PID=$!
+            sleep 1
+            kill -0 "$MIHOMO_TEST_PID" || { cat /tmp/mihomo-ipv6-smoke.log >&2; exit 1; }
             for attempt in $(seq 1 20); do
               if dig +short +time=1 +tries=1 @127.0.0.1 -p 5354 cloudflare.com A | grep -Eq "^[0-9.]+$"; then break; fi
               sleep 1
