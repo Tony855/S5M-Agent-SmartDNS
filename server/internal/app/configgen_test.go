@@ -2440,3 +2440,34 @@ func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T)
 		t.Fatalf("url-test group was not refreshed atomically: %#v", group)
 	}
 }
+
+
+func TestRouteAgentDNSViaSmartDNSRestoresDomesticPolicyAfterFallback(t *testing.T) {
+	input := `dns:
+  ipv6: true
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+    geosite:geolocation-!cn:
+      - https://dns.google/dns-query
+`
+	fallback, err := routeAgentDNSFallbackIfSmartDNS(input)
+	if err != nil { t.Fatalf("route fallback: %v", err) }
+	got, err := routeAgentDNSViaSmartDNS(fallback)
+	if err != nil { t.Fatalf("restore SmartDNS route: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode: %v", err) }
+	dns := config["dns"].(map[string]any)
+	if values := dns["nameserver"].([]any); len(values) != 1 || values[0] != "127.0.0.1:6053" {
+		t.Fatalf("primary nameserver = %#v, want SmartDNS 6053", values)
+	}
+	policy := dns["nameserver-policy"].(map[string]any)
+	if got := policy["geosite:cn"]; got != "127.0.0.1:6054" {
+		t.Fatalf("domestic nameserver-policy = %#v, want SmartDNS 6054", got)
+	}
+	if values := policy["geosite:geolocation-!cn"].([]any); len(values) != 1 || values[0] != "https://dns.google/dns-query" {
+		t.Fatalf("unrelated nameserver policy changed: %#v", values)
+	}
+}
