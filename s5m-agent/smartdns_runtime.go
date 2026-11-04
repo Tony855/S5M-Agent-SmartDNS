@@ -24,6 +24,33 @@ import (
 )
 
 var smartDNSConfigPath = "/data/smartdns.conf"
+var smartDNSDisabledPath = "/data/smartdns.disabled"
+
+var smartDNSServiceStart = func() error {
+	return exec.Command("/command/s6-svc", "-u", "/run/service/smartdns").Run()
+}
+var smartDNSServiceStop = func() error {
+	return exec.Command("/command/s6-svc", "-d", "/run/service/smartdns").Run()
+}
+
+func smartDNSRuntimeEnabled() bool {
+	_, err := os.Lstat(smartDNSDisabledPath)
+	if err == nil { return false }
+	return os.IsNotExist(err)
+}
+
+func persistSmartDNSDisabled(disabled bool) error {
+	if disabled {
+		if err := os.MkdirAll(filepath.Dir(smartDNSDisabledPath), 0700); err != nil { return fmt.Errorf("创建 SmartDNS 状态目录失败: %w", err) }
+		return atomicWriteFile(smartDNSDisabledPath, []byte("disabled\\n"), 0600)
+	}
+	if err := os.Remove(smartDNSDisabledPath); err != nil && !os.IsNotExist(err) { return fmt.Errorf("清除 SmartDNS 禁用标记失败: %w", err) }
+	dir, err := os.Open(filepath.Dir(smartDNSDisabledPath))
+	if err != nil { return err }
+	defer dir.Close()
+	return dir.Sync()
+}
+
 const smartDNSPreflightOutputLimit = 8 << 10
 const smartDNSRestartCooldown = 30 * time.Second
 
@@ -385,6 +412,7 @@ func appendSmartDNSStatusError(status map[string]any, message string) {
 }
 
 type smartDNSStatusDependencies struct {
+	enabled    func() bool
 	binaryInfo func() (os.FileInfo, error)
 	readConfig func(string) ([]byte, error)
 	version    func() ([]byte, error)
@@ -396,6 +424,7 @@ type smartDNSStatusDependencies struct {
 
 func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
 	return smartDNSStatusDependencies{
+		enabled: smartDNSRuntimeEnabled,
 		binaryInfo: func() (os.FileInfo, error) { return os.Stat("/usr/sbin/smartdns") },
 		readConfig: os.ReadFile,
 		version: func() ([]byte, error) {
@@ -418,6 +447,7 @@ func collectSmartDNSStatus(status map[string]any) {
 // every status and failure path can be tested without a live SmartDNS daemon.
 func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSStatusDependencies) {
 	status["smartdns_available"] = false
+	status["smartdns_enabled"] = false
 	status["smartdns_running"] = false
 	status["smartdns_dns_healthy"] = false
 	status["smartdns_version"] = ""
@@ -430,6 +460,9 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		return
 	}
 	status["smartdns_available"] = true
+	enabled := true
+	if deps.enabled != nil { enabled = deps.enabled() }
+	status["smartdns_enabled"] = enabled
 
 	configHealthy := false
 	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
@@ -466,6 +499,14 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	// A running process with an unreadable or policy-invalid configuration is
 	// not a usable resolver. Do not restart it into the same invalid config.
 	if !configHealthy {
+		return
+	}
+	// An explicit disable is durable across container restarts. Do not let
+	// periodic health collection auto-start a service the operator disabled.
+	if !enabled {
+		if processHealthy {
+			appendSmartDNSStatusError(status, "SmartDNS 已禁用，但检测到进程仍在运行")
+		}
 		return
 	}
 	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
