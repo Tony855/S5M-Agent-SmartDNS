@@ -167,9 +167,10 @@ func TestProbeSmartDNSDNSAtQueriesAAAAAfterA(t *testing.T) {
 			qtype := binary.BigEndian.Uint16(query[n-4 : n-2])
 			response := append([]byte(nil), query[:n]...)
 			binary.BigEndian.PutUint16(response[2:4], 0x8180)
-			// Simulate a healthy A answer but a broken AAAA path.
+			// Return a complete, valid A RR, but an empty NOERROR AAAA response.
 			if qtype == 1 {
 				binary.BigEndian.PutUint16(response[6:8], 1)
+				response = append(response, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
 			} else {
 				binary.BigEndian.PutUint16(response[6:8], 0)
 			}
@@ -220,6 +221,7 @@ func TestProbeSmartDNSDNSTCPAtQueriesAAAAAfterA(t *testing.T) {
 			binary.BigEndian.PutUint16(query[2:4], 0x8180)
 			if qtype == 1 {
 				binary.BigEndian.PutUint16(query[6:8], 1)
+				query = append(query, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
 			} else {
 				binary.BigEndian.PutUint16(query[6:8], 0)
 			}
