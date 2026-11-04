@@ -55,11 +55,17 @@ printf '%s\n' "$TCP_RESULT" | grep -Eq '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || {
 echo "PASS: SmartDNS answered example.com over UDP (port $UDP_PORT) and TCP (port $TCP_PORT)."
 
 # AAAA DNS data is checked separately from IPv6 route reachability.
-AAAA_RESULT="$(dig @127.0.0.1 -p "$UDP_PORT" cloudflare.com AAAA +time=3 +tries=1 +short)"
-printf '%s\n' "$AAAA_RESULT" | grep -Eq '^[0-9a-fA-F:]+$' || {
+AAAA_UDP="$(dig @127.0.0.1 -p "$UDP_PORT" cloudflare.com AAAA +time=3 +tries=1 +short)"
+printf '%s\\n' "$AAAA_UDP" | grep -Eq '^[0-9a-fA-F:]+$' || {
   docker logs "$NAME" || true
-  echo "AAAA DNS query failed or returned no IPv6 address" >&2
+  echo "UDP AAAA DNS query failed or returned no IPv6 address" >&2
+  exit 1
+}
+AAAA_TCP="$(dig +tcp @127.0.0.1 -p "$TCP_PORT" cloudflare.com AAAA +time=3 +tries=1 +short)"
+printf '%s\\n' "$AAAA_TCP" | grep -Eq '^[0-9a-fA-F:]+$' || {
+  docker logs "$NAME" || true
+  echo "TCP AAAA DNS query failed or returned no IPv6 address" >&2
   exit 1
 }
 
-echo "PASS: SmartDNS returned AAAA records over UDP (port $UDP_PORT)."
+echo "PASS: SmartDNS returned AAAA records over UDP and TCP."
