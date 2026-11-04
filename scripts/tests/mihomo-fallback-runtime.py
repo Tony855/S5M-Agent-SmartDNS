@@ -16,6 +16,7 @@ from pathlib import Path
 IMAGE = sys.argv[1] if len(sys.argv) > 1 else "s5m-agent-smartdns:test"
 NAME = "mihomo-fallback-runtime-" + str(os.getpid())
 states = {"a": 204, "b": 204}
+delays = {"a": 0.005, "b": 0.005}
 servers = []
 threads = []
 
@@ -75,6 +76,7 @@ class SocksProxyServer:
                 data = client.recv(65536)
                 if not data:
                     return
+                time.sleep(delays[self.node])
                 status = states[self.node]
                 reason = b"No Content" if status == 204 else b"Service Unavailable"
                 client.sendall(
@@ -246,9 +248,78 @@ rules:
             proxy_b.close()
 
 
+
+
+def url_test_main():
+    """Verify url-test chooses the fastest healthy proxy and adapts to latency changes."""
+    proxy_a = SocksProxyServer("a")
+    proxy_b = SocksProxyServer("b")
+    node_a, node_b = proxy_a.port, proxy_b.port
+    controller = free_port()
+    mixed = free_port()
+    delays["a"], delays["b"] = 0.18, 0.01
+
+    with tempfile.TemporaryDirectory(prefix="mihomo-url-test-") as temp:
+        config = f"""\
+mixed-port: {mixed}
+allow-lan: false
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:{controller}
+proxies:
+  - name: node-a
+    type: socks5
+    server: 127.0.0.1
+    port: {node_a}
+  - name: node-b
+    type: socks5
+    server: 127.0.0.1
+    port: {node_b}
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: url-test
+    proxies: [node-a, node-b]
+    url: http://mihomo-health-check.invalid/generate_204
+    interval: 1
+    timeout: 1500
+    tolerance: 0
+    lazy: false
+    expected-status: 204
+rules:
+  - MATCH,SMARTDNS-PROXY
+"""
+        Path(temp, "config.yaml").write_text(config, encoding="utf-8")
+        name = NAME + "-url-test"
+        command = [
+            "docker", "run", "-d", "--rm", "--name", name, "--network", "host",
+            "-v", f"{temp}:/tmp/mihomo:ro",
+            "--entrypoint", "/usr/local/bin/mihomo", IMAGE,
+            "-d", "/tmp/mihomo", "-f", "/tmp/mihomo/config.yaml",
+        ]
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+        try:
+            wait_for(controller, lambda state: state.get("now") == "node-b",
+                     "url-test initially chooses the lower-latency proxy")
+            delays["a"], delays["b"] = 0.005, 0.18
+            wait_for(controller, lambda state: state.get("now") == "node-a",
+                     "url-test dynamically switches when another proxy becomes faster")
+            state = api(controller)
+            if "DIRECT" in state.get("all", []) or state.get("now") == "DIRECT":
+                raise RuntimeError(f"url-test unexpectedly exposed DIRECT: {state!r}")
+            print("PASS: dynamic SmartDNS upstream selection remains proxy-only")
+        finally:
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            proxy_a.close()
+            proxy_b.close()
+
+
 if __name__ == "__main__":
     try:
         main()
+        url_test_main()
     finally:
         for server in servers:
             server.shutdown()
