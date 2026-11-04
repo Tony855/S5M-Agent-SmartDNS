@@ -1386,11 +1386,6 @@ func processAgentCommandWebSocket(cfg Config) error {
 		if runErr == nil {
 			if cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
 		}
-	case "set_smartdns_enabled":
-		runErr = applyAgentSmartDNSEnabled(cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
-		if runErr == nil {
-			if cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
-		}
 	default:
 		runErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
 	}
