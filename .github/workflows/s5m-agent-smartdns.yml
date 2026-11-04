@@ -316,6 +316,8 @@ jobs:
           curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
 
           # Test the loopback-only resolver from a helper sharing the Agent network namespace.
+          docker exec "$container" sh -ec 'printf "%s\n" "mode: rule" "log-level: info" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml; mkdir -p /tmp/mihomo-ipv6-smoke; /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml'
+          docker exec -d "$container" sh -c '/usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml > /tmp/mihomo-ipv6-smoke.log 2>&1'
           if ! docker run --rm --network "container:$container" alpine:3.24 sh -ec '
             apk add --no-cache bind-tools >/dev/null
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
@@ -325,24 +327,17 @@ jobs:
             SMARTDNS_AAAA="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS AAAA answer: %s\n" "$SMARTDNS_AAAA"
             printf "%s\n" "$SMARTDNS_AAAA" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS did not return an AAAA answer" >&2; exit 1; }
-            # The CI runner lacks /dev/net/tun, so this isolated Mihomo process tests DNS/Fake-IP independently.
-            printf "%s\n" "mode: rule" "log-level: info" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml
-            mkdir -p /tmp/mihomo-ipv6-smoke
-            /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-validate.log 2>&1 || { cat /tmp/mihomo-ipv6-validate.log >&2; exit 1; }
-            /usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-smoke.log 2>&1 &
-            MIHOMO_TEST_PID=$!
-            sleep 1
-            kill -0 "$MIHOMO_TEST_PID" || { cat /tmp/mihomo-ipv6-smoke.log >&2; exit 1; }
+            # The isolated Mihomo process runs in the Agent container with TUN disabled for CI.
             for attempt in $(seq 1 20); do
               if dig +short +time=1 +tries=1 @127.0.0.1 -p 5354 cloudflare.com A | grep -Eq "^[0-9.]+$"; then break; fi
               sleep 1
             done
             AAAA_RESULT="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 5354 cloudflare.com AAAA || true)"
             printf "Mihomo isolated AAAA answer: %s\n" "$AAAA_RESULT"
-            printf "%s\n" "$AAAA_RESULT" | grep -Eq "^[0-9a-fA-F:]+$" || { cat /tmp/mihomo-ipv6-smoke.log >&2; echo "Mihomo Fake-IP DNS did not return an AAAA answer" >&2; exit 1; }
-            kill "$MIHOMO_TEST_PID" >/dev/null 2>&1 || true
+            printf "%s\n" "$AAAA_RESULT" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "Mihomo Fake-IP DNS did not return an AAAA answer" >&2; exit 1; }
           '; then
             docker logs "$container" >&2
+            docker exec "$container" cat /tmp/mihomo-ipv6-smoke.log >&2 || true
             exit 1
           fi
           # Verify SmartDNS writes its cache to the persistent /data volume on graceful shutdown.
@@ -474,6 +469,8 @@ jobs:
           curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${agent_port}/api/config" >/dev/null
 
           # Exercise real UDP and TCP DNS queries through SmartDNS in ARM64 too.
+          docker exec "$container" sh -ec 'printf "%s\n" "mode: rule" "log-level: info" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml; mkdir -p /tmp/mihomo-ipv6-smoke; /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml'
+          docker exec -d "$container" sh -c '/usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml > /tmp/mihomo-ipv6-smoke.log 2>&1'
           if ! docker run --rm --network "container:$container" alpine:3.24 sh -ec '
             apk add --no-cache bind-tools >/dev/null
             dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
@@ -483,24 +480,17 @@ jobs:
             SMARTDNS_AAAA="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA || true)"
             printf "SmartDNS AAAA answer: %s\n" "$SMARTDNS_AAAA"
             printf "%s\n" "$SMARTDNS_AAAA" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS did not return an AAAA answer" >&2; exit 1; }
-            # The CI runner lacks /dev/net/tun, so this isolated Mihomo process tests DNS/Fake-IP independently.
-            printf "%s\n" "mode: rule" "log-level: info" "ipv6: true" "dns:" "  enable: true" "  ipv6: true" "  listen: 127.0.0.1:5354" "  enhanced-mode: fake-ip" "  fake-ip-range: 198.18.0.1/16" "  fake-ip-range6: fdfe:dcba:9876::1/64" "  nameserver:" "    - 127.0.0.1:6053" "tun:" "  enable: false" "rules:" "  - MATCH,DIRECT" > /tmp/mihomo-ipv6-smoke.yaml
-            mkdir -p /tmp/mihomo-ipv6-smoke
-            /usr/local/bin/mihomo -t -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-validate.log 2>&1 || { cat /tmp/mihomo-ipv6-validate.log >&2; exit 1; }
-            /usr/local/bin/mihomo -d /tmp/mihomo-ipv6-smoke -f /tmp/mihomo-ipv6-smoke.yaml >/tmp/mihomo-ipv6-smoke.log 2>&1 &
-            MIHOMO_TEST_PID=$!
-            sleep 1
-            kill -0 "$MIHOMO_TEST_PID" || { cat /tmp/mihomo-ipv6-smoke.log >&2; exit 1; }
+            # The isolated Mihomo process runs in the Agent container with TUN disabled for CI.
             for attempt in $(seq 1 20); do
               if dig +short +time=1 +tries=1 @127.0.0.1 -p 5354 cloudflare.com A | grep -Eq "^[0-9.]+$"; then break; fi
               sleep 1
             done
             AAAA_RESULT="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 5354 cloudflare.com AAAA || true)"
             printf "Mihomo isolated AAAA answer: %s\n" "$AAAA_RESULT"
-            printf "%s\n" "$AAAA_RESULT" | grep -Eq "^[0-9a-fA-F:]+$" || { cat /tmp/mihomo-ipv6-smoke.log >&2; echo "Mihomo Fake-IP DNS did not return an AAAA answer" >&2; exit 1; }
-            kill "$MIHOMO_TEST_PID" >/dev/null 2>&1 || true
+            printf "%s\n" "$AAAA_RESULT" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "Mihomo Fake-IP DNS did not return an AAAA answer" >&2; exit 1; }
           '; then
             docker logs "$container" >&2
+            docker exec "$container" cat /tmp/mihomo-ipv6-smoke.log >&2 || true
             exit 1
           fi
           # Verify SmartDNS writes its cache to the persistent /data volume on graceful shutdown.
