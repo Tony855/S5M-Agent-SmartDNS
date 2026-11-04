@@ -1448,3 +1448,39 @@ esac
 		t.Fatal("missing local DNS listener must fail closed")
 	}
 }
+
+
+func TestValidateAgentSmartDNSDNSModeRequiresSafeListenerReferences(t *testing.T) {
+	enabled := []byte(`dns:
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    geosite:cn: 127.0.0.1:6054
+`)
+	if err := validateAgentSmartDNSDNSMode(enabled, true); err != nil {
+		t.Fatalf("valid enabled DNS config rejected: %v", err)
+	}
+	fallback := []byte(`dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`)
+	if err := validateAgentSmartDNSDNSMode(fallback, false); err != nil {
+		t.Fatalf("valid fallback DNS config rejected: %v", err)
+	}
+	if err := validateAgentSmartDNSDNSMode(enabled, false); err == nil {
+		t.Fatal("disabled mode must reject any remaining SmartDNS loopback references")
+	}
+	missingDomestic := []byte(`dns:
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`)
+	if err := validateAgentSmartDNSDNSMode(missingDomestic, true); err == nil {
+		t.Fatal("enabled mode must require the domestic SmartDNS listener")
+	}
+}
