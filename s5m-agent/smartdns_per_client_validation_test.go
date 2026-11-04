@@ -49,3 +49,24 @@ func TestValidateSmartDNSConfigRejectsProxyServerInjectionVariants(t *testing.T)
 		})
 	}
 }
+
+func TestSmartDNSConfigHasDomesticListenerRequiresUDPAndTCP(t *testing.T) {
+	tests := []struct {
+		name string
+		config string
+		want bool
+	}{
+		{name: "both listeners", config: "bind 127.0.0.1:6054 -group china-dot\nbind-tcp 127.0.0.1:6054 -group china-dot\n", want: true},
+		{name: "UDP only", config: "bind 127.0.0.1:6054 -group china-dot\n", want: false},
+		{name: "TCP only", config: "bind-tcp 127.0.0.1:6054 -group china-dot\n", want: false},
+		{name: "no domestic listener", config: "bind 127.0.0.1:6053\n", want: false},
+		{name: "comment only", config: "# bind 127.0.0.1:6054 -group china-dot\n", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := smartDNSConfigHasDomesticListener([]byte(tt.config)); got != tt.want {
+				t.Fatalf("smartDNSConfigHasDomesticListener() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
