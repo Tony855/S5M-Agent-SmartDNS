@@ -483,34 +483,6 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 404, "节点未授权")
 		return
 	}
-	// Normalize every applied node template to transparent-only listeners before saving.
-	normalizedTemplate, normalizeErr := normalizeAgentProxyConfig(template)
-	if normalizeErr != nil {
-		writeErr(w, 400, "模板不能应用: "+normalizeErr.Error())
-		return
-	}
-	template = normalizedTemplate
-	if err := validateMihomoTemplate(template); err != nil {
-		writeErr(w, 400, "模板不能应用: "+err.Error())
-		return
-	}
-	var cfg map[string]any
-	if err := yaml.Unmarshal([]byte(template), &cfg); err != nil {
-		writeErr(w, 400, "模板 YAML 无效")
-		return
-	}
-	if secret, ok := cfg["secret"].(string); !ok || strings.TrimSpace(secret) == "" {
-		writeErr(w, 400, "应用到节点的完整配置必须包含非空 secret")
-		return
-	}
-	if _, ok := cfg["tun"]; !ok {
-		writeErr(w, 400, "应用到节点的完整配置必须包含 tun 配置块")
-		return
-	}
-	if _, ok := cfg["dns"]; !ok {
-		writeErr(w, 400, "应用到节点的完整配置必须包含 dns 配置块")
-		return
-	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		writeErr(w, 500, "开始应用模板事务失败")
