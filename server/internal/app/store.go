@@ -427,6 +427,9 @@ func (s *Store) ListInstances() ([]Instance, error) {
 		}
 		out = append(out, i)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历实例记录失败: %w", err)
+	}
 	return out, nil
 }
 
@@ -492,6 +495,9 @@ func (s *Store) ListProxies() ([]Proxy, error) {
 		p.Extra = map[string]any{}
 		_ = json.Unmarshal([]byte(extra), &p.Extra)
 		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历代理记录失败: %w", err)
 	}
 	return out, nil
 }
@@ -677,6 +683,9 @@ func (s *Store) ListVersions(limit int) ([]ConfigVersion, error) {
 			return nil, err
 		}
 		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历配置版本记录失败: %w", err)
 	}
 	return out, nil
 }
