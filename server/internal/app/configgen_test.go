@@ -2455,7 +2455,7 @@ func TestRouteAgentDNSViaSmartDNSRestoresDomesticPolicyAfterFallback(t *testing.
 `
 	fallback, err := routeAgentDNSFallbackIfSmartDNS(input)
 	if err != nil { t.Fatalf("route fallback: %v", err) }
-	got, err := routeAgentDNSViaSmartDNS(fallback)
+	got, err := routeAgentDNSViaSmartDNSWithDomestic(fallback)
 	if err != nil { t.Fatalf("restore SmartDNS route: %v", err) }
 	var config map[string]any
 	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode: %v", err) }
@@ -2501,4 +2501,16 @@ func TestAgentHasHealthySmartDNSHonorsDesiredStateAndFreshEnableAck(t *testing.T
 	if app.agentHasHealthySmartDNS("node-a") {
 		t.Fatal("explicitly disabled node must never use stale healthy SmartDNS telemetry")
 	}
+}
+
+
+func TestApplyAgentRuntimeDNSPreservesLegacySmartDNSPolicy(t *testing.T) {
+	input := `dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+`
+	got, err := applyAgentRuntimeDNS(input, true)
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(got, "127.0.0.1:6053") { t.Fatalf("legacy primary SmartDNS listener was not applied: %s", got) }
+	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("legacy config without a domestic policy must not gain a new 6054 dependency: %s", got) }
 }
