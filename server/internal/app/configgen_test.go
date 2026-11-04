@@ -1405,6 +1405,7 @@ func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 		{"binary only", map[string]any{"smartdns_available": true, "received_at": now}, false},
 		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true, "received_at": now}, false},
 		{"healthy and fresh", healthy, true},
+		{"legacy healthy without domestic telemetry", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true, "received_at": now}, true},
 		{"healthy but stale", stale, false},
 		{"future timestamp", future, false},
 		{"missing heartbeat timestamp", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, false},
@@ -2513,4 +2514,19 @@ func TestApplyAgentRuntimeDNSPreservesLegacySmartDNSPolicy(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if !strings.Contains(got, "127.0.0.1:6053") { t.Fatalf("legacy primary SmartDNS listener was not applied: %s", got) }
 	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("legacy config without a domestic policy must not gain a new 6054 dependency: %s", got) }
+}
+
+
+func TestAgentHasDomesticSmartDNSRequiresCapabilityOrFreshEnableAck(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-domestic-capability.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	now := time.Now().Unix()
+	legacyStatus, _ := json.Marshal(map[string]any{"received_at": now, "smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true})
+	if err := store.UpdateSettings(map[string]string{"agent_status_node-a": string(legacyStatus)}); err != nil { t.Fatal(err) }
+	if app.agentHasDomesticSmartDNS("node-a") { t.Fatal("legacy Agent without domestic capability must retain primary-only SmartDNS routing") }
+	result, _ := json.Marshal(map[string]any{"type":"set_smartdns_enabled","status":"success","enabled":true,"updated_at":now})
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a":"true","agent_command_result_node-a":string(result)}); err != nil { t.Fatal(err) }
+	if !app.agentHasDomesticSmartDNS("node-a") { t.Fatal("fresh verified enable ACK should activate domestic SmartDNS policy") }
 }
