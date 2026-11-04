@@ -333,10 +333,21 @@ func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, messag
 	}
 	var pending map[string]string
 	if raw != "" && json.Unmarshal([]byte(raw), &pending) == nil && pending["id"] == commandID {
-		result, marshalErr := json.Marshal(map[string]any{
+		resultFields := map[string]any{
 			"id": commandID, "type": pending["type"], "status": status,
 			"message": message, "updated_at": updatedAt,
-		})
+		}
+		if pending["type"] == "set_smartdns_enabled" && status == "success" {
+			if pending["enabled"] != "true" && pending["enabled"] != "false" {
+				return false, false, fmt.Errorf("invalid SmartDNS enabled command state")
+			}
+			enabled := pending["enabled"] == "true"
+			resultFields["enabled"] = enabled
+			if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_enabled_"+machineCode, pending["enabled"]); err != nil {
+				return false, false, err
+			}
+		}
+		result, marshalErr := json.Marshal(resultFields)
 		if marshalErr != nil {
 			return false, false, marshalErr
 		}
