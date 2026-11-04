@@ -1858,3 +1858,50 @@ func TestSmartDNSToggleAckPersistsDesiredStateOnlyAfterSuccess(t *testing.T) {
 	if err := json.Unmarshal([]byte(settings["agent_command_result_"+code]), &result); err != nil { t.Fatal(err) }
 	if result["enabled"] != true { t.Fatalf("command result did not expose enabled state: %#v", result) }
 }
+
+
+func TestQueueAgentSmartDNSRejectsUnsupportedAndRequiresSavedConfig(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	now := time.Now().Unix()
+	status := map[string]any{"received_at": now, "smartdns_available": false}
+	raw, _ := json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{
+		"agent_lastseen_"+code: strconv.FormatInt(now, 10),
+		"agent_status_"+code: string(raw),
+	}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, false); err == nil || !strings.Contains(err.Error(), "普通 Agent") {
+		t.Fatalf("ordinary Agent image should be rejected, got %v", err)
+	}
+	status["smartdns_available"] = true
+	raw, _ = json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{"agent_status_"+code: string(raw)}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, true); err == nil || !strings.Contains(err.Error(), "尚无已保存的 SmartDNS 配置") {
+		t.Fatalf("enable must require a saved SmartDNS config, got %v", err)
+	}
+}
+
+func TestQueueAgentSmartDNSDisableIncludesFallbackMihomoConfig(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	now := time.Now().Unix()
+	status := map[string]any{"received_at": now, "smartdns_available": true}
+	raw, _ := json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{
+		"agent_lastseen_"+code: strconv.FormatInt(now, 10),
+		"agent_status_"+code: string(raw),
+	}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, false); err != nil {
+		t.Fatalf("queue disable command: %v", err)
+	}
+	pendingRaw, err := app.store.GetSetting("agent_command_" + code)
+	if err != nil { t.Fatal(err) }
+	var command map[string]any
+	if err := json.Unmarshal([]byte(pendingRaw), &command); err != nil { t.Fatal(err) }
+	if command["type"] != "set_smartdns_enabled" || command["enabled"] != false {
+		t.Fatalf("unexpected pending command: %#v", command)
+	}
+	mihomoConfig, ok := command["mihomo_config"].(string)
+	if !ok || !strings.Contains(mihomoConfig, "dns.cloudflare.com/dns-query") ||
+		strings.Contains(mihomoConfig, "127.0.0.1:6053") || strings.Contains(mihomoConfig, "127.0.0.1:6054") {
+		t.Fatalf("disable command must carry a SmartDNS-free fallback config: %s", mihomoConfig)
+	}
+}
