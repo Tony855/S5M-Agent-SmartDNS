@@ -1579,7 +1579,7 @@ func TestHandleImportProxiesPersistsOneHundredSocks5HNodesAndSkipsDuplicates(t *
 
 	var content strings.Builder
 	for i := 0; i < 100; i++ {
-		fmt.Fprintf(&content, "socks5h://user:pass@proxy.example:%d#node-%03d\\n", 10000+i, i)
+		fmt.Fprintf(&content, "socks5h://user:pass@proxy.example:%d#node-%03d\n", 10000+i, i)
 	}
 	body, err := json.Marshal(map[string]string{"content": content.String()})
 	if err != nil {
