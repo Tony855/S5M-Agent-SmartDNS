@@ -20,6 +20,15 @@ run_dns_probe() {
 
 wget -q -T 3 -O /dev/null http://127.0.0.1:80/api/config || fail "Agent API is not ready"
 pidof mihomo >/dev/null 2>&1 || fail "Mihomo process is not running"
+
+# A deliberate disable is healthy when SmartDNS is truly stopped. Mihomo DNS
+# has already been switched and validated by the Agent transaction.
+if [ -f /data/smartdns.disabled ]; then
+  if pidof smartdns >/dev/null 2>&1; then
+    fail "SmartDNS is marked disabled but its daemon is still running"
+  fi
+  exit 0
+fi
 pidof smartdns >/dev/null 2>&1 || fail "SmartDNS process is not running"
 
 # Require real A and AAAA address records over both transports.
