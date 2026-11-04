@@ -511,6 +511,33 @@ func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
 	return routeAgentDNSFallbackIfSmartDNS(yml)
 }
 
+var smartDNSLoopbackResolverValues = map[string]bool{
+	"127.0.0.1:6053": true,
+	"127.0.0.1:6054": true,
+	"[::1]:6053": true,
+	"[::1]:6054": true,
+}
+
+func isSmartDNSLoopbackResolver(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.ScalarNode && smartDNSLoopbackResolverValues[strings.TrimSpace(node.Value)]
+}
+
+func fallbackResolverNodes(domestic bool) []*yaml.Node {
+	values := []string{"https://dns.cloudflare.com/dns-query", "https://dns.google/dns-query"}
+	if domestic {
+		values = []string{"https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"}
+	}
+	nodes := make([]*yaml.Node, 0, len(values))
+	for _, value := range values {
+		nodes = append(nodes, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+	}
+	return nodes
+}
+
+// routeAgentDNSFallbackIfSmartDNS removes every reference to the local SmartDNS
+// listeners, including the domestic nameserver-policy endpoint. A fallback of
+// dns.nameserver alone is insufficient because nameserver-policy takes
+// precedence for matching domains such as geosite:cn.
 func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
@@ -520,27 +547,86 @@ func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 		return "", fmt.Errorf("Agent DNS 回退配置必须是 YAML 对象")
 	}
 	root := doc.Content[0]
+	var dns *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value != "dns" || root.Content[i+1].Kind != yaml.MappingNode { continue }
-		dns := root.Content[i+1]
-		for j := 0; j+1 < len(dns.Content); j += 2 {
-			if dns.Content[j].Value != "nameserver" { continue }
-			servers := dns.Content[j+1]
-			if servers.Kind != yaml.SequenceNode || len(servers.Content) != 1 || servers.Content[0].Value != "127.0.0.1:6053" {
-				return yml, nil
-			}
-			// SmartDNS failure must not silently downgrade ordinary DNS queries
-			// to plaintext UDP/TCP. Use encrypted DoH endpoints; bootstrap resolvers
-			// remain separate and are used only to resolve endpoint/proxy hostnames.
-			servers.Content = []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.cloudflare.com/dns-query"},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "https://dns.google/dns-query"},
-			}
-			out, err := yaml.Marshal(&doc)
-			return string(out), err
+		if root.Content[i].Value == "dns" {
+			dns = root.Content[i+1]
+			break
 		}
 	}
-	return yml, nil
+	if dns == nil || dns.Kind != yaml.MappingNode {
+		return yml, nil
+	}
+
+	changed := false
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		key, value := dns.Content[i].Value, dns.Content[i+1]
+		switch key {
+		case "nameserver":
+			if value.Kind != yaml.SequenceNode {
+				continue
+			}
+			kept := make([]*yaml.Node, 0, len(value.Content))
+			removed := false
+			for _, server := range value.Content {
+				if isSmartDNSLoopbackResolver(server) {
+					removed = true
+					continue
+				}
+				kept = append(kept, server)
+			}
+			if removed {
+				if len(kept) == 0 {
+					kept = fallbackResolverNodes(false)
+				}
+				value.Content = kept
+				changed = true
+			}
+		case "nameserver-policy":
+			if value.Kind != yaml.MappingNode {
+				continue
+			}
+			for j := 0; j+1 < len(value.Content); j += 2 {
+				policyName, policyServers := strings.TrimSpace(value.Content[j].Value), value.Content[j+1]
+				domestic := strings.EqualFold(policyName, "geosite:cn")
+				if policyServers.Kind == yaml.ScalarNode && isSmartDNSLoopbackResolver(policyServers) {
+					value.Content[j+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: fallbackResolverNodes(domestic)}
+					changed = true
+					continue
+				}
+				if policyServers.Kind != yaml.SequenceNode {
+					continue
+				}
+				kept := make([]*yaml.Node, 0, len(policyServers.Content))
+				removed, removedDomestic := false, false
+				for _, server := range policyServers.Content {
+					if isSmartDNSLoopbackResolver(server) {
+						removed = true
+						if strings.Contains(server.Value, ":6054") {
+							removedDomestic = true
+						}
+						continue
+					}
+					kept = append(kept, server)
+				}
+				if removed {
+					if len(kept) == 0 {
+						kept = fallbackResolverNodes(domestic || removedDomestic)
+					}
+					policyServers.Content = kept
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return yml, nil
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return "", fmt.Errorf("序列化 Agent DNS 回退配置失败: %w", err)
+	}
+	return string(out), nil
 }
 
 // restoreAgentDNSNameserver restores only dns.nameserver from a freshly generated baseline.
