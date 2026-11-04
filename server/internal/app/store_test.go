@@ -428,3 +428,26 @@ func TestStoreMigrationRepairsBlankAgentTokenWithoutOverwritingExistingToken(t *
 	if err != nil { t.Fatalf("read operator token: %v", err) }
 	if got != operatorToken { t.Fatalf("migration overwrote operator token: got %q", got) }
 }
+
+func TestProxyReadsRejectCorruptExtensionJSON(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "corrupt-proxy-extra.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	result, err := store.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,config_json,enabled) VALUES('broken','rule','socks5','127.0.0.1',1080,'{invalid-json',1)`)
+	if err != nil {
+		t.Fatalf("insert corrupt proxy fixture: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read proxy fixture ID: %v", err)
+	}
+	if _, err := store.ListProxies(); err == nil || !strings.Contains(err.Error(), "扩展配置") {
+		t.Fatalf("ListProxies error = %v, want extension JSON error", err)
+	}
+	if _, err := store.GetProxy(id); err == nil || !strings.Contains(err.Error(), "扩展配置") {
+		t.Fatalf("GetProxy error = %v, want extension JSON error", err)
+	}
+}
