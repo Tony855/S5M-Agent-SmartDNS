@@ -53,7 +53,10 @@ func probeMihomoDNSFallback(mihomoConfig []byte) bool {
 	if ip.IsUnspecified() {
 		if ip.To4() != nil { probeHost = "127.0.0.1" } else { probeHost = "::1" }
 	}
-	queries := []struct{ domain, qtype string; family int }{{domain: "example.com", qtype: "A", family: 4}}
+	queries := []struct{ domain, qtype string; family int }{
+		{domain: "example.com", qtype: "A", family: 4},
+		{domain: "www.baidu.com", qtype: "A", family: 4},
+	}
 	if config.DNS.IPv6 {
 		queries = append(queries, struct{ domain, qtype string; family int }{domain: "cloudflare.com", qtype: "AAAA", family: 6})
 	}
