@@ -1,6 +1,6 @@
 # SmartDNS 缓存接入说明（S5M / Mihomo）
 
-本方案把 SmartDNS 作为可选的本地缓存上游；Mihomo 仍然是客户端 DNS 入口和 Fake-IP/TUN 路由控制器。
+本方案把 SmartDNS 作为可选的本地缓存上游；Mihomo 仍然是客户端 DNS 入口和 Fake-IP/TUN 路由控制器。主控默认配置必须同时启用顶层 `ipv6: true` 与 `dns.ipv6: true`，并由 TUN 自动路由接管 IPv6 流量；只在 SmartDNS 上启用 AAAA 不代表客户端链路支持 IPv6。
 
 ## 推荐拓扑
 
@@ -24,8 +24,11 @@ SmartDNS 示例配置见 `smartdns-cache.conf.example`。请按安装包版本�
 在完整配置的 `dns` 部分，将需要缓存的上游配置为：
 
 ```yaml
+ipv6: true
+
 dns:
   enable: true
+  ipv6: true
   listen: 127.0.0.1:5353
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
