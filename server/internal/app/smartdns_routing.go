@@ -88,6 +88,7 @@ func BuildSmartDNSRoutingPlan(cfg SmartDNSRoutingConfig, proxies []SmartDNSProxy
 	plan := SmartDNSRoutingPlan{Mode: mode, Strategy: strategy, ProxyNames: names}
 	if mode == SmartDNSProxyModeShared {
 		plan.GroupName = SmartDNSGroupName
+		if strategy == SmartDNSStrategySelect { plan.GroupName = "PROXY" }
 		if len(cfg.Clients) != 0 {
 			return SmartDNSRoutingPlan{}, fmt.Errorf("统一动态代理模式不接受客户端独立出口映射")
 		}
