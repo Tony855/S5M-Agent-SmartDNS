@@ -493,7 +493,12 @@ func (s *Store) ListProxies() ([]Proxy, error) {
 		}
 		p.Enabled = en == 1
 		p.Extra = map[string]any{}
-		_ = json.Unmarshal([]byte(extra), &p.Extra)
+		if err := json.Unmarshal([]byte(extra), &p.Extra); err != nil {
+			return nil, fmt.Errorf("解析代理 %d 的扩展配置失败: %w", p.ID, err)
+		}
+		if p.Extra == nil {
+			p.Extra = map[string]any{}
+		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -513,7 +518,12 @@ func (s *Store) GetProxy(id int64) (*Proxy, error) {
 	}
 	p.Enabled = en == 1
 	p.Extra = map[string]any{}
-	_ = json.Unmarshal([]byte(extra), &p.Extra)
+	if err := json.Unmarshal([]byte(extra), &p.Extra); err != nil {
+		return nil, fmt.Errorf("解析代理 %d 的扩展配置失败: %w", p.ID, err)
+	}
+	if p.Extra == nil {
+		p.Extra = map[string]any{}
+	}
 	return &p, nil
 }
 
