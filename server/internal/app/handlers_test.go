@@ -1346,6 +1346,40 @@ func TestParseProxyLinePreservesProtocolOptions(t *testing.T) {
 	}
 }
 
+func TestParseShadowsocksSIP003Plugins(t *testing.T) {
+	obfsURI := "ss://" + base64.StdEncoding.EncodeToString([]byte("aes-128-gcm:secret")) +
+		"@ss.example.com:8388?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dcdn.example.com#obfs"
+	obfs, err := parseProxyLine(obfsURI)
+	if err != nil { t.Fatalf("parse obfs SIP002 URI: %v", err) }
+	if obfs.Extra["plugin"] != "obfs" { t.Fatalf("plugin = %#v", obfs.Extra["plugin"]) }
+	obfsOpts, ok := obfs.Extra["plugin-opts"].(map[string]any)
+	if !ok || obfsOpts["mode"] != "http" || obfsOpts["host"] != "cdn.example.com" {
+		t.Fatalf("obfs plugin options = %#v", obfs.Extra["plugin-opts"])
+	}
+
+	// The whole method:password@authority form may itself be base64 encoded;
+	// its plugin query must remain outside and survive decoding.
+	encoded := base64.RawURLEncoding.EncodeToString([]byte("chacha20-ietf-poly1305:secret@ss.example.net:443"))
+	v2rayURI := "ss://" + encoded + "?plugin=v2ray-plugin%3Btls%3Bhost%3Dcdn.example.net%3Bpath%3D%252Fws%3Bmux%3Dtrue#v2ray"
+	v2ray, err := parseProxyLine(v2rayURI)
+	if err != nil { t.Fatalf("parse v2ray-plugin SIP002 URI: %v", err) }
+	if v2ray.Server != "ss.example.net" || v2ray.Port != 443 || v2ray.Extra["plugin"] != "v2ray-plugin" {
+		t.Fatalf("unexpected parsed v2ray proxy: %#v", v2ray)
+	}
+	v2rayOpts, ok := v2ray.Extra["plugin-opts"].(map[string]any)
+	if !ok || v2rayOpts["tls"] != true || v2rayOpts["mux"] != true || v2rayOpts["host"] != "cdn.example.net" || v2rayOpts["path"] != "/ws" {
+		t.Fatalf("v2ray plugin options = %#v", v2ray.Extra["plugin-opts"])
+	}
+}
+
+func TestParseShadowsocksRejectsUnknownPlugin(t *testing.T) {
+	uri := "ss://" + base64.StdEncoding.EncodeToString([]byte("aes-128-gcm:secret")) +
+		"@ss.example.com:8388?plugin=unknown-plugin#bad"
+	if _, err := parseProxyLine(uri); err == nil {
+		t.Fatal("expected unsupported Shadowsocks plugin to be rejected")
+	}
+}
+
 func TestGetNodeConfigRemovesExplicitProxyListeners(t *testing.T) {
 	app, code, _ := websocketTestApp(t)
 	staleYAML := "mixed-port: 8080\nsecret: keep-this-secret\ntun:\n  enable: false\ndns:\n  enable: true\n"
