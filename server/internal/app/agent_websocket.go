@@ -663,6 +663,60 @@ func (a *App) queueAgentSmartDNSRead(machineCode string) error {
 	return nil
 }
 
+func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error {
+	machineCode = strings.TrimSpace(machineCode)
+	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
+		return fmt.Errorf("机器码格式无效")
+	}
+	settings, err := a.store.GetSettings()
+	if err != nil { return fmt.Errorf("读取 Agent 状态失败: %w", err) }
+	token := strings.TrimSpace(settings["agent_machine_"+machineCode])
+	if token == "" || token == settings["agent_token"] { return fmt.Errorf("目标 Agent 未授权") }
+	lastSeen, _ := strconv.ParseInt(settings["agent_lastseen_"+machineCode], 10, 64)
+	if lastSeen <= 0 || time.Since(time.Unix(lastSeen, 0)) > 90*time.Second {
+		return fmt.Errorf("目标 Agent 离线或心跳已超时，不能切换 SmartDNS")
+	}
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &status); err != nil || status["smartdns_available"] != true {
+		return fmt.Errorf("目标节点未确认安装 SmartDNS；普通 Agent 镜像不支持此操作")
+	}
+	config := strings.TrimSpace(settings["smartdns_config_"+machineCode])
+	if enabled && config == "" {
+		return fmt.Errorf("该节点尚无已保存的 SmartDNS 配置，请先读取并保存 SmartDNS 配置")
+	}
+	if len(config) > 8<<10 { return fmt.Errorf("SmartDNS 配置超过 Agent 允许的 8 KiB 限制") }
+	nodeConfig, err := a.store.GetNodeConfig(machineCode)
+	if err != nil { return fmt.Errorf("读取节点配置失败: %w", err) }
+	yml := ""
+	if nodeConfig != nil { yml = nodeConfig.YAML }
+	if strings.TrimSpace(yml) == "" {
+		yml, err = a.BuildConfigForMachine(machineCode)
+		if err != nil { return fmt.Errorf("生成节点 Mihomo 配置失败: %w", err) }
+	}
+	normalized, err := normalizeAgentProxyConfig(yml)
+	if err != nil { return fmt.Errorf("校验节点 Mihomo 配置失败: %w", err) }
+	yml, err = applyAgentRuntimeDNS(normalized, enabled)
+	if err != nil { return fmt.Errorf("生成 SmartDNS 切换 DNS 配置失败: %w", err) }
+	commandID, err := newAgentCommandID()
+	if err != nil { return err }
+	command := map[string]any{
+		"id": commandID, "type": "set_smartdns_enabled", "enabled": enabled,
+		"config": config, "mihomo_config": yml,
+	}
+	payload, err := json.Marshal(command)
+	if err != nil { return fmt.Errorf("生成 SmartDNS 启停命令失败: %w", err) }
+	if err := a.store.QueueAuthorizedAgentCommand(machineCode, string(payload)); err != nil {
+		if errors.Is(err, ErrAgentCommandPending) { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
+		return fmt.Errorf("保存 SmartDNS 启停命令失败: %w", err)
+	}
+	a.publishBrowserEvent(map[string]any{
+		"type": "agent.command.queued", "machine_code": machineCode,
+		"command_id": commandID, "command_type": "set_smartdns_enabled",
+		"enabled": enabled, "at": time.Now().Unix(),
+	})
+	return nil
+}
+
 func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	machineCode = strings.TrimSpace(machineCode)
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
