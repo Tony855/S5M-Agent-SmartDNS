@@ -2501,6 +2501,7 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		CommandResult       map[string]any    `json:"command_result,omitempty"`
 		PendingCommand      map[string]string `json:"pending_command,omitempty"`
 		DesiredConfigSHA256 string            `json:"desired_config_sha256,omitempty"`
+		SmartDNSEnabled      *bool             `json:"smartdns_enabled,omitempty"`
 	}
 	result := make(map[string]AgentInfo)
 
@@ -2543,6 +2544,10 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		info := AgentInfo{
 			Authorized: true, TokenConfigured: true, LastSeen: lastSeen, ServerTime: time.Now().Unix(), Status: status,
 			CommandResult: commandResult, PendingCommand: pendingCommand,
+		}
+		if desired, ok := settings["smartdns_enabled_"+code]; ok {
+			enabled := desired == "true"
+			info.SmartDNSEnabled = &enabled
 		}
 		if nodeConfig, configErr := a.store.GetNodeConfig(code); configErr == nil && nodeConfig != nil && strings.TrimSpace(nodeConfig.YAML) != "" {
 			sum := sha256.Sum256([]byte(strings.TrimSpace(nodeConfig.YAML)))
