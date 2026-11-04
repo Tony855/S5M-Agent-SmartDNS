@@ -1677,3 +1677,31 @@ func TestHandleImportProxiesPersistsOneHundredSocks5HNodesAndSkipsDuplicates(t *
 		t.Fatalf("duplicate import changed stored proxy count to %d, want 100", len(stored))
 	}
 }
+
+
+func TestValidateProxyRejectsNamesThatBreakMihomoConfig(t *testing.T) {
+	invalidNames := []string{
+		strings.Repeat("a", 101),
+		"node,REJECT",
+		"node\nsecond-line",
+		"PROXY",
+		"direct",
+		"REJECT-DROP",
+		"GLOBAL",
+	}
+	for _, name := range invalidNames {
+		proxy := Proxy{Name: name, Type: "socks5", Server: "proxy.example", Port: 1080}
+		if msg := (&App{}).validateProxy(&proxy); msg == "" {
+			t.Errorf("validateProxy(name=%q) unexpectedly succeeded", name)
+		}
+	}
+}
+
+func TestValidateProxyRejectsWhitespaceInServer(t *testing.T) {
+	for _, server := range []string{"proxy example", "proxy\texample", "proxy\nexample"} {
+		proxy := Proxy{Name: "proxy-a", Type: "socks5", Server: server, Port: 1080}
+		if msg := (&App{}).validateProxy(&proxy); msg == "" {
+			t.Errorf("validateProxy(server=%q) unexpectedly succeeded", server)
+		}
+	}
+}
