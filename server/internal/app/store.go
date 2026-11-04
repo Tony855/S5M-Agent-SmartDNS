@@ -409,8 +409,18 @@ func (s *Store) UserByUsername(name string) (*User, error) {
 }
 
 func (s *Store) UpdatePassword(id int64, hash string) error {
-	_, err := s.db.Exec(`UPDATE users SET password_hash=? WHERE id=?`, hash, id)
-	return err
+	result, err := s.db.Exec(`UPDATE users SET password_hash=? WHERE id=?`, hash, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ListInstances() ([]Instance, error) {
@@ -447,8 +457,18 @@ func (s *Store) CreateInstance(i *Instance) error {
 }
 
 func (s *Store) DeleteInstance(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM instances WHERE id=?`, id)
-	return err
+	result, err := s.db.Exec(`DELETE FROM instances WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // GetMachineProxyMode returns the persisted routing policy for one machine.
@@ -681,12 +701,19 @@ func (s *Store) InsertVersion(v int, sha, yml, status string) error {
 }
 
 func (s *Store) UpdateVersionStatus(version int, status string) error {
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		`UPDATE config_versions SET status=? WHERE version=?`,
 		status, version,
 	)
 	if err != nil {
 		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
 	}
 	return nil
 }
