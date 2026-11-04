@@ -831,7 +831,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		collectSmartDNSStatusWithDependencies(status, deps)
 		assert(t, status, "smartdns_running", true)
 		assert(t, status, "smartdns_dns_healthy", false)
-		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
+		assert(t, status, "smartdns_last_error", "SmartDNS A/AAAA UDP/TCP DNS 查询探测失败")
 	})
 
 	t.Run("stopped process is restarted by s6 before controller fallback", func(t *testing.T) {
