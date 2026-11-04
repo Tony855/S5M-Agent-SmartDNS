@@ -1313,7 +1313,7 @@ createApp({
             smartdnsRunning: status.smartdns_running === true,
             smartdnsDomesticListener: status.smartdns_domestic_listener === true,
             smartdnsDomesticReported: typeof status.smartdns_domestic_listener === 'boolean',
-            smartdnsDNSHealthy: status.smartdns_dns_healthy === true && status.smartdns_domestic_listener !== false,
+            smartdnsDNSHealthy: status.smartdns_dns_healthy === true,
             smartdnsLastError: String(status.smartdns_last_error || ''),
             runtimeReported,
             runtimeMessage,
