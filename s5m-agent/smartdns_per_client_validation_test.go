@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"reflect"
 	"testing"
 )
 
@@ -68,5 +69,47 @@ func TestSmartDNSConfigHasDomesticListenerRequiresUDPAndTCP(t *testing.T) {
 				t.Fatalf("smartDNSConfigHasDomesticListener() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestProbeSmartDNSDNSWithConfigIncludesDomesticDataplane(t *testing.T) {
+	base := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n")
+	domestic := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nbind 127.0.0.1:6054 -group china-dot\nbind-tcp 127.0.0.1:6054 -group china-dot\n")
+	tests := []struct {
+		name string
+		config []byte
+		want []string
+	}{
+		{name: "primary only", config: base, want: []string{"127.0.0.1:6053"}},
+		{name: "primary and domestic", config: domestic, want: []string{"127.0.0.1:6053", "127.0.0.1:6054"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var udpCalls, tcpCalls []string
+			ok := probeSmartDNSDNSWithConfigAndProbes(tt.config,
+				func(address string) bool { udpCalls = append(udpCalls, address); return true },
+				func(address string) bool { tcpCalls = append(tcpCalls, address); return true },
+			)
+			if !ok { t.Fatal("healthy configured listeners were reported unhealthy") }
+			if !reflect.DeepEqual(udpCalls, tt.want) || !reflect.DeepEqual(tcpCalls, tt.want) {
+				t.Fatalf("probe calls UDP=%v TCP=%v, want %v", udpCalls, tcpCalls, tt.want)
+			}
+		})
+	}
+}
+
+func TestProbeSmartDNSDNSWithConfigFailsWhenDomesticDataplaneFails(t *testing.T) {
+	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nbind 127.0.0.1:6054 -group china-dot\nbind-tcp 127.0.0.1:6054 -group china-dot\n")
+	if probeSmartDNSDNSWithConfigAndProbes(config,
+		func(address string) bool { return address != "127.0.0.1:6054" },
+		func(string) bool { return true },
+	) {
+		t.Fatal("domestic UDP failure was ignored")
+	}
+	if probeSmartDNSDNSWithConfigAndProbes(config,
+		func(string) bool { return true },
+		func(address string) bool { return address != "127.0.0.1:6054" },
+	) {
+		t.Fatal("domestic TCP failure was ignored")
 	}
 }
