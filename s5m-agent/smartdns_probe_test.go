@@ -266,7 +266,7 @@ func TestRestoreSmartDNSConfigVerifiedRejectsUnrestoredContent(t *testing.T) {
 }
 
 func TestValidateSmartDNSConfigRestrictsPersistentCachePathsAndOptions(t *testing.T) {
-	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	valid := base + "cache-persist yes\ncache-file /data/smartdns.cache\ncache-checkpoint-time 3600\n"
 	if err := validateSmartDNSConfig([]byte(valid)); err != nil {
 		t.Fatalf("valid persistent cache config rejected: %v", err)
@@ -288,7 +288,7 @@ func TestValidateSmartDNSConfigRestrictsPersistentCachePathsAndOptions(t *testin
 }
 
 func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
-	secure := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	secure := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n")
 	if err := validateSmartDNSConfig(secure); err != nil {
 		t.Fatalf("valid encrypted upstream rejected: %v", err)
 	}
@@ -307,14 +307,14 @@ func TestValidateSmartDNSConfigAcceptsDomesticDoTGroupAndRejectsUnapprovedResolv
 bind-tcp 127.0.0.1:6053
 bind 127.0.0.1:6054 -group china-dot
 bind-tcp 127.0.0.1:6054 -group china-dot
-server-tls 1.1.1.1:853 -host-name cloudflare-dns.com
-server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
-server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
+server-tls 223.5.5.5:853 -host-name dns.alidns.co -tls-host-verify dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+server-tls 1.12.12.12:853 -host-name dot.pu -tls-host-verify dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
 `)
 	if err := validateSmartDNSConfig(valid); err != nil {
 		t.Fatalf("valid domestic DoT group rejected: %v", err)
 	}
-	invalid := strings.Replace(string(valid), "223.5.5.5:853 -host-name dns.alidns.com", "9.9.9.9:853 -host-name dns.alidns.com", 1)
+	invalid := strings.Replace(string(valid), "223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", "9.9.9.9:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", 1)
 	if err := validateSmartDNSConfig([]byte(invalid)); err == nil {
 		t.Fatal("unapproved resolver must not enter china-dot group")
 	}
@@ -329,10 +329,10 @@ func TestValidateSmartDNSConfigRejectsBootstrapDependentEncryptedUpstreams(t *te
 		name string
 		line string
 	}{
-		{"hostname endpoint", "server-tls dns.cloudflare.com:853 -host-name cloudflare-dns.com"},
+		{"hostname endpoint", "server-tls dns.cloudflare.com:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 		{"missing TLS name", "server-tls 1.1.1.1:853"},
-		{"invalid endpoint", "server-tls 1.1.1.1 -host-name cloudflare-dns.com"},
-		{"hostname DoH URL", "server-https https://dns.google/dns-query -host-name dns.google"},
+		{"invalid endpoint", "server-tls 1.1.1.1 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{"hostname DoH URL", "server-https https://dns.google/dns-query -host-name dns.google -tls-host-verify dns.google"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -346,9 +346,9 @@ func TestValidateSmartDNSConfigRejectsBootstrapDependentEncryptedUpstreams(t *te
 
 func TestValidateSmartDNSConfigAcceptsLiteralIPEncryptedUpstreams(t *testing.T) {
 	cases := []string{
-		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
-		"server-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com",
-		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 	}
 	for _, upstream := range cases {
 		t.Run(upstream, func(t *testing.T) {
@@ -372,12 +372,12 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 	for _, want := range []string{
 		"bind 127.0.0.1:6053",
 		"bind-tcp 127.0.0.1:6053",
-		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
-		"server-tls 8.8.8.8:853 -host-name dns.google",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google",
 		"bind 127.0.0.1:6054 -group china-dot",
 		"bind-tcp 127.0.0.1:6054 -group china-dot",
-		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
-		"server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group",
+		"server-tls 223.5.5.5:853 -host-name dns.alidns.co -tls-host-verify dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
+		"server-tls 1.12.12.12:853 -host-name dot.pu -tls-host-verify dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group",
 		"cache-persist yes",
 		"cache-file /data/smartdns.cache",
 		"cache-checkpoint-time 3600",
@@ -667,7 +667,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n")
 	configHash := sha256.Sum256(bytes.TrimSpace(config))
 	good := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
@@ -898,7 +898,7 @@ func TestSafeSmartDNSDiagnosticTruncatesAtUTF8Boundary(t *testing.T) {
 
 func TestReadSmartDNSConfigAtRejectsSymlinksAndInvalidFiles(t *testing.T) {
 	dir := t.TempDir()
-	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n")
 	target := filepath.Join(dir, "target.conf")
 	if err := os.WriteFile(target, valid, 0600); err != nil {
 		t.Fatal(err)
@@ -1081,7 +1081,7 @@ func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T)
 	restartCalls := 0
 	deps := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return info, nil },
-		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"), nil },
+		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"), nil },
 		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
 		process: func() ([]byte, error) { return []byte("1234"), nil },
 		probe: func() bool { return false },
@@ -1108,17 +1108,21 @@ func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) 
 		name string
 		line string
 	}{
-		{name: "zero DoT port", line: "server-tls 1.1.1.1:0 -host-name cloudflare-dns.com"},
-		{name: "out of range DoT port", line: "server-tls 1.1.1.1:65536 -host-name cloudflare-dns.com"},
-		{name: "nonnumeric DoT port", line: "server-tls 1.1.1.1:https -host-name cloudflare-dns.com"},
+		{name: "zero DoT port", line: "server-tls 1.1.1.1:0 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "out of range DoT port", line: "server-tls 1.1.1.1:65536 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "nonnumeric DoT port", line: "server-tls 1.1.1.1:https -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 		{name: "missing TLS name value", line: "server-tls 1.1.1.1:853 -host-name"},
-		{name: "TLS name parsed as option", line: "server-tls 1.1.1.1:853 -host-name -group"},
-		{name: "invalid TLS name", line: "server-tls 1.1.1.1:853 -host-name bad_name.example"},
-		{name: "duplicate TLS name", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -host-name dns.google"},
-		{name: "DoH userinfo", line: "server-https https://user:pass@1.1.1.1/dns-query -host-name cloudflare-dns.com"},
-		{name: "DoH query string", line: "server-https https://1.1.1.1/dns-query?token=secret -host-name cloudflare-dns.com"},
-		{name: "DoH fragment", line: "server-https https://1.1.1.1/dns-query#fragment -host-name cloudflare-dns.com"},
-		{name: "invalid DoH port", line: "server-https https://1.1.1.1:70000/dns-query -host-name cloudflare-dns.com"},
+		{name: "TLS name parsed as option", line: "server-tls 1.1.1.1:853 -host-name -group -tls-host-verify -group"},
+		{name: "invalid TLS name", line: "server-tls 1.1.1.1:853 -host-name bad -tls-host-verify bad_name.example"},
+		{name: "duplicate TLS name", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -host-name dns.google -tls-host-verify dns.google"},
+		{name: "missing certificate hostname verification", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com"},
+		{name: "certificate hostname mismatch", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify dns.google"},
+		{name: "duplicate certificate hostname verification", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -tls-host-verify dns.google"},
+		{name: "missing certificate hostname value", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify"},
+		{name: "DoH userinfo", line: "server-https https://user:pass@1.1.1.1/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "DoH query string", line: "server-https https://1.1.1.1/dns-query?token=secret -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "DoH fragment", line: "server-https https://1.1.1.1/dns-query#fragment -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "invalid DoH port", line: "server-https https://1.1.1.1:70000/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1132,9 +1136,9 @@ func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) 
 
 func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
 	cases := []string{
-		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
-		"server-https https://1.1.1.1:443/dns-query -host-name dns.google",
-		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-https https://1.1.1.1:443/dns-query -host-name dns.google -tls-host-verify dns.google",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 	}
 	for _, line := range cases {
 		t.Run(line, func(t *testing.T) {
@@ -1147,7 +1151,7 @@ func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
 }
 
 func TestValidateSmartDNSConfigFailsClosedForPerClientRoutingDirectives(t *testing.T) {
-	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	cases := []struct {
 		name string
 		line string
