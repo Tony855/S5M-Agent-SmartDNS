@@ -26,7 +26,7 @@ const defaultMihomoTemplate = `# 透明代理：不开放 HTTP/SOCKS 显式代�
 allow-lan: false
 mode: rule
 log-level: info
-ipv6: false
+ipv6: true
 
 # 控制接口
 external-controller: 127.0.0.1:8088
@@ -40,9 +40,11 @@ profile:
 # DNS 设置
 dns:
   enable: true
+  ipv6: true
   listen: 127.0.0.1:5353
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
+  fake-ip-range6: fdfe:dcba:9876::1/64
   fake-ip-filter:
     - "*.lan"
     - "+.v2net.cc"

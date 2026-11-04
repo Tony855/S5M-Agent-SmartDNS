@@ -23,7 +23,7 @@ mixed-port: 8080
 allow-lan: false
 log-level: info
 find-process-mode: strict
-ipv6: false
+ipv6: true
 external-controller: 127.0.0.1:8088
 secret: "__S5M_MIHOMO_SECRET__"
 profile:
@@ -31,10 +31,11 @@ profile:
     store-fake-ip: true
 dns:
     enable: true
-    ipv6: false
+    ipv6: true
     listen: 127.0.0.1:5353
     enhanced-mode: fake-ip
     fake-ip-range: 198.18.0.1/16
+    fake-ip-range6: fdfe:dcba:9876::1/64
     fake-ip-filter:
         - '*.lan'
         - '*.local'
@@ -141,6 +142,8 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
 	setScalar(root, "find-process-mode", "strict", "!!str")
+	// Preserve AAAA answers end-to-end; TUN auto-route handles IPv6 traffic.
+	setScalar(root, "ipv6", "true", "!!bool")
 
 	// Keep the controller's own hostname out of fake-IP answers to avoid breaking
 	// Agent registration/heartbeats when strict-route TUN is enabled.
@@ -164,8 +167,9 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "fake-ip-filter"}, filter)
 		}
 	}
-	// Disable AAAA answers and keep local/private/controller names out of fake-IP.
-	setScalar(dns, "ipv6", "false", "!!bool")
+	// Preserve AAAA answers and keep local/private/controller names out of fake-IP.
+	setScalar(dns, "ipv6", "true", "!!bool")
+	setScalar(dns, "fake-ip-range6", "fdfe:dcba:9876::1/64", "!!str")
 	for _, pattern := range []string{"*.lan", "*.local", "geosite:private", "+.v2net.cc"} {
 		found := false
 		for _, item := range filter.Content {

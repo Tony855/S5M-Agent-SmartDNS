@@ -4,7 +4,7 @@ allow-lan: true
 mode: rule
 log-level: info
 find-process-mode: strict
-ipv6: false
+ipv6: true
 
 external-controller: 127.0.0.1:8088
 secret: __S5M_GENERATED_SECRET__
@@ -15,12 +15,14 @@ profile:
   store-fake-ip: true
 
 dns:
+  ipv6: true
   # SmartDNS is the single DNS-answer cache (cache/prefetch/serve-expired).
   # Mihomo keeps only Fake-IP mapping state via profile.store-fake-ip above.
   enable: true
   listen: 127.0.0.1:5353
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
+  fake-ip-range6: fdfe:dcba:9876::1/64
   fake-ip-filter:
     - "*.lan"
     - "+.v2net.cc"
