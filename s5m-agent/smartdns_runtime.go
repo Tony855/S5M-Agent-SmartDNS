@@ -888,16 +888,20 @@ func smartDNSConfigHasDomesticListener(data []byte) bool {
 }
 
 func probeSmartDNSDNSWithConfig(data []byte) bool {
-	if !probeSmartDNSDNSAt("127.0.0.1:6053") ||
-		!probeSmartDNSDNSTCPAt("127.0.0.1:6053") {
+	return probeSmartDNSDNSWithConfigAndProbes(data, probeSmartDNSDNSAt, probeSmartDNSDNSTCPAt)
+}
+
+func probeSmartDNSDNSWithConfigAndProbes(data []byte, udpProbe, tcpProbe func(string) bool) bool {
+	if udpProbe == nil || tcpProbe == nil ||
+		!udpProbe("127.0.0.1:6053") ||
+		!tcpProbe("127.0.0.1:6053") {
 		return false
 	}
 	// The domestic-only policy listener is a separate dataplane. If configured,
 	// it must pass its own UDP and TCP probes before the controller can mark the
 	// combined SmartDNS service healthy.
 	if smartDNSConfigHasDomesticListener(data) {
-		return probeSmartDNSDNSAt("127.0.0.1:6054") &&
-			probeSmartDNSDNSTCPAt("127.0.0.1:6054")
+		return udpProbe("127.0.0.1:6054") && tcpProbe("127.0.0.1:6054")
 	}
 	return true
 }
