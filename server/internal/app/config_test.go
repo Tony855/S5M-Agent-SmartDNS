@@ -53,3 +53,20 @@ func TestRandomHexFromRejectsNonPositiveLength(t *testing.T) {
 		}
 	}
 }
+
+func TestJWTSecretPreservesConfiguredValue(t *testing.T) {
+	const configured = "operator-managed-secret"
+	if got := jwtSecret(configured); got != configured {
+		t.Fatalf("jwtSecret(%q) = %q, want configured value unchanged", configured, got)
+	}
+}
+
+func TestJWTSecretGeneratesStrongFallback(t *testing.T) {
+	got := jwtSecret("")
+	if len(got) != 64 {
+		t.Fatalf("generated JWT secret has %d hex characters, want 64", len(got))
+	}
+	if _, err := hex.DecodeString(got); err != nil {
+		t.Fatalf("generated JWT secret is not hexadecimal: %v", err)
+	}
+}
