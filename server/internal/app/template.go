@@ -483,15 +483,6 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 404, "节点未授权")
 		return
 	}
-	var template string
-	if err := a.store.db.QueryRow("SELECT yaml_text FROM mihomo_template_versions WHERE version=?", in.Version).Scan(&template); err != nil {
-		if err == sql.ErrNoRows {
-			writeErr(w, 404, "模板版本不存在")
-		} else {
-			writeErr(w, 500, "读取模板版本失败")
-		}
-		return
-	}
 	// Normalize every applied node template to transparent-only listeners before saving.
 	normalizedTemplate, normalizeErr := normalizeAgentProxyConfig(template)
 	if normalizeErr != nil {
@@ -526,6 +517,44 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer tx.Rollback()
+	// Read the version inside the same transaction as the node write. This
+	// prevents a concurrent version deletion from racing a successful apply.
+	var template string
+	if err := tx.QueryRow("SELECT yaml_text FROM mihomo_template_versions WHERE version=?", in.Version).Scan(&template); err != nil {
+		if err == sql.ErrNoRows {
+			writeErr(w, http.StatusNotFound, "模板版本不存在")
+		} else {
+			writeErr(w, http.StatusInternalServerError, "读取模板版本失败")
+		}
+		return
+	}
+	normalizedTemplate, normalizeErr := normalizeAgentProxyConfig(template)
+	if normalizeErr != nil {
+		writeErr(w, http.StatusBadRequest, "模板不能应用: "+normalizeErr.Error())
+		return
+	}
+	template = normalizedTemplate
+	if err := validateMihomoTemplate(template); err != nil {
+		writeErr(w, http.StatusBadRequest, "模板不能应用: "+err.Error())
+		return
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(template), &cfg); err != nil {
+		writeErr(w, http.StatusBadRequest, "模板 YAML 无效")
+		return
+	}
+	if secret, ok := cfg["secret"].(string); !ok || strings.TrimSpace(secret) == "" {
+		writeErr(w, http.StatusBadRequest, "应用到节点的完整配置必须包含非空 secret")
+		return
+	}
+	if _, ok := cfg["tun"]; !ok {
+		writeErr(w, http.StatusBadRequest, "应用到节点的完整配置必须包含 tun 配置块")
+		return
+	}
+	if _, ok := cfg["dns"]; !ok {
+		writeErr(w, http.StatusBadRequest, "应用到节点的完整配置必须包含 dns 配置块")
+		return
+	}
 	var oldYAML string
 	if err := tx.QueryRow("SELECT yaml_text FROM node_configs WHERE machine_code=?", code).Scan(&oldYAML); err != nil && err != sql.ErrNoRows {
 		writeErr(w, http.StatusInternalServerError, "读取原节点配置失败")
