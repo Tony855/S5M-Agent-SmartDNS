@@ -1364,6 +1364,57 @@ func normalizeProxyType(value string) string {
 	return protocol
 }
 
+func parseShadowsocksPlugin(raw string) (string, map[string]any, error) {
+	parts := strings.Split(raw, ";")
+	name := strings.ToLower(strings.TrimSpace(parts[0]))
+	if name == "" { return "", nil, fmt.Errorf("Shadowsocks 插件名称不能为空") }
+	values := make(map[string]string)
+	flags := make(map[string]bool)
+	for _, item := range parts[1:] {
+		item = strings.TrimSpace(item)
+		if item == "" { continue }
+		key, value, hasValue := strings.Cut(item, "=")
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" { return "", nil, fmt.Errorf("Shadowsocks 插件参数无效") }
+		if _, exists := values[key]; exists { return "", nil, fmt.Errorf("Shadowsocks 插件参数重复: %s", key) }
+		if _, exists := flags[key]; exists { return "", nil, fmt.Errorf("Shadowsocks 插件参数重复: %s", key) }
+		if hasValue { values[key] = value } else { flags[key] = true }
+	}
+	toBool := func(key string) (bool, error) {
+		if v, ok := values[key]; ok {
+			parsed, err := strconv.ParseBool(v)
+			if err != nil { return false, fmt.Errorf("Shadowsocks 插件参数 %s 必须是布尔值", key) }
+			return parsed, nil
+		}
+		return flags[key], nil
+	}
+	opts := make(map[string]any)
+	switch name {
+	case "obfs-local", "simple-obfs", "obfs":
+		name = "obfs"
+		mode := values["obfs"]
+		if mode == "" { mode = values["mode"] }
+		if mode != "http" && mode != "tls" { return "", nil, fmt.Errorf("Shadowsocks obfs 插件必须指定 obfs=http 或 obfs=tls") }
+		opts["mode"] = mode
+		if host := values["obfs-host"]; host != "" { opts["host"] = host } else if host := values["host"]; host != "" { opts["host"] = host }
+		for key := range values { if key != "obfs" && key != "mode" && key != "obfs-host" && key != "host" { return "", nil, fmt.Errorf("不支持的 Shadowsocks obfs 参数: %s", key) } }
+		for key := range flags { return "", nil, fmt.Errorf("不支持的 Shadowsocks obfs 标记: %s", key) }
+	case "v2ray-plugin":
+		if mode := values["mode"]; mode != "" { opts["mode"] = mode } else { opts["mode"] = "websocket" }
+		for _, key := range []string{"host", "path"} { if value := values[key]; value != "" { opts[key] = value } }
+		for _, key := range []string{"tls", "mux", "skip-cert-verify"} {
+			value, err := toBool(key); if err != nil { return "", nil, err }
+			if value { opts[key] = true }
+		}
+		for key := range values { if key != "mode" && key != "host" && key != "path" && key != "tls" && key != "mux" && key != "skip-cert-verify" { return "", nil, fmt.Errorf("不支持的 v2ray-plugin 参数: %s", key) } }
+		for key := range flags { if key != "tls" && key != "mux" && key != "skip-cert-verify" { return "", nil, fmt.Errorf("不支持的 v2ray-plugin 标记: %s", key) } }
+		if opts["mode"] == "websocket" { /* Mihomo's documented default transport */ }
+	default:
+		return "", nil, fmt.Errorf("暂不支持 Shadowsocks 插件: %s", name)
+	}
+	return name, opts, nil
+}
+
 func parseProxyLine(line string) (*Proxy, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
