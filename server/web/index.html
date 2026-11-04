@@ -384,12 +384,12 @@
       <div v-if="page === 'config'">
         <div class="card-panel">
           <div class="card-title">SmartDNS 上游代理出口</div>
-          <p class="import-note">统一控制所有已授权 Agent 的 SmartDNS 加密上游出口。自动优选会每 30 秒检测可用代理并选择延迟最低的健康节点；手动选择会跟随该节点 Mihomo 的 PROXY 分组当前选中出口；顺序故障切换则按代理列表顺序选择可用节点。所有模式都不允许回落到 DIRECT。</p>
+          <p class="import-note">统一控制所有已授权 Agent 的 SmartDNS 加密上游出口。自动优选每 30 秒检测可用代理，并在延迟差超过 50 毫秒时切换到更快的健康节点以避免频繁抖动；手动选择会跟随该节点 Mihomo 的 PROXY 分组当前选中出口；顺序故障切换则按代理列表顺序选择可用节点。所有模式都不允许回落到 DIRECT。</p>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">
             <el-select v-model="smartdnsRoutingStrategy" style="min-width:280px;max-width:100%;" aria-label="SmartDNS 上游代理出口策略">
               <el-option label="自动优选（动态选择最低延迟节点）" value="url-test"></el-option>
               <el-option label="跟随已选代理（使用 PROXY 手动选择）" value="select"></el-option>
-              <el-option label="顺序故障切换（按代理列表顺序）" value="fallback"></el-option>
+              <el-option label="顺序故障切换（按节点名称排序）" value="fallback"></el-option>
               <el-option label="保持旧节点行为（不接管 SmartDNS 出口）" value="legacy"></el-option>
             </el-select>
             <el-button type="primary" :loading="savingSmartDNSRouting" @click="saveSmartDNSRoutingStrategy">保存 SmartDNS 出口策略</el-button>
