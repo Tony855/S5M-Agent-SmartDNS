@@ -372,3 +372,59 @@ func TestSaveNodeConfigsIfUnchangedInitializesMissingRowsAndRejectsRacingInsert(
 		t.Errorf("batch should roll back newly initialized node-b; got=%#v err=%v", got, err)
 	}
 }
+
+
+func TestStoreMigrationAddsMissingProxyMachineCodeColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-proxies.db")
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil { t.Fatalf("open legacy database: %v", err) }
+	_, err = db.Exec(`CREATE TABLE proxies(
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL UNIQUE,
+		mode TEXT NOT NULL DEFAULT 'rule',
+		type TEXT NOT NULL,
+		server TEXT NOT NULL,
+		port INTEGER NOT NULL,
+		source_cidr TEXT NOT NULL DEFAULT '0.0.0.0/0',
+		config_json TEXT NOT NULL DEFAULT '{}',
+		enabled INTEGER NOT NULL DEFAULT 1
+	)`)
+	if err != nil { db.Close(); t.Fatalf("create legacy proxies table: %v", err) }
+	if _, err := db.Exec(`INSERT INTO proxies(name,type,server,port) VALUES('legacy','socks5','127.0.0.1',1080)`); err != nil {
+		db.Close(); t.Fatalf("seed legacy proxy: %v", err)
+	}
+	if err := db.Close(); err != nil { t.Fatalf("close legacy database: %v", err) }
+
+	store, err := OpenStore(dbPath)
+	if err != nil { t.Fatalf("OpenStore should migrate legacy proxies table: %v", err) }
+	defer store.db.Close()
+
+	var machineCode string
+	if err := store.db.QueryRow(`SELECT machine_code FROM proxies WHERE name='legacy'`).Scan(&machineCode); err != nil {
+		t.Fatalf("read migrated machine_code: %v", err)
+	}
+	if machineCode != "" { t.Fatalf("legacy machine_code = %q, want empty default", machineCode) }
+}
+
+func TestStoreMigrationRepairsBlankAgentTokenWithoutOverwritingExistingToken(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "agent-token-migration.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+
+	if _, err := store.db.Exec(`UPDATE settings SET value='' WHERE key='agent_token'`); err != nil {
+		t.Fatalf("blank agent token: %v", err)
+	}
+	if err := store.migrate(); err != nil { t.Fatalf("migrate blank agent token: %v", err) }
+	repaired, err := store.GetSetting("agent_token")
+	if err != nil { t.Fatalf("read repaired token: %v", err) }
+	if strings.TrimSpace(repaired) == "" { t.Fatal("migration left Agent registration token blank") }
+
+	const operatorToken = "operator-managed-token"
+	if _, err := store.db.Exec(`UPDATE settings SET value=? WHERE key='agent_token'`, operatorToken); err != nil {
+		t.Fatalf("set operator token: %v", err)
+	}
+	if err := store.migrate(); err != nil { t.Fatalf("migrate existing operator token: %v", err) }
+	got, err := store.GetSetting("agent_token")
+	if err != nil { t.Fatalf("read operator token: %v", err) }
+	if got != operatorToken { t.Fatalf("migration overwrote operator token: got %q", got) }
+}
