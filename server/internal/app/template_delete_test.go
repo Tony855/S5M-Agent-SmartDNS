@@ -184,7 +184,7 @@ func TestDeleteMihomoTemplateVersionCleansOrphanBindingsAfterCursorRead(t *testi
 
 	rec := callDeleteTemplateVersion(a, "2")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	var bindings int
 	if err := a.store.db.QueryRow(`SELECT COUNT(*) FROM node_template_bindings WHERE machine_code='revoked-node' AND template_version=2`).Scan(&bindings); err != nil {
