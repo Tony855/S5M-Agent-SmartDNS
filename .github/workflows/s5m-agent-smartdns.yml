@@ -41,7 +41,7 @@ on:
       - ".github/workflows/s5m-agent-smartdns.yml"
       - ".github/workflows/release.yml"
   push:
-    branches: [main, feat/smartdns-per-client-egress]
+    branches: [main, feat/smartdns-per-client-egress, "fix/smartdns-*"]
     paths:
       - "s5m-agent/Dockerfile.smartdns"
       - "s5m-agent/docker-compose.yml"
