@@ -73,8 +73,13 @@ func OpenStore(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("连接 SQLite 数据库失败: %w", err)
+	}
 	if err := s.migrate(); err != nil {
-		return nil, err
+		_ = db.Close()
+		return nil, fmt.Errorf("数据库迁移失败: %w", err)
 	}
 	return s, nil
 }
@@ -135,9 +140,13 @@ CREATE INDEX IF NOT EXISTS idx_cv_version ON config_versions(version DESC);
 	}
 	// 安全补全旧表字段
 	var count int
-	s.db.QueryRow("SELECT count(*) FROM pragma_table_info('proxies') WHERE name='machine_code'").Scan(&count)
+	if err := s.db.QueryRow("SELECT count(*) FROM pragma_table_info('proxies') WHERE name='machine_code'").Scan(&count); err != nil {
+		return fmt.Errorf("检查 proxies.machine_code 字段失败: %w", err)
+	}
 	if count == 0 {
-		s.db.Exec("ALTER TABLE proxies ADD COLUMN machine_code TEXT NOT NULL DEFAULT ''")
+		if _, err := s.db.Exec("ALTER TABLE proxies ADD COLUMN machine_code TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("补全 proxies.machine_code 字段失败: %w", err)
+		}
 	}
 
 	// Routing policy belongs to a machine, never to an individual proxy record.
@@ -163,12 +172,27 @@ CREATE INDEX IF NOT EXISTS idx_cv_version ON config_versions(version DESC);
 	if _, err := s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'true')`); err != nil { return fmt.Errorf("初始化 TUN 默认设置失败: %w", err) }
 	// 首次启动时自动生成随机 Agent 注册密钥（不再硬编码默认值）
 	var atCount int
-	s.db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='agent_token' AND value != ''`).Scan(&atCount)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='agent_token' AND trim(value) != ''`).Scan(&atCount); err != nil {
+		return fmt.Errorf("检查 Agent 注册密钥失败: %w", err)
+	}
 	if atCount == 0 {
 		buf := make([]byte, 16)
-		if _, err := rand.Read(buf); err == nil {
-			token := fmt.Sprintf("s5m-%x", buf)
-			s.db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('agent_token', ?)`, token)
+		if _, err := rand.Read(buf); err != nil {
+			return fmt.Errorf("生成 Agent 注册密钥失败: %w", err)
+		}
+		token := fmt.Sprintf("s5m-%x", buf)
+		if _, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES ('agent_token', ?)
+			ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE trim(settings.value) = ''`, token); err != nil {
+			return fmt.Errorf("保存 Agent 注册密钥失败: %w", err)
+		}
+		// Another initializer may have populated the key first. Never overwrite
+		// a non-empty operator-managed token; verify that a usable value exists.
+		var savedToken string
+		if err := s.db.QueryRow(`SELECT value FROM settings WHERE key='agent_token'`).Scan(&savedToken); err != nil {
+			return fmt.Errorf("验证 Agent 注册密钥失败: %w", err)
+		}
+		if strings.TrimSpace(savedToken) == "" {
+			return fmt.Errorf("Agent 注册密钥初始化后仍为空")
 		}
 	}
 	return nil
