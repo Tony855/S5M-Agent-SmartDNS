@@ -196,18 +196,32 @@ func validateSmartDNSUpstreamEndpoint(directive, endpoint string, options []stri
 	if net.ParseIP(strings.Trim(host, "[]")) == nil {
 		return fmt.Errorf("加密上游地址必须是字面 IP，禁止依赖域名 Bootstrap 解析")
 	}
-	tlsNameCount := 0
+	hostName, verifyName := "", ""
+	hostNameCount, verifyNameCount := 0, 0
 	for i := 0; i < len(options); i++ {
-		if options[i] != "-host-name" {
-			continue
-		}
-		tlsNameCount++
-		if i+1 >= len(options) || !validSmartDNSTLSName(options[i+1]) {
-			return fmt.Errorf("-host-name 必须是有效 DNS 主机名，不能缺失或被解析为其他选项")
+		switch options[i] {
+		case "-host-name":
+			hostNameCount++
+			if i+1 >= len(options) || !validSmartDNSTLSName(options[i+1]) {
+				return fmt.Errorf("-host-name 必须是有效 DNS 主机名，不能缺失或被解析为其他选项")
+			}
+			hostName = strings.TrimSuffix(strings.ToLower(options[i+1]), ".")
+		case "-tls-host-verify":
+			verifyNameCount++
+			if i+1 >= len(options) || !validSmartDNSTLSName(options[i+1]) {
+				return fmt.Errorf("-tls-host-verify 必须是有效证书主机名，不能缺失或被解析为其他选项")
+			}
+			verifyName = strings.TrimSuffix(strings.ToLower(options[i+1]), ".")
 		}
 	}
-	if tlsNameCount != 1 {
-		return fmt.Errorf("加密上游必须且只能配置一次 -host-name 以验证 TLS 证书")
+	if hostNameCount != 1 {
+		return fmt.Errorf("加密上游必须且只能配置一次 -host-name")
+	}
+	if verifyNameCount != 1 {
+		return fmt.Errorf("加密上游必须且只能配置一次 -tls-host-verify 以验证证书主机名")
+	}
+	if hostName != verifyName {
+		return fmt.Errorf("-host-name 与 -tls-host-verify 必须匹配，防止 TLS SNI 与证书校验名称不一致")
 	}
 	return nil
 }
