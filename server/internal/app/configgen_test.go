@@ -2277,3 +2277,37 @@ rules:
 		t.Fatalf("no-proxy policy must remain fail-closed: %#v", rules)
 	}
 }
+
+
+func TestBuildConfigFromSocks5HImportGeneratesCanonicalMihomoProxy(t *testing.T) {
+	proxy, err := parseProxyLine("socks5h://user%40name:p%3A%40ss@proxy.example:1080#remote-dns")
+	if err != nil {
+		t.Fatalf("parseProxyLine: %v", err)
+	}
+	proxy.MachineCode = "__GLOBAL__"
+	configYAML, err := buildConfigFromProxies([]Proxy{*proxy}, "", "test-secret")
+	if err != nil {
+		t.Fatalf("buildConfigFromProxies: %v", err)
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(configYAML), &config); err != nil {
+		t.Fatalf("decode generated Mihomo YAML: %v", err)
+	}
+	proxies, ok := config["proxies"].([]any)
+	if !ok || len(proxies) != 1 {
+		t.Fatalf("generated proxies = %#v, want one proxy", config["proxies"])
+	}
+	generated, ok := proxies[0].(map[string]any)
+	if !ok {
+		t.Fatalf("generated proxy has unexpected type: %#v", proxies[0])
+	}
+	if generated["type"] != "socks5" || generated["server"] != "proxy.example" || generated["port"] != 1080 {
+		t.Fatalf("generated proxy endpoint/protocol incorrect: %#v", generated)
+	}
+	if generated["username"] != "user@name" || generated["password"] != "p:@ss" {
+		t.Fatalf("generated proxy credentials incorrect: %#v", generated)
+	}
+	if _, exists := generated["remote_dns"]; exists {
+		t.Fatalf("non-standard remote_dns field must not leak into Mihomo YAML: %#v", generated)
+	}
+}
