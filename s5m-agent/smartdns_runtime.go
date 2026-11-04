@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 )
 
 var smartDNSConfigPath = "/data/smartdns.conf"
@@ -37,7 +39,10 @@ var smartDNSServiceStop = func() error {
 // can resolve both address families without relying on the SmartDNS daemon.
 func probeMihomoDNSFallback(mihomoConfig []byte) bool {
 	var config struct {
-		DNS struct { Listen string `yaml:"listen"` } `yaml:"dns"`
+		DNS struct {
+			Listen string `yaml:"listen"`
+			IPv6   bool   `yaml:"ipv6"`
+		} `yaml:"dns"`
 	}
 	if err := yaml.Unmarshal(mihomoConfig, &config); err != nil { return false }
 	host, port, err := net.SplitHostPort(strings.TrimSpace(config.DNS.Listen))
@@ -48,10 +53,11 @@ func probeMihomoDNSFallback(mihomoConfig []byte) bool {
 	if ip.IsUnspecified() {
 		if ip.To4() != nil { probeHost = "127.0.0.1" } else { probeHost = "::1" }
 	}
-	for _, query := range []struct{ domain, qtype string; family int }{
-		{domain: "example.com", qtype: "A", family: 4},
-		{domain: "cloudflare.com", qtype: "AAAA", family: 6},
-	} {
+	queries := []struct{ domain, qtype string; family int }{{domain: "example.com", qtype: "A", family: 4}}
+	if config.DNS.IPv6 {
+		queries = append(queries, struct{ domain, qtype string; family int }{domain: "cloudflare.com", qtype: "AAAA", family: 6})
+	}
+	for _, query := range queries {
 		args := []string{"+time=3", "+tries=1", "+short", "@" + probeHost, "-p", port, query.domain, query.qtype}
 		output, err := exec.Command("dig", args...).CombinedOutput()
 		if err != nil { return false }
