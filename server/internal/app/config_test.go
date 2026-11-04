@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/hex"
 	"bytes"
 	"errors"
 	"strings"
