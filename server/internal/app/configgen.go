@@ -35,6 +35,7 @@ dns:
     listen: 127.0.0.1:5353
     enhanced-mode: fake-ip
     fake-ip-range: 198.18.0.1/16
+    fake-ip-range6: fdfe:dcba:9876::1/64
     fake-ip-filter:
         - '*.lan'
         - '*.local'
@@ -168,6 +169,7 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	}
 	// Preserve AAAA answers and keep local/private/controller names out of fake-IP.
 	setScalar(dns, "ipv6", "true", "!!bool")
+	setScalar(dns, "fake-ip-range6", "fdfe:dcba:9876::1/64", "!!str")
 	for _, pattern := range []string{"*.lan", "*.local", "geosite:private", "+.v2net.cc"} {
 		found := false
 		for _, item := range filter.Content {
