@@ -1335,21 +1335,16 @@ func proxyPort(value any) (int, error) {
 	}
 }
 
-// normalizeProxyType accepts common URI aliases while keeping the canonical
-// protocol names expected by the database and Mihomo configuration generator.
-// Mihomo's SOCKS5 outbound sends the original destination hostname in the
-// SOCKS5 request whenever hostname metadata is available; it therefore uses
-// proxy-side DNS resolution by default. No non-standard YAML flag is needed.
+// normalizeProxyType handles the socks5h URI alias without broadening the
+// accepted protocol set of the proxy CRUD API. Mihomo's SOCKS5 outbound sends
+// the original destination hostname in the SOCKS5 request whenever hostname
+// metadata is available, so proxy-side DNS resolution needs no custom YAML key.
 func normalizeProxyType(value string) string {
 	protocol := strings.ToLower(strings.TrimSpace(value))
-	switch protocol {
-	case "socks", "socks5h":
+	if protocol == "socks5h" {
 		return "socks5"
-	case "https":
-		return "http"
-	default:
-		return protocol
 	}
+	return protocol
 }
 
 func parseProxyLine(line string) (*Proxy, error) {
@@ -1368,6 +1363,12 @@ func parseProxyLine(line string) (*Proxy, error) {
 		return nil, fmt.Errorf("缺少协议前缀")
 	}
 	p.Type = normalizeProxyType(line[:schemeIdx])
+	if p.Type == "socks" {
+		p.Type = "socks5"
+	}
+	if p.Type == "https" {
+		p.Type = "http"
+	}
 	if p.Type == "vmess" {
 		raw, err := decodeProxyBase64(line[schemeIdx+3:])
 		if err != nil {
