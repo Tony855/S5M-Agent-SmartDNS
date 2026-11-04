@@ -155,7 +155,7 @@ var smartDNSDirectiveAllowlist = map[string]bool{
 	"server-https": true, "server-quic": true,
 	"cache-size": true, "cache-persist": true, "cache-file": true, "cache-checkpoint-time": true, "prefetch-domain": true, "serve-expired": true,
 	"log-level": true, "log-console": true, "log-syslog": true,
-	"dualstack-ip-selection": true, "rr-ttl": true, "rr-ttl-min": true,
+	"dualstack-ip-selection": true, "dualstack-ip-selection-threshold": true, "dualstack-ip-allow-force-AAAA": true, "rr-ttl": true, "rr-ttl-min": true,
 	"rr-ttl-max": true, "force-AAAA-SOA": true, "force-qtype-SOA": true,
 	"speed-check-mode": true, "response-mode": true,
 }
@@ -255,6 +255,7 @@ func validateSmartDNSConfig(data []byte) error {
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	usable := 0
 	bindUDP, bindTCP := false, false
+	ipv6BindUDP, ipv6BindTCP := false, false
 	domesticBindUDP, domesticBindTCP := false, false
 	encryptedUpstream := false
 	domesticDoTUpstreams := 0
@@ -277,6 +278,15 @@ func validateSmartDNSConfig(data []byte) error {
 		if directive == "cache-checkpoint-time" && (len(fields) != 2 || fields[1] != "3600") {
 			return fmt.Errorf("第 %d 行 cache-checkpoint-time 仅允许 3600 秒", lineNo+1)
 		}
+		if directive == "dualstack-ip-selection" && (len(fields) != 2 || fields[1] != "yes") {
+			return fmt.Errorf("第 %d 行 dualstack-ip-selection 仅允许 yes", lineNo+1)
+		}
+		if directive == "dualstack-ip-selection-threshold" && (len(fields) != 2 || fields[1] != "10") {
+			return fmt.Errorf("第 %d 行 dualstack-ip-selection-threshold 仅允许 10", lineNo+1)
+		}
+		if directive == "dualstack-ip-allow-force-AAAA" && (len(fields) != 2 || fields[1] != "yes") {
+			return fmt.Errorf("第 %d 行 dualstack-ip-allow-force-AAAA 仅允许 yes", lineNo+1)
+		}
 		if !smartDNSDirectiveAllowlist[directive] {
 			return fmt.Errorf("第 %d 行不允许配置指令 %q", lineNo+1, directive)
 		}
@@ -285,14 +295,15 @@ func validateSmartDNSConfig(data []byte) error {
 		}
 		if directive == "bind" || directive == "bind-tcp" {
 			validPrimary := len(fields) == 2 && fields[1] == "127.0.0.1:6053"
+			validIPv6Loopback := len(fields) == 2 && fields[1] == "[::1]:6053"
 			validDomestic := len(fields) == 4 && fields[1] == "127.0.0.1:6054" && fields[2] == "-group" && fields[3] == "china-dot"
-			if !validPrimary && !validDomestic {
-				return fmt.Errorf("第 %d 行监听地址仅允许 127.0.0.1:6053 或绑定 china-dot 组的 127.0.0.1:6054", lineNo+1)
+			if !validPrimary && !validIPv6Loopback && !validDomestic {
+				return fmt.Errorf("第 %d 行监听地址仅允许 IPv4/IPv6 loopback 6053 或绑定 china-dot 组的 IPv4 loopback 6054", lineNo+1)
 			}
 			if directive == "bind" {
-				if validPrimary { bindUDP = true } else { domesticBindUDP = true }
+				if validPrimary { bindUDP = true } else if validIPv6Loopback { ipv6BindUDP = true } else { domesticBindUDP = true }
 			} else {
-				if validPrimary { bindTCP = true } else { domesticBindTCP = true }
+				if validPrimary { bindTCP = true } else if validIPv6Loopback { ipv6BindTCP = true } else { domesticBindTCP = true }
 			}
 		}
 		if directive == "server" || directive == "server-tcp" {
@@ -335,6 +346,9 @@ func validateSmartDNSConfig(data []byte) error {
 	}
 	if !bindUDP || !bindTCP {
 		return fmt.Errorf("必须同时配置 bind 127.0.0.1:6053 和 bind-tcp 127.0.0.1:6053")
+	}
+	if ipv6BindUDP != ipv6BindTCP {
+		return fmt.Errorf("IPv6 loopback 监听必须同时配置 bind 和 bind-tcp [::1]:6053")
 	}
 	if !encryptedUpstream {
 		return fmt.Errorf("SmartDNS 至少需要一个加密上游（server-tls/server-https/server-quic）")

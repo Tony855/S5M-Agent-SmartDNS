@@ -23,3 +23,21 @@ func TestSmartDNSImageDefaultConfigFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCombinedSmartDNSDefaultConfigEnablesAndValidatesIPv6(t *testing.T) {
+	data, err := os.ReadFile("smartdns/smartdns.conf")
+	if err != nil {
+		t.Fatalf("read combined SmartDNS config: %v", err)
+	}
+	if err := validateSmartDNSConfig(data); err != nil {
+		t.Fatalf("combined SmartDNS default config rejected: %v", err)
+	}
+	for _, directive := range []string{
+		"dualstack-ip-selection yes",
+		"dualstack-ip-selection-threshold 10",
+		"dualstack-ip-allow-force-AAAA yes",
+	} {
+		if !strings.Contains(string(data), directive) {
+			t.Errorf("combined SmartDNS config missing %q", directive)
+		}
+	}
+}

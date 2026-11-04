@@ -113,3 +113,52 @@ func TestProbeSmartDNSDNSWithConfigFailsWhenDomesticDataplaneFails(t *testing.T)
 		t.Fatal("domestic TCP failure was ignored")
 	}
 }
+
+func TestValidateSmartDNSConfigAcceptsIPv6LoopbackPerClientConfig(t *testing.T) {
+	config := strings.Join([]string{
+		"bind 127.0.0.1:6053",
+		"bind-tcp 127.0.0.1:6053",
+		"bind [::1]:6053",
+		"bind-tcp [::1]:6053",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
+		"dualstack-ip-selection yes",
+		"dualstack-ip-selection-threshold 10",
+		"dualstack-ip-allow-force-AAAA yes",
+		"",
+	}, "\n")
+	if err := validateSmartDNSConfig([]byte(config)); err != nil {
+		t.Fatalf("valid IPv6 per-client SmartDNS config rejected: %v", err)
+	}
+}
+
+func TestValidateSmartDNSConfigRejectsIncompleteOrExposedIPv6Listeners(t *testing.T) {
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
+	tests := []struct {
+		name string
+		config string
+	}{
+		{name: "missing IPv6 TCP listener", config: base + "bind [::1]:6053\n"},
+		{name: "public IPv6 listener", config: base + "bind [::]:6053\nbind-tcp [::]:6053\n"},
+		{name: "public IPv4 listener", config: base + "bind 0.0.0.0:6053\nbind-tcp 0.0.0.0:6053\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateSmartDNSConfig([]byte(tt.config)); err == nil {
+				t.Fatalf("validator accepted unsafe/incomplete listener config")
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSConfigRestrictsDualStackDirectives(t *testing.T) {
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
+	for _, line := range []string{
+		"dualstack-ip-selection no",
+		"dualstack-ip-selection-threshold 999",
+		"dualstack-ip-allow-force-AAAA no",
+	} {
+		if err := validateSmartDNSConfig([]byte(base + line + "\n")); err == nil {
+			t.Errorf("validator accepted unsupported dual-stack setting %q", line)
+		}
+	}
+}
