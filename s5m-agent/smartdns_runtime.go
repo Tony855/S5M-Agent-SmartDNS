@@ -567,9 +567,9 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
 		domesticListener := smartDNSConfigHasDomesticListener(data)
 		status["smartdns_domestic_listener"] = domesticListener
-		if !domesticListener {
-			appendSmartDNSStatusError(status, "SmartDNS 缺少完整的 UDP/TCP china-dot 6054 国内监听")
-		}
+		// The domestic policy listener is optional for legacy nodes. Report its
+		// capability separately; do not mark a previously healthy 6053-only
+		// SmartDNS deployment unhealthy or change its existing DNS behavior.
 		if configErr := validateSmartDNSConfig(data); configErr != nil {
 			appendSmartDNSStatusError(status, "SmartDNS 配置未通过加密上游策略校验: "+safeSmartDNSDiagnostic(configErr.Error()))
 		} else {
