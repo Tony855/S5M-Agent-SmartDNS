@@ -871,9 +871,47 @@ func safeSmartDNSDiagnostic(message string) string {
 	return message
 }
 
+func smartDNSConfigHasDomesticListener(data []byte) bool {
+	udp, tcp := false, false
+	for _, raw := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		fields := strings.Fields(strings.TrimSpace(raw))
+		if len(fields) == 4 && fields[1] == "127.0.0.1:6054" && fields[2] == "-group" && fields[3] == "china-dot" {
+			switch fields[0] {
+			case "bind":
+				udp = true
+			case "bind-tcp":
+				tcp = true
+			}
+		}
+	}
+	return udp && tcp
+}
+
+func probeSmartDNSDNSWithConfig(data []byte) bool {
+	return probeSmartDNSDNSWithConfigAndProbes(data, probeSmartDNSDNSAt, probeSmartDNSDNSTCPAt)
+}
+
+func probeSmartDNSDNSWithConfigAndProbes(data []byte, udpProbe, tcpProbe func(string) bool) bool {
+	if udpProbe == nil || tcpProbe == nil ||
+		!udpProbe("127.0.0.1:6053") ||
+		!tcpProbe("127.0.0.1:6053") {
+		return false
+	}
+	// The domestic-only policy listener is a separate dataplane. If configured,
+	// it must pass its own UDP and TCP probes before the controller can mark the
+	// combined SmartDNS service healthy.
+	if smartDNSConfigHasDomesticListener(data) {
+		return udpProbe("127.0.0.1:6054") && tcpProbe("127.0.0.1:6054")
+	}
+	return true
+}
+
 func probeSmartDNSDNS() bool {
-	return probeSmartDNSDNSAt("127.0.0.1:6053") &&
-		probeSmartDNSDNSTCPAt("127.0.0.1:6053")
+	data, err := readSmartDNSFileNoFollow(smartDNSConfigPath, 8<<10)
+	if err != nil || validateSmartDNSConfig(data) != nil {
+		return false
+	}
+	return probeSmartDNSDNSWithConfig(data)
 }
 
 func probeSmartDNSDNSAt(address string) bool {

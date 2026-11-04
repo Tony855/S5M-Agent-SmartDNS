@@ -890,6 +890,10 @@ func TestAgentWebSocketConfigSyncAndUnchangedHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
 	}
+	expectedYAML, err = applyAgentRuntimeDNS(expectedYAML, false)
+	if err != nil {
+		t.Fatalf("apply expected SmartDNS fallback: %v", err)
+	}
 	sum := sha256.Sum256([]byte(expectedYAML))
 	expectedHash := hex.EncodeToString(sum[:])
 	if first["type"] != "config.sync" || first["id"] != requestID ||
@@ -1162,6 +1166,10 @@ func TestAgentWebSocketSupportsMultipleRuntimeOperationsOnOneSession(t *testing.
 	expectedYAML, err := normalizeAgentProxyConfig(configYAML)
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
+	}
+	expectedYAML, err = applyAgentRuntimeDNS(expectedYAML, false)
+	if err != nil {
+		t.Fatalf("apply expected SmartDNS fallback: %v", err)
 	}
 	if configResponse["type"] != "config.sync" || configResponse["id"] != "cfg-session-1" || configResponse["yaml"] != expectedYAML {
 		t.Fatalf("unexpected config response: %#v", configResponse)

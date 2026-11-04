@@ -11,3 +11,13 @@ udp_answer="$(dig +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A)"
 [ -n "$udp_answer" ]
 tcp_answer="$(dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6053 example.com A)"
 [ -n "$tcp_answer" ]
+
+# The domestic-only policy listener is independent from the primary resolver.
+# When configured, require both transports to answer before Docker reports healthy.
+if grep -Fqx 'bind 127.0.0.1:6054 -group china-dot' /data/smartdns.conf; then
+  grep -Fqx 'bind-tcp 127.0.0.1:6054 -group china-dot' /data/smartdns.conf
+  domestic_udp_answer="$(dig +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A)"
+  [ -n "$domestic_udp_answer" ]
+  domestic_tcp_answer="$(dig +tcp +time=2 +tries=1 +short @127.0.0.1 -p 6054 www.baidu.com A)"
+  [ -n "$domestic_tcp_answer" ]
+fi
