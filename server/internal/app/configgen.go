@@ -480,6 +480,10 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	if strings.TrimSpace(machineCode) == "" {
 		return false
 	}
+	// A successful explicit disable takes precedence over stale healthy telemetry.
+	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil && desired == "false" {
+		return false
+	}
 	value, err := a.store.GetSetting("agent_status_" + machineCode)
 	if err != nil || strings.TrimSpace(value) == "" {
 		return false
