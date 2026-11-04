@@ -112,7 +112,7 @@ createApp({
     const applyingSmartDNS = ref(false);
     const smartdnsResult = ref('');
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
-    const smartdnsRoutingStrategy = ref('url-test');
+    const smartdnsRoutingStrategy = ref('legacy');
     const savingSmartDNSRouting = ref(false);
     let smartdnsLoadGeneration = 0;
     let smartdnsApplyGeneration = 0;
@@ -1763,7 +1763,7 @@ createApp({
         const hasRoutingSetting = Object.prototype.hasOwnProperty.call(settings, 'smartdns_routing_config');
         const raw = String(settings.smartdns_routing_config || '').trim();
         if (!hasRoutingSetting) {
-          smartdnsRoutingStrategy.value = 'url-test';
+          smartdnsRoutingStrategy.value = 'legacy';
         } else if (!raw) {
           smartdnsRoutingStrategy.value = 'legacy';
         } else {
