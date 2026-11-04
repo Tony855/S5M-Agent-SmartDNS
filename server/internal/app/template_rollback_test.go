@@ -117,3 +117,33 @@ func TestRollbackNodeTemplateFailsClosedOnBindingReadError(t *testing.T) {
 		t.Fatalf("history count = %d, want 1 after rollback", count)
 	}
 }
+
+
+func TestApplyMihomoTemplateRejectsDeletedVersionWithoutMutation(t *testing.T) {
+	a, cleanup := newTemplateRollbackTestApp(t)
+	defer cleanup()
+	if _, err := a.store.db.Exec(`INSERT INTO node_configs(machine_code,yaml_text,updated_at) VALUES('node-a','keep-this-config','now')`); err != nil {
+		t.Fatalf("seed current config: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mihomo/template/apply", strings.NewReader(`{"machine_code":"node-a","version":99,"confirm":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	a.handleApplyMihomoTemplate(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	var yaml string
+	if err := a.store.db.QueryRow(`SELECT yaml_text FROM node_configs WHERE machine_code='node-a'`).Scan(&yaml); err != nil {
+		t.Fatalf("read current config: %v", err)
+	}
+	if yaml != "keep-this-config" {
+		t.Fatalf("node config mutated after missing template: %q", yaml)
+	}
+	var bindings int
+	if err := a.store.db.QueryRow(`SELECT COUNT(*) FROM node_template_bindings WHERE machine_code='node-a'`).Scan(&bindings); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if bindings != 0 {
+		t.Fatalf("unexpected binding created: %d", bindings)
+	}
+}
