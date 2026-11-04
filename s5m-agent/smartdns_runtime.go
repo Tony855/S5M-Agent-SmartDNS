@@ -76,6 +76,57 @@ func probeMihomoDNSFallback(mihomoConfig []byte) bool {
 	return true
 }
 
+func containsSmartDNSResolverNode(node *yaml.Node, want string) bool {
+	if node == nil { return false }
+	if node.Kind == yaml.ScalarNode { return strings.TrimSpace(node.Value) == want }
+	for _, child := range node.Content {
+		if containsSmartDNSResolverNode(child, want) { return true }
+	}
+	return false
+}
+
+func validateAgentSmartDNSDNSMode(mihomoYAML []byte, enabled bool) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(mihomoYAML, &doc); err != nil { return fmt.Errorf("解析 Mihomo DNS 配置失败: %w", err) }
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode { return fmt.Errorf("Mihomo 配置必须是 YAML 对象") }
+	var dns *yaml.Node
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dns" { dns = root.Content[i+1]; break }
+	}
+	if dns == nil || dns.Kind != yaml.MappingNode { return fmt.Errorf("Mihomo 配置缺少 dns 对象") }
+	if !enabled {
+		for i := 0; i+1 < len(dns.Content); i += 2 {
+			if containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6053") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6054") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6053") {
+				return fmt.Errorf("禁用 SmartDNS 的 Mihomo 配置仍引用本地 SmartDNS 监听地址")
+			}
+		}
+		return nil
+	}
+	hasPrimary, hasDomestic := false, false
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		switch dns.Content[i].Value {
+		case "nameserver":
+			hasPrimary = containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6053") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6053")
+		case "nameserver-policy":
+			policy := dns.Content[i+1]
+			if policy != nil && policy.Kind == yaml.MappingNode {
+				for j := 0; j+1 < len(policy.Content); j += 2 {
+					if strings.TrimSpace(policy.Content[j].Value) == "geosite:cn" {
+						hasDomestic = containsSmartDNSResolverNode(policy.Content[j+1], "127.0.0.1:6054")
+					}
+				}
+			}
+		}
+	}
+	if !hasPrimary { return fmt.Errorf("启用 SmartDNS 的 Mihomo 配置必须将默认 nameserver 指向 127.0.0.1:6053") }
+	if !hasDomestic { return fmt.Errorf("启用 SmartDNS 的 Mihomo 配置必须将 geosite:cn nameserver-policy 指向 127.0.0.1:6054") }
+	return nil
+}
+
 func smartDNSRuntimeEnabled() bool {
 	_, err := os.Lstat(smartDNSDisabledPath)
 	if err == nil { return false }
