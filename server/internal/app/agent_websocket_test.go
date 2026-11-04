@@ -1567,6 +1567,7 @@ func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDN
 			"config_sha256": strings.Repeat("a", 64),
 			"last_error": "",
 			"smartdns_available": true,
+			"smartdns_domestic_listener": true,
 			"smartdns_running": healthy,
 			"smartdns_dns_healthy": healthy,
 		}
