@@ -87,6 +87,9 @@ proxies:
 	if config["ipv6"] != true {
 		t.Errorf("ipv6 = %#v, want true for dual-stack TUN routing", config["ipv6"])
 	}
+	if dns["fake-ip-range6"] != "fdfe:dcba:9876::1/64" {
+		t.Errorf("dns.fake-ip-range6 = %#v, want fdfe:dcba:9876::1/64", dns["fake-ip-range6"])
+	}
 	if dns["ipv6"] != true {
 		t.Errorf("dns.ipv6 = %#v, want true to preserve AAAA answers", dns["ipv6"])
 	}
@@ -1057,6 +1060,7 @@ func TestBuildConfigRoutesConfiguredDoHThroughProxy(t *testing.T) {
 	for _, want := range []string{
 		"listen: 127.0.0.1:5353",
 		"fake-ip-range: 198.18.0.1/16",
+		"fake-ip-range6: fdfe:dcba:9876::1/64",
 		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
 		"DOMAIN-SUFFIX,dns.alidns.com,PROXY",
 		"DOMAIN-SUFFIX,doh.pub,PROXY",
