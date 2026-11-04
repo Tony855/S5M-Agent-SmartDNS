@@ -143,13 +143,26 @@ jobs:
         run: |
           set -euo pipefail
           container=s5m-release-amd64
+          network=s5m-release-amd64-ipv6
           data_dir="$(mktemp -d)"
           cleanup() {
             docker rm -f "$container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
             sudo rm -rf "$data_dir"
           }
           trap cleanup EXIT
+          # CI-only fixture allows SmartDNS DoT while other processes stay fail-closed.
+          install -m 0600 "$GITHUB_WORKSPACE/s5m-agent/smartdns/tests/ci-mihomo-config.yaml" "$data_dir/config.yaml"
+          sudo modprobe tun || true
+          if [[ ! -c /dev/net/tun ]]; then
+            sudo mkdir -p /dev/net
+            sudo mknod /dev/net/tun c 10 200
+            sudo chmod 600 /dev/net/tun
+          fi
+          docker network create --ipv6 --subnet fd42:534d:5:3::/64 "$network" >/dev/null
           docker run -d --name "$container" --restart no \
+            --network "$network" --cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv6.conf.default.disable_ipv6=0 \
             -p 127.0.0.1::80/tcp -v "$data_dir:/data" \
             s5m-agent-smartdns:release-amd64 >/dev/null
           for attempt in $(seq 1 60); do
@@ -163,14 +176,16 @@ jobs:
           docker exec "$container" pidof mihomo
           docker exec "$container" pidof smartdns
           docker exec "$container" /healthcheck.sh
-          docker run --rm --network "container:$container" alpine:3.24 sh -ec '
-            apk add --no-cache bind-tools >/dev/null
-            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
-            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          docker exec "$container" sh -ec '
+            test "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" = 0
+            dig +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +tcp +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
             AAAA_UDP="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA)"
-            printf "%s\n" "$AAAA_UDP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS UDP AAAA query failed" >&2; exit 1; }
+            printf "%s\\n" "$AAAA_UDP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS UDP AAAA query failed" >&2; exit 1; }
             AAAA_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA)"
-            printf "%s\n" "$AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP AAAA query failed" >&2; exit 1; }
+            printf "%s\\n" "$AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP AAAA query failed" >&2; exit 1; }
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
           '
           if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
             echo "Unexpected public proxy port 7890" >&2
@@ -206,13 +221,26 @@ jobs:
         run: |
           set -euo pipefail
           container=s5m-release-arm64
+          network=s5m-release-arm64-ipv6
           data_dir="$(mktemp -d)"
           cleanup() {
             docker rm -f "$container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
             sudo rm -rf "$data_dir"
           }
           trap cleanup EXIT
+          # CI-only fixture allows SmartDNS DoT while other processes stay fail-closed.
+          install -m 0600 "$GITHUB_WORKSPACE/s5m-agent/smartdns/tests/ci-mihomo-config.yaml" "$data_dir/config.yaml"
+          sudo modprobe tun || true
+          if [[ ! -c /dev/net/tun ]]; then
+            sudo mkdir -p /dev/net
+            sudo mknod /dev/net/tun c 10 200
+            sudo chmod 600 /dev/net/tun
+          fi
+          docker network create --ipv6 --subnet fd42:534d:5:4::/64 "$network" >/dev/null
           docker run -d --name "$container" --platform linux/arm64 --restart no \
+            --network "$network" --cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv6.conf.default.disable_ipv6=0 \
             -p 127.0.0.1::80/tcp -v "$data_dir:/data" \
             s5m-agent-smartdns:release-arm64 >/dev/null
           for attempt in $(seq 1 60); do
@@ -226,14 +254,16 @@ jobs:
           docker exec "$container" pidof mihomo
           docker exec "$container" pidof smartdns
           docker exec "$container" /healthcheck.sh
-          docker run --rm --platform linux/arm64 --network "container:$container" alpine:3.24 sh -ec '
-            apk add --no-cache bind-tools >/dev/null
-            dig +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
-            dig +tcp +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -q "ANSWER SECTION"
+          docker exec "$container" sh -ec '
+            test "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" = 0
+            dig +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +tcp +short +time=4 +tries=1 @127.0.0.1 -p 6053 example.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
             AAAA_UDP="$(dig +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA)"
-            printf "%s\n" "$AAAA_UDP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS UDP AAAA query failed" >&2; exit 1; }
+            printf "%s\\n" "$AAAA_UDP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS UDP AAAA query failed" >&2; exit 1; }
             AAAA_TCP="$(dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6053 cloudflare.com AAAA)"
-            printf "%s\n" "$AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP AAAA query failed" >&2; exit 1; }
+            printf "%s\\n" "$AAAA_TCP" | grep -Eq "^[0-9a-fA-F:]+$" || { echo "SmartDNS TCP AAAA query failed" >&2; exit 1; }
+            dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
+            dig +tcp +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}([.][0-9]{1,3}){3}$"
           '
 
   publish:
