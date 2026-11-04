@@ -1942,9 +1942,9 @@ func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
 		if group["name"] == SmartDNSGroupName { smart = group }
 	}
 	if smart == nil { t.Fatalf("default SmartDNS fallback group missing: %#v", groups) }
-	if smart["type"] != "fallback" || smart["url"] != "https://www.gstatic.com/generate_204" ||
-		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 {
-		t.Fatalf("unexpected fallback health-check settings: %#v", smart)
+	if smart["type"] != "url-test" || smart["url"] != "https://www.gstatic.com/generate_204" ||
+		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 || smart["tolerance"] != 50 {
+		t.Fatalf("unexpected automatic latency-test settings: %#v", smart)
 	}
 	members := smart["proxies"].([]any)
 	if len(members) != 2 || members[0] != "24587" || members[1] != "24588" {
