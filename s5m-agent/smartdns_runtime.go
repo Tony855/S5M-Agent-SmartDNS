@@ -33,6 +33,40 @@ var smartDNSServiceStop = func() error {
 	return exec.Command("/command/s6-svc", "-d", "/run/service/smartdns").Run()
 }
 
+// probeMihomoDNSFallback verifies that Mihomo's own local DNS listener
+// can resolve both address families without relying on the SmartDNS daemon.
+func probeMihomoDNSFallback(mihomoConfig []byte) bool {
+	var config struct {
+		DNS struct { Listen string `yaml:"listen"` } `yaml:"dns"`
+	}
+	if err := yaml.Unmarshal(mihomoConfig, &config); err != nil { return false }
+	host, port, err := net.SplitHostPort(strings.TrimSpace(config.DNS.Listen))
+	if err != nil || strings.TrimSpace(port) == "" { return false }
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || (!ip.IsLoopback() && !ip.IsUnspecified()) { return false }
+	probeHost := host
+	if ip.IsUnspecified() {
+		if ip.To4() != nil { probeHost = "127.0.0.1" } else { probeHost = "::1" }
+	}
+	for _, query := range []struct{ domain, qtype string; family int }{
+		{domain: "example.com", qtype: "A", family: 4},
+		{domain: "cloudflare.com", qtype: "AAAA", family: 6},
+	} {
+		args := []string{"+time=3", "+tries=1", "+short", "@" + probeHost, "-p", port, query.domain, query.qtype}
+		output, err := exec.Command("dig", args...).CombinedOutput()
+		if err != nil { return false }
+		found := false
+		for _, field := range strings.Fields(string(output)) {
+			address := net.ParseIP(strings.TrimSpace(field))
+			if address == nil { continue }
+			if query.family == 4 && address.To4() != nil { found = true; break }
+			if query.family == 6 && address.To4() == nil && address.To16() != nil { found = true; break }
+		}
+		if !found { return false }
+	}
+	return true
+}
+
 func smartDNSRuntimeEnabled() bool {
 	_, err := os.Lstat(smartDNSDisabledPath)
 	if err == nil { return false }
