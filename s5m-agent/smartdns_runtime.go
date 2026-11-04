@@ -652,6 +652,12 @@ func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool)
 	if readErr != nil {
 		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
 	}
+	if alreadyApplied && !smartDNSRuntimeEnabled() {
+		// A disabled node may safely stage a parser-validated config without
+		// starting the daemon. This also makes command replay idempotent.
+		sum := sha256.Sum256(bytes.TrimSpace(data))
+		return hex.EncodeToString(sum[:]), nil
+	}
 	if alreadyApplied {
 		return "", fmt.Errorf("SmartDNS 配置文件已是目标版本，但 UDP/TCP DNS 健康检查失败")
 	}
@@ -775,6 +781,21 @@ func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool)
 		}
 		return "", fmt.Errorf("提交配置目录失败，已恢复旧配置且 UDP/TCP DNS 验证通过: %w", err)
 	}
+	if !smartDNSRuntimeEnabled() {
+		// Keep the validated configuration staged while disabled. Do not restart
+		// s6 or accidentally start SmartDNS just because its config was edited.
+		if cleanupBackup {
+			if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+				return "", fmt.Errorf("SmartDNS 已禁用且配置已暂存，但清理事务备份失败: %w", err)
+			}
+			if err := smartDNSDirectorySync(filepath.Dir(livePath)); err != nil {
+				return "", fmt.Errorf("SmartDNS 已禁用且配置已暂存，但同步备份目录失败: %w", err)
+			}
+		}
+		sum := sha256.Sum256(bytes.TrimSpace(data))
+		return hex.EncodeToString(sum[:]), nil
+	}
+
 	oldPID, _ := exec.Command("pidof", "smartdns").Output()
 	oldPID = bytes.TrimSpace(oldPID)
 	if err := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run(); err != nil {
