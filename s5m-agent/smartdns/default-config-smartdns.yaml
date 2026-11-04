@@ -41,7 +41,7 @@ proxy-groups: []
 
 rules:
   - DOMAIN-SUFFIX,v2net.cc,DIRECT
-  - MATCH,DIRECT
+  - MATCH,REJECT
 
 tun:
   enable: true
