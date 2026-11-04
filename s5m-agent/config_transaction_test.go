@@ -483,3 +483,24 @@ func TestWriteTransactionBackupPreservingPriorRemovesNewSidecarAfterFailure(t *t
 		t.Fatalf("new sidecar must be removed after failed snapshot, stat error=%v", statErr)
 	}
 }
+
+
+func TestConfigTransactionSkipsSmartDNSHealthWhenExplicitlyDisabled(t *testing.T) {
+	_, _ = setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+	if err := persistSmartDNSDisabled(true); err != nil { t.Fatal(err) }
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) { return false, nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionWriteControllerConfig = func([]byte) error { return nil }
+	waitCalls, restartCalls := 0, 0
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { waitCalls++; return false }
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	if err := applyAgentConfigTransaction([]byte("fallback-mihomo"), nil, false, ""); err != nil {
+		t.Fatalf("disabled SmartDNS must not block Mihomo fallback config transaction: %v", err)
+	}
+	if waitCalls != 0 || restartCalls != 0 {
+		t.Fatalf("disabled SmartDNS must not be health-checked/restarted: waits=%d restarts=%d", waitCalls, restartCalls)
+	}
+}
