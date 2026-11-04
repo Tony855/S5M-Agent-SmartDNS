@@ -111,6 +111,7 @@ var (
 	transactionWriteControllerConfig = writeControllerConfig
 	transactionRemoveBackup = removeTransactionBackup
 	transactionSnapshotFile = snapshotFileForTransaction
+	transactionProbeMihomoDNS = probeMihomoDNSFallback
 )
 
 // applyAgentConfigTransaction serializes the complete Mihomo+SmartDNS update.
@@ -118,6 +119,10 @@ var (
 // lock. Both rollback points and managed-route state remain available until
 // Mihomo runtime rules and SmartDNS DNS probes have passed.
 func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string) error {
+	return applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false)
+}
+
+func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool) error {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
 	mihomoConfigApplyMu.Lock()
@@ -212,6 +217,9 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 	if err := transactionReloadMihomo(); err != nil {
 		return rollback(fmt.Errorf("Mihomo 联合事务健康检查失败: %w", err))
 	}
+	if verifyFallbackDNS && (transactionProbeMihomoDNS == nil || !transactionProbeMihomoDNS(mihomoYAML)) {
+		return rollback(fmt.Errorf("Mihomo 备用 DNS 的 A/AAAA 实际查询探测失败，拒绝停止 SmartDNS"))
+	}
 
 	if updateSmartDNS {
 		if _, err := transactionApplySmartDNS(smartDNSConfig, false); err != nil {
@@ -291,7 +299,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 	// Persist the disabled marker before changing Mihomo so a concurrent
 	// heartbeat/config refresh cannot try to auto-restart the resolver.
 	if err := persistSmartDNSDisabled(true); err != nil { return err }
-	if err := applyAgentConfigTransaction(mihomoYAML, nil, false, centralURL); err != nil {
+	if err := applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, nil, false, centralURL, true); err != nil {
 		if wasEnabled {
 			if restoreErr := persistSmartDNSDisabled(false); restoreErr != nil {
 				return fmt.Errorf("切换备用 DNS 失败: %v；恢复 SmartDNS 启用标记也失败: %w", err, restoreErr)
