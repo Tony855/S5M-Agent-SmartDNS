@@ -376,14 +376,30 @@ jobs:
             docker exec "$container" cat /tmp/mihomo-ipv6-smoke.log >&2 || true
             exit 1
           fi
-          # Verify SmartDNS writes its cache to the persistent /data volume on graceful shutdown.
-          docker restart "$container" >/dev/null
+          # s6 needs 15s plus its 5s kill grace to flush SmartDNS persistent cache.
+          docker restart --time 30 "$container" >/dev/null
+          healthy=0
           for attempt in $(seq 1 30); do
-            if docker exec "$container" /healthcheck.sh; then break; fi
+            if docker exec "$container" /healthcheck.sh; then healthy=1; break; fi
             sleep 2
           done
-          docker exec "$container" test -s /data/smartdns.cache
-          docker run --rm --network "container:$container" alpine:3.24 sh -ec 'apk add --no-cache bind-tools >/dev/null; dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}(\.[0-9]{1,3}){3}$"'
+          if [[ "$healthy" != "1" ]]; then
+            echo "Container did not recover healthy after graceful restart" >&2
+            docker inspect "$container" --format '{{json .State}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker exec "$container" test -s /data/smartdns.cache; then
+            echo "SmartDNS persistent cache file missing after graceful restart" >&2
+            docker exec "$container" ls -la /data >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker run --rm --network "container:$container" alpine:3.24 sh -ec 'apk add --no-cache bind-tools >/dev/null; dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$"'; then
+            echo "Domestic DNS listener failed after graceful restart" >&2
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
 
           # Verify the exact s6 service path used by Agent self-recovery.
           docker exec "$container" /command/s6-svc -r /run/service/smartdns
@@ -540,14 +556,30 @@ jobs:
             docker exec "$container" cat /tmp/mihomo-ipv6-smoke.log >&2 || true
             exit 1
           fi
-          # Verify SmartDNS writes its cache to the persistent /data volume on graceful shutdown.
-          docker restart "$container" >/dev/null
+          # s6 needs 15s plus its 5s kill grace to flush SmartDNS persistent cache.
+          docker restart --time 30 "$container" >/dev/null
+          healthy=0
           for attempt in $(seq 1 30); do
-            if docker exec "$container" /healthcheck.sh; then break; fi
+            if docker exec "$container" /healthcheck.sh; then healthy=1; break; fi
             sleep 2
           done
-          docker exec "$container" test -s /data/smartdns.cache
-          docker run --rm --network "container:$container" alpine:3.24 sh -ec 'apk add --no-cache bind-tools >/dev/null; dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}(\.[0-9]{1,3}){3}$"'
+          if [[ "$healthy" != "1" ]]; then
+            echo "Container did not recover healthy after graceful restart" >&2
+            docker inspect "$container" --format '{{json .State}}' >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker exec "$container" test -s /data/smartdns.cache; then
+            echo "SmartDNS persistent cache file missing after graceful restart" >&2
+            docker exec "$container" ls -la /data >&2 || true
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
+          if ! docker run --rm --network "container:$container" alpine:3.24 sh -ec 'apk add --no-cache bind-tools >/dev/null; dig +short +time=6 +tries=1 @127.0.0.1 -p 6054 www.baidu.com A | grep -Eq "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$"'; then
+            echo "Domestic DNS listener failed after graceful restart" >&2
+            docker logs "$container" >&2 || true
+            exit 1
+          fi
 
           if docker port "$container" 8088/tcp 2>/dev/null | grep -q .; then
             echo "Mihomo controller API 8088 must not be published" >&2
