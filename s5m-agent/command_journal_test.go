@@ -84,3 +84,60 @@ func TestExecuteAgentCommandWithJournalReconcilesInterruptedCommand(t *testing.T
 		t.Fatalf("journal not persisted: %v", err)
 	}
 }
+
+func TestReadAgentCommandJournalRejectsSymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MIHOMO_HOME", home)
+	target := filepath.Join(home, "target.json")
+	entry := agentCommandJournalEntry{ID: "valid", PayloadHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", State: "running"}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, agentCommandJournalPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAgentCommandJournal(); err == nil {
+		t.Fatal("journal symlink was followed")
+	}
+}
+
+func TestReadAgentCommandJournalRejectsOversizedFileBeforeRead(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MIHOMO_HOME", home)
+	if err := os.WriteFile(agentCommandJournalPath(), make([]byte, agentCommandJournalMaxBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAgentCommandJournal(); err == nil {
+		t.Fatal("oversized journal was accepted")
+	}
+}
+
+func TestReadAgentCommandJournalRejectsPermissiveMode(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	entry := agentCommandJournalEntry{ID: "valid", PayloadHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", State: "running"}
+	if err := writeAgentCommandJournal(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(agentCommandJournalPath(), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAgentCommandJournal(); err == nil {
+		t.Fatal("world-readable journal was accepted")
+	}
+}
+
+func TestExecuteAgentCommandWithJournalRejectsInvalidCommand(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	executions := 0
+	status, _, _, err := executeAgentCommandWithJournal(agentCommand{Type: "configure_smartdns"}, func() (string, string, error) {
+		executions++
+		return "unexpected", "", nil
+	})
+	if err == nil || status != "failed" || executions != 0 {
+		t.Fatalf("invalid command must not execute: status=%q executions=%d err=%v", status, executions, err)
+	}
+}
