@@ -1,9 +1,12 @@
 #!/command/with-contenv sh
 set -eu
-# The disabled marker is persistent in /data, so s6 never starts SmartDNS
-# automatically after a container restart when the operator disabled it.
+# The disabled marker is persistent in /data. Keep the supervised service
+# quiescent while disabled, but watch for the marker being removed by an
+# enable command. This is important after container restart: s6 considers
+# this waiting process "up", so a later s6-svc -u alone will not rerun it.
 if [ -f /data/smartdns.disabled ]; then
-  # Keep the s6 service quiescent without running the SmartDNS daemon.
-  exec sleep 2147483647
+  while [ -f /data/smartdns.disabled ]; do
+    sleep 1
+  done
 fi
 exec /usr/sbin/smartdns -f -x -c /data/smartdns.conf
