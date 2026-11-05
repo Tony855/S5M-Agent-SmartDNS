@@ -35,7 +35,7 @@ rules:
 	groups, ok := doc["proxy-groups"].([]any)
 	if !ok || len(groups) != 1 { t.Fatalf("unexpected proxy-groups: %#v", doc["proxy-groups"]) }
 	group := groups[0].(map[string]any)
-	if group["type"] != "fallback" || group["url"] != "https://www.gstatic.com/generate_204" {
+	if group["type"] != "fallback" || group["url"] != "https://ipv6.google.com/generate_204" {
 		t.Fatalf("unexpected fallback group: %#v", group)
 	}
 	names := group["proxies"].([]any)
