@@ -977,29 +977,46 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if msg.Type == "config.request" || msg.Type == "command.request" || msg.Type == "command.ack" {
-			// Serialize sensitive WebSocket operations with connection replacement and
-			// credential revocation. The delete-agent handler uses the same mutex.
-			a.agentWSMu.Lock()
-			if a.agentWSGeneration[machineCode] != generation {
-				a.agentWSMu.Unlock()
-				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
-				return
-			}
-			authorizedCode, authErr := a.agentMachineFromRequest(r)
-			if authErr != nil || authorizedCode != machineCode {
-				a.agentWSMu.Unlock()
-				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
-				return
-			}
-			switch msg.Type {
-			case "config.request":
+			// Config synchronization can normalize persisted YAML, so retain its
+			// existing revocation lock. Command operations are serialized per node.
+			if msg.Type == "config.request" {
+				a.agentWSMu.Lock()
+				if a.agentWSGeneration[machineCode] != generation {
+					a.agentWSMu.Unlock()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
+					return
+				}
+				authorizedCode, authErr := a.agentMachineFromRequest(r)
+				if authErr != nil || authorizedCode != machineCode {
+					a.agentWSMu.Unlock()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
+					return
+				}
 				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
-			case "command.request":
-				err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
-			case "command.ack":
-				err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
+				a.agentWSMu.Unlock()
+			} else {
+				unlockCommand := a.lockAgentWSCommand(machineCode)
+				a.agentWSMu.Lock()
+				stale := a.agentWSGeneration[machineCode] != generation
+				authorizedCode, authErr := a.agentMachineFromRequest(r)
+				a.agentWSMu.Unlock()
+				if stale {
+					unlockCommand()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
+					return
+				}
+				if authErr != nil || authorizedCode != machineCode {
+					unlockCommand()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
+					return
+				}
+				if msg.Type == "command.request" {
+					err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
+				} else {
+					err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
+				}
+				unlockCommand()
 			}
-			a.agentWSMu.Unlock()
 			if err != nil {
 				operation := "处理 Agent WebSocket 请求"
 				if msg.Type == "config.request" {
@@ -1008,7 +1025,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 					operation = "读取待执行命令"
 				}
 				message := safeAgentWebSocketError(operation, err)
-				fmt.Printf("agent_ws: request failed machine_code=%q type=%q id=%q: %s\n", machineCode, msg.Type, msg.ID, message)
+				fmt.Printf("agent_ws: request failed machine_code=%q type=%q id=%q: %s\\n", machineCode, msg.Type, msg.ID, message)
 				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": message})
 				continue
 			}
@@ -1186,6 +1203,23 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 }
 
 // sendAgentWSCommand redelivers the persisted pending command until an ACK is stored.
+// lockAgentWSCommand serializes commands for one Agent while allowing
+// unrelated nodes to execute and acknowledge commands concurrently.
+func (a *App) lockAgentWSCommand(machineCode string) func() {
+	a.agentWSCommandMu.Lock()
+	if a.agentWSCommandLocks == nil {
+		a.agentWSCommandLocks = make(map[string]*sync.Mutex)
+	}
+	lock := a.agentWSCommandLocks[machineCode]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		a.agentWSCommandLocks[machineCode] = lock
+	}
+	a.agentWSCommandMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
 func (a *App) sendAgentWSCommand(conn *websocket.Conn, machineCode, requestID string) error {
 	settings, err := a.store.GetSettings()
 	if err != nil {
