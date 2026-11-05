@@ -258,6 +258,22 @@ func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []b
 // recoverable operation. Enabling starts and verifies SmartDNS before Mihomo
 // begins using it. Disabling commits the fallback Mihomo config before stopping
 // the daemon, and the marker survives container restarts.
+func ensureSmartDNSServiceStarted(wasEnabled bool) error {
+	if !wasEnabled {
+		if err := persistSmartDNSDisabled(false); err != nil {
+			return err
+		}
+	}
+	if err := smartDNSServiceStart(); err != nil {
+		if !wasEnabled {
+			_ = persistSmartDNSDisabled(true)
+			_ = smartDNSServiceStop()
+		}
+		return fmt.Errorf("启动/确认 SmartDNS s6 服务失败: %w", err)
+	}
+	return nil
+}
+
 var smartDNSRuntimeTransitionMu sync.Mutex
 
 func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string) error {
@@ -288,20 +304,10 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 		if !smartDNSConfigHasDomesticListener(smartDNSConfig) {
 			return fmt.Errorf("当前 Mihomo DNS 配置需要 127.0.0.1:6054 国内解析，但 SmartDNS 配置没有完整的 UDP/TCP china-dot 监听")
 		}
-		if !wasEnabled {
-			if err := persistSmartDNSDisabled(false); err != nil {
-				return err
-			}
-		}
-		// Always ask s6 to ensure the service is up. The persistent marker only
-		// records desired state; it does not prove that a daemon is currently
-		// running (for example, an operator may have stopped the service).
-		if err := smartDNSServiceStart(); err != nil {
-			if !wasEnabled {
-				_ = persistSmartDNSDisabled(true)
-				_ = smartDNSServiceStop()
-			}
-			return fmt.Errorf("启动/确认 SmartDNS s6 服务失败: %w", err)
+		// Always ask s6 to ensure the service is up, even when the durable
+		// desired state already says enabled.
+		if err := ensureSmartDNSServiceStarted(wasEnabled); err != nil {
+			return err
 		}
 		if !waitForSmartDNSHealthy(5 * time.Second) {
 			if !wasEnabled {
