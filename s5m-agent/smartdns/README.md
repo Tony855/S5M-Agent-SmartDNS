@@ -2,7 +2,7 @@
 
 This is an **optional, standalone image variant** that runs the existing S5M Agent, Mihomo and SmartDNS in one container under s6-overlay supervision. This repository's `main` branch is the source of truth for this variant; it remains a separate image and does not replace the standard `s5m-agent` or RouterOS images.
 
-- Image published by a successful push to the isolated `s5m-agent-smartdns` branch: `ghcr.io/tony855/s5m-agent-smartdns:dev` plus a commit-SHA tag.
+- Image published after all required checks pass on a push to this repository's `main` branch: `ghcr.io/tony855/s5m-agent-smartdns:dev` plus a commit-SHA tag.
 - Architectures: `linux/amd64` and `linux/arm64`.
 - SmartDNS source: official `pymumu/smartdns`, pinned by the `Release48.4` tag; GPL-3.0-or-later license is included in the image.
 - SmartDNS listens on container port `6053` (UDP and TCP). The combined Compose example does **not** publish this port to the host.
