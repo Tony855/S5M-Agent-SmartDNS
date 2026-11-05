@@ -44,3 +44,7 @@ tun:
   dns-hijack:
     - "any:53"
     - "tcp://any:53"
+  # Proxy ingress endpoints must bypass TUN to prevent recursive routing.
+  route-exclude-address:
+    - 203.0.113.10/32
+    - 2001:db8::20/128
