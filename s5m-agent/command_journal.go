@@ -79,9 +79,17 @@ func writeAgentCommandJournal(entry agentCommandJournalEntry) error {
 	if err := os.Rename(tempPath, agentCommandJournalPath()); err != nil {
 		return fmt.Errorf("提交 Agent 命令记录失败: %w", err)
 	}
-	if directory, err := os.Open(dir); err == nil {
-		_ = directory.Sync()
-		_ = directory.Close()
+	directory, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("打开 Agent 命令记录目录以同步提交状态失败: %w", err)
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return fmt.Errorf("同步 Agent 命令记录目录失败: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("关闭 Agent 命令记录目录失败: %w", closeErr)
 	}
 	return nil
 }
