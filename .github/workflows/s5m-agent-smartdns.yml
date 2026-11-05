@@ -383,7 +383,7 @@ jobs:
 
           # Existing operator configuration must survive restart without being overwritten.
           docker exec "$container" test -s /data/smartdns.conf
-          printf "\n# s5m-persistence-test\n" | docker exec -i "$container" sh -ec 'cat >> /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
+          docker exec "$container" sh -ec 'test -s /data/smartdns.conf; printf "\n# s5m-persistence-test\n" >> /data/smartdns.conf; test -s /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
           docker restart "$container" >/dev/null
           for attempt in $(seq 1 30); do
             health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
