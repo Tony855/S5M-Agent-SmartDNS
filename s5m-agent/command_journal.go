@@ -5,10 +5,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
 )
+
+const agentCommandJournalMaxBytes = 16 << 10
 
 type agentCommandJournalEntry struct {
 	ID          string `json:"id"`
@@ -25,23 +30,57 @@ func agentCommandJournalPath() string {
 	return filepath.Join(mihomoHome(), "agent-command-journal.json")
 }
 
+// readAgentCommandJournal treats the persistent journal as untrusted input:
+// do not follow a volume-provided symlink, allocate based on an untrusted file
+// size, or accept a journal that is readable by other container users.
 func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	var entry agentCommandJournalEntry
-	data, err := os.ReadFile(agentCommandJournalPath())
+	path := agentCommandJournalPath()
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if os.IsNotExist(err) {
 		return entry, nil
 	}
 	if err != nil {
 		return entry, fmt.Errorf("读取 Agent 命令执行记录失败: %w", err)
 	}
-	if len(data) > 16<<10 {
-		return entry, fmt.Errorf("Agent 命令执行记录超过 16 KiB")
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return entry, fmt.Errorf("检查 Agent 命令执行记录失败: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return entry, fmt.Errorf("Agent 命令执行记录不是普通文件，拒绝读取")
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		return entry, fmt.Errorf("Agent 命令执行记录权限过宽，必须限制为仅所有者可访问")
+	}
+	if info.Size() <= 0 || info.Size() > agentCommandJournalMaxBytes {
+		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 16 KiB")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, agentCommandJournalMaxBytes+1))
+	if err != nil {
+		return entry, fmt.Errorf("读取 Agent 命令执行记录失败: %w", err)
+	}
+	if len(data) == 0 || len(data) > agentCommandJournalMaxBytes {
+		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 16 KiB")
 	}
 	if err := json.Unmarshal(data, &entry); err != nil {
 		return entry, fmt.Errorf("Agent 命令执行记录损坏，拒绝覆盖: %w", err)
 	}
-	if entry.ID == "" || entry.PayloadHash == "" || (entry.State != "running" && entry.State != "completed") {
+	if strings.TrimSpace(entry.ID) == "" || len(entry.ID) > 256 ||
+		len(entry.PayloadHash) != 64 || (entry.State != "running" && entry.State != "completed") {
 		return entry, fmt.Errorf("Agent 命令执行记录字段无效，拒绝覆盖")
+	}
+	if _, err := hex.DecodeString(entry.PayloadHash); err != nil {
+		return entry, fmt.Errorf("Agent 命令执行记录 payload hash 无效，拒绝覆盖")
+	}
+	if entry.State == "completed" && entry.Status != "success" && entry.Status != "failed" {
+		return entry, fmt.Errorf("Agent 命令执行记录完成状态无效，拒绝覆盖")
+	}
+	if len(entry.Message) > 2048 || len(entry.Config) > 8<<10 {
+		return entry, fmt.Errorf("Agent 命令执行记录结果超过允许大小，拒绝读取")
 	}
 	return entry, nil
 }
@@ -50,6 +89,9 @@ func writeAgentCommandJournal(entry agentCommandJournalEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err
+	}
+	if len(data) == 0 || len(data) > agentCommandJournalMaxBytes {
+		return fmt.Errorf("Agent 命令执行记录超过 16 KiB，拒绝写入")
 	}
 	dir := filepath.Dir(agentCommandJournalPath())
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -65,9 +107,14 @@ func writeAgentCommandJournal(entry agentCommandJournalEntry) error {
 		_ = file.Close()
 		return fmt.Errorf("设置 Agent 命令记录权限失败: %w", err)
 	}
-	if _, err := file.Write(data); err != nil {
+	n, err := file.Write(data)
+	if err != nil {
 		_ = file.Close()
 		return fmt.Errorf("写入 Agent 命令记录失败: %w", err)
+	}
+	if n != len(data) {
+		_ = file.Close()
+		return fmt.Errorf("写入 Agent 命令记录不完整: %w", io.ErrShortWrite)
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
@@ -101,6 +148,12 @@ func executeAgentCommandWithJournal(cmd agentCommand, execute func() (string, st
 	agentCommandJournalMu.Lock()
 	defer agentCommandJournalMu.Unlock()
 
+	if strings.TrimSpace(cmd.ID) == "" || len(cmd.ID) > 256 || strings.TrimSpace(cmd.Type) == "" {
+		return "failed", "", "", fmt.Errorf("Agent 命令缺少有效 ID 或类型")
+	}
+	if execute == nil {
+		return "failed", "", "", fmt.Errorf("Agent 命令执行函数为空")
+	}
 	payload, err := json.Marshal(cmd)
 	if err != nil {
 		return "failed", "", "", fmt.Errorf("编码 Agent 命令失败: %w", err)
