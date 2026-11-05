@@ -404,7 +404,7 @@ jobs:
           docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
-          agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
+          agent_port="$(docker port "$container" 80/tcp | sed 's/.*://')"
           [[ -n "$agent_port" ]]
           if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
             echo "Explicit proxy port 7890 must not be published" >&2
@@ -632,7 +632,7 @@ jobs:
           docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
-          agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
+          agent_port="$(docker port "$container" 80/tcp | sed 's/.*://')"
           [[ -n "$agent_port" ]]
           if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
             echo "Explicit proxy port 7890 must not be published" >&2
