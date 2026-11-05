@@ -372,7 +372,7 @@ jobs:
               ip -4 route show >&2
               exit 1
             fi
-            proxy6="$(ip -6 route get 2001:db8::20)"
+            proxy6="$(ip -6 route get fd42:534d:5:1::20)"
             printf "IPv6 SOCKS endpoint route: %s\\n" "$proxy6"
             if printf "%s\\n" "$proxy6" | grep -Eq "dev Meta([[:space:]]|$)"; then
               echo "IPv6 SOCKS endpoint was recursively captured by TUN" >&2
