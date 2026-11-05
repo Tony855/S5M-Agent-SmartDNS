@@ -137,6 +137,8 @@ func TestDeleteAgentBindingRemovesLiveTemplateBindingAndAgentSettings(t *testing
 		"agent_mihomo_secret_node-a":  "mihomo-secret",
 		"agent_command_node-a":        `{"id":"cmd"}`,
 		"agent_command_result_node-a": `{"id":"cmd","status":"ok"}`,
+		"smartdns_config_node-a": "bind 127.0.0.1:6053",
+		"smartdns_enabled_node-a": "false",
 		"agent_machine_node-b":        "keep-token",
 	}); err != nil {
 		t.Fatalf("seed Agent settings: %v", err)
@@ -149,7 +151,7 @@ func TestDeleteAgentBindingRemovesLiveTemplateBindingAndAgentSettings(t *testing
 		t.Fatalf("DeleteAgentBinding: %v", err)
 	}
 
-	for _, key := range []string{"agent_machine_node-a", "agent_lastseen_node-a", "agent_status_node-a", "agent_secret_node-a", "agent_mihomo_secret_node-a", "agent_command_node-a", "agent_command_result_node-a"} {
+	for _, key := range []string{"agent_machine_node-a", "agent_lastseen_node-a", "agent_status_node-a", "agent_secret_node-a", "agent_mihomo_secret_node-a", "agent_command_node-a", "agent_command_result_node-a", "smartdns_config_node-a", "smartdns_enabled_node-a"} {
 		value, err := store.GetSetting(key)
 		if err == nil && value != "" {
 			t.Errorf("setting %q = %q, want deleted or empty after deletion", key, value)

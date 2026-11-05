@@ -21,9 +21,142 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 )
 
 var smartDNSConfigPath = "/data/smartdns.conf"
+var smartDNSDisabledPath = "/data/smartdns.disabled"
+
+var smartDNSServiceStart = func() error {
+	return exec.Command("/command/s6-svc", "-u", "/run/service/smartdns").Run()
+}
+var smartDNSServiceStop = func() error {
+	return exec.Command("/command/s6-svc", "-d", "/run/service/smartdns").Run()
+}
+
+// probeMihomoDNSFallback verifies that Mihomo's own local DNS listener
+// can resolve both address families without relying on the SmartDNS daemon.
+func probeMihomoDNSFallback(mihomoConfig []byte) bool {
+	return probeMihomoDNSFallbackWithDig(mihomoConfig, func(args ...string) ([]byte, error) {
+		return exec.Command("dig", args...).CombinedOutput()
+	})
+}
+
+func probeMihomoDNSFallbackWithDig(mihomoConfig []byte, runDig func(...string) ([]byte, error)) bool {
+	if runDig == nil { return false }
+	var config struct {
+		DNS struct {
+			Listen string `yaml:"listen"`
+			IPv6   bool   `yaml:"ipv6"`
+		} `yaml:"dns"`
+	}
+	if err := yaml.Unmarshal(mihomoConfig, &config); err != nil { return false }
+	host, port, err := net.SplitHostPort(strings.TrimSpace(config.DNS.Listen))
+	if err != nil || strings.TrimSpace(port) == "" { return false }
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || (!ip.IsLoopback() && !ip.IsUnspecified()) { return false }
+	probeHost := host
+	if ip.IsUnspecified() {
+		if ip.To4() != nil { probeHost = "127.0.0.1" } else { probeHost = "::1" }
+	}
+	queries := []struct{ domain, qtype string; family int }{
+		{domain: "example.com", qtype: "A", family: 4},
+		{domain: "www.baidu.com", qtype: "A", family: 4},
+	}
+	if config.DNS.IPv6 {
+		queries = append(queries, struct{ domain, qtype string; family int }{domain: "cloudflare.com", qtype: "AAAA", family: 6})
+	}
+	for _, query := range queries {
+		for _, tcp := range []bool{false, true} {
+			args := []string{"+time=3", "+tries=1", "+short"}
+			if tcp { args = append(args, "+tcp") }
+			args = append(args, "@"+probeHost, "-p", port, query.domain, query.qtype)
+			output, err := runDig(args...)
+			if err != nil { return false }
+			found := false
+			for _, field := range strings.Fields(string(output)) {
+				address := net.ParseIP(strings.TrimSpace(field))
+				if address == nil { continue }
+				if query.family == 4 && address.To4() != nil { found = true; break }
+				if query.family == 6 && address.To4() == nil && address.To16() != nil { found = true; break }
+			}
+			if !found { return false }
+		}
+	}
+	return true
+}
+
+func containsSmartDNSResolverNode(node *yaml.Node, want string) bool {
+	if node == nil { return false }
+	if node.Kind == yaml.ScalarNode { return strings.TrimSpace(node.Value) == want }
+	for _, child := range node.Content {
+		if containsSmartDNSResolverNode(child, want) { return true }
+	}
+	return false
+}
+
+func validateAgentSmartDNSDNSMode(mihomoYAML []byte, enabled bool) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(mihomoYAML, &doc); err != nil { return fmt.Errorf("解析 Mihomo DNS 配置失败: %w", err) }
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode { return fmt.Errorf("Mihomo 配置必须是 YAML 对象") }
+	var dns *yaml.Node
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dns" { dns = root.Content[i+1]; break }
+	}
+	if dns == nil || dns.Kind != yaml.MappingNode { return fmt.Errorf("Mihomo 配置缺少 dns 对象") }
+	if !enabled {
+		for i := 0; i+1 < len(dns.Content); i += 2 {
+			if containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6053") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6054") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6053") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6054") {
+				return fmt.Errorf("禁用 SmartDNS 的 Mihomo 配置仍引用本地 SmartDNS 监听地址")
+			}
+		}
+		return nil
+	}
+	hasPrimary, hasDomestic := false, false
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		switch dns.Content[i].Value {
+		case "nameserver":
+			hasPrimary = containsSmartDNSResolverNode(dns.Content[i+1], "127.0.0.1:6053") ||
+				containsSmartDNSResolverNode(dns.Content[i+1], "[::1]:6053")
+		case "nameserver-policy":
+			policy := dns.Content[i+1]
+			if policy != nil && policy.Kind == yaml.MappingNode {
+				for j := 0; j+1 < len(policy.Content); j += 2 {
+					if strings.TrimSpace(policy.Content[j].Value) == "geosite:cn" {
+						hasDomestic = containsSmartDNSResolverNode(policy.Content[j+1], "127.0.0.1:6054")
+					}
+				}
+			}
+		}
+	}
+	if !hasPrimary { return fmt.Errorf("启用 SmartDNS 的 Mihomo 配置必须将默认 nameserver 指向 127.0.0.1:6053") }
+	if !hasDomestic { return fmt.Errorf("启用 SmartDNS 的 Mihomo 配置必须将 geosite:cn nameserver-policy 指向 127.0.0.1:6054") }
+	return nil
+}
+
+func smartDNSRuntimeEnabled() bool {
+	_, err := os.Lstat(smartDNSDisabledPath)
+	if err == nil { return false }
+	return os.IsNotExist(err)
+}
+
+func persistSmartDNSDisabled(disabled bool) error {
+	if disabled {
+		if err := os.MkdirAll(filepath.Dir(smartDNSDisabledPath), 0700); err != nil { return fmt.Errorf("创建 SmartDNS 状态目录失败: %w", err) }
+		return atomicWriteFile(smartDNSDisabledPath, []byte("disabled\n"), 0600)
+	}
+	if err := os.Remove(smartDNSDisabledPath); err != nil && !os.IsNotExist(err) { return fmt.Errorf("清除 SmartDNS 禁用标记失败: %w", err) }
+	dir, err := os.Open(filepath.Dir(smartDNSDisabledPath))
+	if err != nil { return err }
+	defer dir.Close()
+	return dir.Sync()
+}
+
 const smartDNSPreflightOutputLimit = 8 << 10
 const smartDNSRestartCooldown = 30 * time.Second
 
@@ -385,6 +518,7 @@ func appendSmartDNSStatusError(status map[string]any, message string) {
 }
 
 type smartDNSStatusDependencies struct {
+	enabled    func() bool
 	binaryInfo func() (os.FileInfo, error)
 	readConfig func(string) ([]byte, error)
 	version    func() ([]byte, error)
@@ -396,6 +530,7 @@ type smartDNSStatusDependencies struct {
 
 func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
 	return smartDNSStatusDependencies{
+		enabled: smartDNSRuntimeEnabled,
 		binaryInfo: func() (os.FileInfo, error) { return os.Stat("/usr/sbin/smartdns") },
 		readConfig: os.ReadFile,
 		version: func() ([]byte, error) {
@@ -418,6 +553,9 @@ func collectSmartDNSStatus(status map[string]any) {
 // every status and failure path can be tested without a live SmartDNS daemon.
 func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSStatusDependencies) {
 	status["smartdns_available"] = false
+	status["smartdns_control_supported"] = false
+	status["smartdns_domestic_listener"] = false
+	status["smartdns_enabled"] = false
 	status["smartdns_running"] = false
 	status["smartdns_dns_healthy"] = false
 	status["smartdns_version"] = ""
@@ -430,11 +568,20 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		return
 	}
 	status["smartdns_available"] = true
+	status["smartdns_control_supported"] = true
+	enabled := true
+	if deps.enabled != nil { enabled = deps.enabled() }
+	status["smartdns_enabled"] = enabled
 
 	configHealthy := false
 	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
+		domesticListener := smartDNSConfigHasDomesticListener(data)
+		status["smartdns_domestic_listener"] = domesticListener
+		// The domestic policy listener is optional for legacy nodes. Report its
+		// capability separately; do not mark a previously healthy 6053-only
+		// SmartDNS deployment unhealthy or change its existing DNS behavior.
 		if configErr := validateSmartDNSConfig(data); configErr != nil {
 			appendSmartDNSStatusError(status, "SmartDNS 配置未通过加密上游策略校验: "+safeSmartDNSDiagnostic(configErr.Error()))
 		} else {
@@ -466,6 +613,14 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	// A running process with an unreadable or policy-invalid configuration is
 	// not a usable resolver. Do not restart it into the same invalid config.
 	if !configHealthy {
+		return
+	}
+	// An explicit disable is durable across container restarts. Do not let
+	// periodic health collection auto-start a service the operator disabled.
+	if !enabled {
+		if processHealthy {
+			appendSmartDNSStatusError(status, "SmartDNS 已禁用，但检测到进程仍在运行")
+		}
 		return
 	}
 	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
@@ -567,6 +722,12 @@ func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool)
 	alreadyApplied, readErr := smartDNSConfigAlreadyApplied(smartDNSConfigPath, data)
 	if readErr != nil {
 		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
+	}
+	if alreadyApplied && !smartDNSRuntimeEnabled() {
+		// A disabled node may safely stage a parser-validated config without
+		// starting the daemon. This also makes command replay idempotent.
+		sum := sha256.Sum256(bytes.TrimSpace(data))
+		return hex.EncodeToString(sum[:]), nil
 	}
 	if alreadyApplied {
 		return "", fmt.Errorf("SmartDNS 配置文件已是目标版本，但 UDP/TCP DNS 健康检查失败")
@@ -691,6 +852,21 @@ func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool)
 		}
 		return "", fmt.Errorf("提交配置目录失败，已恢复旧配置且 UDP/TCP DNS 验证通过: %w", err)
 	}
+	if !smartDNSRuntimeEnabled() {
+		// Keep the validated configuration staged while disabled. Do not restart
+		// s6 or accidentally start SmartDNS just because its config was edited.
+		if cleanupBackup {
+			if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+				return "", fmt.Errorf("SmartDNS 已禁用且配置已暂存，但清理事务备份失败: %w", err)
+			}
+			if err := smartDNSDirectorySync(filepath.Dir(livePath)); err != nil {
+				return "", fmt.Errorf("SmartDNS 已禁用且配置已暂存，但同步备份目录失败: %w", err)
+			}
+		}
+		sum := sha256.Sum256(bytes.TrimSpace(data))
+		return hex.EncodeToString(sum[:]), nil
+	}
+
 	oldPID, _ := exec.Command("pidof", "smartdns").Output()
 	oldPID = bytes.TrimSpace(oldPID)
 	if err := exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run(); err != nil {

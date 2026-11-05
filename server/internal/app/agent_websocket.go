@@ -663,6 +663,76 @@ func (a *App) queueAgentSmartDNSRead(machineCode string) error {
 	return nil
 }
 
+func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error {
+	machineCode = strings.TrimSpace(machineCode)
+	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
+		return fmt.Errorf("机器码格式无效")
+	}
+	settings, err := a.store.GetSettings()
+	if err != nil { return fmt.Errorf("读取 Agent 状态失败: %w", err) }
+	token := strings.TrimSpace(settings["agent_machine_"+machineCode])
+	if token == "" || token == settings["agent_token"] { return fmt.Errorf("目标 Agent 未授权") }
+	var receivedAt int64
+	if statusRaw := settings["agent_status_"+machineCode]; statusRaw != "" {
+		var latest map[string]any
+		if json.Unmarshal([]byte(statusRaw), &latest) == nil {
+			if value, ok := latest["received_at"].(float64); ok && value > 0 && value <= 9.0e15 { receivedAt = int64(value) }
+		}
+	}
+	age := time.Since(time.Unix(receivedAt, 0))
+	if receivedAt <= 0 || age > 90*time.Second || age < -30*time.Second {
+		return fmt.Errorf("目标 Agent 离线或心跳已超时，不能切换 SmartDNS")
+	}
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &status); err != nil {
+		return fmt.Errorf("读取节点 SmartDNS 能力状态失败")
+	}
+	if status["smartdns_available"] != true {
+		return fmt.Errorf("目标节点未安装 SmartDNS；普通 Agent 镜像不支持此操作")
+	}
+	if status["smartdns_control_supported"] != true {
+		return fmt.Errorf("目标节点已安装 SmartDNS，但 Agent 版本过旧，请先升级 Agent")
+	}
+	if enabled && status["smartdns_domestic_listener"] != true {
+		return fmt.Errorf("目标节点 SmartDNS 未配置完整的 UDP/TCP china-dot 6054 国内监听，不能启用")
+	}
+	config := strings.TrimSpace(settings["smartdns_config_"+machineCode])
+	if enabled && config == "" {
+		return fmt.Errorf("该节点尚无已保存的 SmartDNS 配置，请先读取并保存 SmartDNS 配置")
+	}
+	if len(config) > 8<<10 { return fmt.Errorf("SmartDNS 配置超过 Agent 允许的 8 KiB 限制") }
+	nodeConfig, err := a.store.GetNodeConfig(machineCode)
+	if err != nil { return fmt.Errorf("读取节点配置失败: %w", err) }
+	yml := ""
+	if nodeConfig != nil { yml = nodeConfig.YAML }
+	if strings.TrimSpace(yml) == "" {
+		yml, err = a.BuildConfigForMachine(machineCode)
+		if err != nil { return fmt.Errorf("生成节点 Mihomo 配置失败: %w", err) }
+	}
+	normalized, err := normalizeAgentProxyConfig(yml)
+	if err != nil { return fmt.Errorf("校验节点 Mihomo 配置失败: %w", err) }
+	yml, err = applyAgentRuntimeDNS(normalized, enabled, enabled)
+	if err != nil { return fmt.Errorf("生成 SmartDNS 切换 DNS 配置失败: %w", err) }
+	commandID, err := newAgentCommandID()
+	if err != nil { return err }
+	command := map[string]any{
+		"id": commandID, "type": "set_smartdns_enabled", "enabled": enabled,
+		"config": config, "mihomo_config": yml,
+	}
+	payload, err := json.Marshal(command)
+	if err != nil { return fmt.Errorf("生成 SmartDNS 启停命令失败: %w", err) }
+	if err := a.store.QueueAuthorizedAgentCommand(machineCode, string(payload)); err != nil {
+		if errors.Is(err, ErrAgentCommandPending) { return fmt.Errorf("该 Agent 已有待执行命令，请等待完成后重试") }
+		return fmt.Errorf("保存 SmartDNS 启停命令失败: %w", err)
+	}
+	a.publishBrowserEvent(map[string]any{
+		"type": "agent.command.queued", "machine_code": machineCode,
+		"command_id": commandID, "command_type": "set_smartdns_enabled",
+		"enabled": enabled, "at": time.Now().Unix(),
+	})
+	return nil
+}
+
 func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	machineCode = strings.TrimSpace(machineCode)
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
@@ -907,29 +977,46 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if msg.Type == "config.request" || msg.Type == "command.request" || msg.Type == "command.ack" {
-			// Serialize sensitive WebSocket operations with connection replacement and
-			// credential revocation. The delete-agent handler uses the same mutex.
-			a.agentWSMu.Lock()
-			if a.agentWSGeneration[machineCode] != generation {
-				a.agentWSMu.Unlock()
-				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
-				return
-			}
-			authorizedCode, authErr := a.agentMachineFromRequest(r)
-			if authErr != nil || authorizedCode != machineCode {
-				a.agentWSMu.Unlock()
-				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
-				return
-			}
-			switch msg.Type {
-			case "config.request":
+			// Config synchronization can normalize persisted YAML, so retain its
+			// existing revocation lock. Command operations are serialized per node.
+			if msg.Type == "config.request" {
+				a.agentWSMu.Lock()
+				if a.agentWSGeneration[machineCode] != generation {
+					a.agentWSMu.Unlock()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
+					return
+				}
+				authorizedCode, authErr := a.agentMachineFromRequest(r)
+				if authErr != nil || authorizedCode != machineCode {
+					a.agentWSMu.Unlock()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
+					return
+				}
 				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
-			case "command.request":
-				err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
-			case "command.ack":
-				err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
+				a.agentWSMu.Unlock()
+			} else {
+				unlockCommand := a.lockAgentWSCommand(machineCode)
+				a.agentWSMu.Lock()
+				stale := a.agentWSGeneration[machineCode] != generation
+				authorizedCode, authErr := a.agentMachineFromRequest(r)
+				a.agentWSMu.Unlock()
+				if stale {
+					unlockCommand()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
+					return
+				}
+				if authErr != nil || authorizedCode != machineCode {
+					unlockCommand()
+					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
+					return
+				}
+				if msg.Type == "command.request" {
+					err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
+				} else {
+					err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
+				}
+				unlockCommand()
 			}
-			a.agentWSMu.Unlock()
 			if err != nil {
 				operation := "处理 Agent WebSocket 请求"
 				if msg.Type == "config.request" {
@@ -1087,7 +1174,12 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
 	// Apply it only to the outgoing payload so health loss immediately falls back
 	// to the original configured nameservers on the next config request.
-	yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode))
+	domesticListener, domesticReported := a.agentSmartDNSDomesticListenerStatus(machineCode)
+	if domesticReported {
+		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode), domesticListener)
+	} else {
+		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode))
+	}
 	if err != nil {
 		return err
 	}
@@ -1111,6 +1203,23 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 }
 
 // sendAgentWSCommand redelivers the persisted pending command until an ACK is stored.
+// lockAgentWSCommand serializes commands for one Agent while allowing
+// unrelated nodes to execute and acknowledge commands concurrently.
+func (a *App) lockAgentWSCommand(machineCode string) func() {
+	a.agentWSCommandMu.Lock()
+	if a.agentWSCommandLocks == nil {
+		a.agentWSCommandLocks = make(map[string]*sync.Mutex)
+	}
+	lock := a.agentWSCommandLocks[machineCode]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		a.agentWSCommandLocks[machineCode] = lock
+	}
+	a.agentWSCommandMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
 func (a *App) sendAgentWSCommand(conn *websocket.Conn, machineCode, requestID string) error {
 	settings, err := a.store.GetSettings()
 	if err != nil {

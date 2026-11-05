@@ -1389,15 +1389,15 @@ func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 	app := &App{store: store}
 	now := time.Now().Unix()
 	healthy := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now,
 	}
 	stale := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now - int64(agentWSHeartbeatTTL.Seconds()) - 1,
 	}
 	future := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now + 120,
 	}
 	cases := []struct{name string; status map[string]any; want bool}{
@@ -1405,6 +1405,8 @@ func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 		{"binary only", map[string]any{"smartdns_available": true, "received_at": now}, false},
 		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true, "received_at": now}, false},
 		{"healthy and fresh", healthy, true},
+		{"legacy healthy without domestic telemetry", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true, "received_at": now}, true},
+		{"primary-only healthy with domestic disabled", map[string]any{"smartdns_available": true, "smartdns_domestic_listener": false, "smartdns_running": true, "smartdns_dns_healthy": true, "received_at": now}, true},
 		{"healthy but stale", stale, false},
 		{"future timestamp", future, false},
 		{"missing heartbeat timestamp", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, false},
@@ -2439,4 +2441,109 @@ func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T)
 	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 {
 		t.Fatalf("url-test group was not refreshed atomically: %#v", group)
 	}
+}
+
+
+func TestRouteAgentDNSViaSmartDNSRestoresDomesticPolicyAfterFallback(t *testing.T) {
+	input := `dns:
+  ipv6: true
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+    geosite:geolocation-!cn:
+      - https://dns.google/dns-query
+`
+	fallback, err := routeAgentDNSFallbackIfSmartDNS(input)
+	if err != nil { t.Fatalf("route fallback: %v", err) }
+	got, err := routeAgentDNSViaSmartDNSWithDomestic(fallback)
+	if err != nil { t.Fatalf("restore SmartDNS route: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode: %v", err) }
+	dns := config["dns"].(map[string]any)
+	if values := dns["nameserver"].([]any); len(values) != 1 || values[0] != "127.0.0.1:6053" {
+		t.Fatalf("primary nameserver = %#v, want SmartDNS 6053", values)
+	}
+	policy := dns["nameserver-policy"].(map[string]any)
+	if got := policy["geosite:cn"]; got != "127.0.0.1:6054" {
+		t.Fatalf("domestic nameserver-policy = %#v, want SmartDNS 6054", got)
+	}
+	if values := policy["geosite:geolocation-!cn"].([]any); len(values) != 1 || values[0] != "https://dns.google/dns-query" {
+		t.Fatalf("unrelated nameserver policy changed: %#v", values)
+	}
+}
+
+
+func TestAgentHasHealthySmartDNSHonorsDesiredStateAndFreshEnableAck(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-desired-state.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	now := time.Now().Unix()
+	staleDisabled := map[string]any{
+		"smartdns_available": true, "smartdns_enabled": false,
+		"smartdns_running": false, "smartdns_dns_healthy": false,
+		"received_at": now - 10,
+	}
+	statusJSON, _ := json.Marshal(staleDisabled)
+	resultJSON, _ := json.Marshal(map[string]any{
+		"type": "set_smartdns_enabled", "status": "success",
+		"enabled": true, "updated_at": now,
+	})
+	if err := store.UpdateSettings(map[string]string{
+		"agent_status_node-a": string(statusJSON),
+		"smartdns_enabled_node-a": "true",
+		"agent_command_result_node-a": string(resultJSON),
+	}); err != nil { t.Fatal(err) }
+	if !app.agentHasHealthySmartDNS("node-a") {
+		t.Fatal("fresh successful enable ACK should bridge the stale pre-enable heartbeat")
+	}
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a": "false"}); err != nil { t.Fatal(err) }
+	if app.agentHasHealthySmartDNS("node-a") {
+		t.Fatal("explicitly disabled node must never use stale healthy SmartDNS telemetry")
+	}
+}
+
+
+func TestApplyAgentRuntimeDNSPreservesLegacySmartDNSPolicy(t *testing.T) {
+	input := `dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+`
+	got, err := applyAgentRuntimeDNS(input, true)
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(got, "127.0.0.1:6053") { t.Fatalf("legacy primary SmartDNS listener was not applied: %s", got) }
+	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("legacy config without a domestic policy must not gain a new 6054 dependency: %s", got) }
+}
+
+
+func TestAgentHasDomesticSmartDNSRequiresCapabilityOrFreshEnableAck(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-domestic-capability.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	now := time.Now().Unix()
+	legacyStatus, _ := json.Marshal(map[string]any{"received_at": now, "smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true})
+	if err := store.UpdateSettings(map[string]string{"agent_status_node-a": string(legacyStatus)}); err != nil { t.Fatal(err) }
+	if domestic, reported := app.agentSmartDNSDomesticListenerStatus("node-a"); reported || domestic { t.Fatal("legacy Agent without domestic capability must retain primary-only SmartDNS routing") }
+	result, _ := json.Marshal(map[string]any{"type":"set_smartdns_enabled","status":"success","enabled":true,"updated_at":now})
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a":"true","agent_command_result_node-a":string(result)}); err != nil { t.Fatal(err) }
+	if domestic, reported := app.agentSmartDNSDomesticListenerStatus("node-a"); !reported || !domestic { t.Fatal("fresh verified enable ACK should activate domestic SmartDNS policy") }
+}
+
+
+func TestApplyAgentRuntimeDNSFallsBackDomesticWhenListenerExplicitlyUnavailable(t *testing.T) {
+	input := `dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`
+	got, err := applyAgentRuntimeDNS(input, true, false)
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(got, "127.0.0.1:6053") { t.Fatalf("primary SmartDNS listener should remain active: %s", got) }
+	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("missing domestic listener must not remain referenced: %s", got) }
+	if !strings.Contains(got, "dns.alidns.com/dns-query") { t.Fatalf("domestic fallback resolver was not restored: %s", got) }
 }

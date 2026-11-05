@@ -314,6 +314,11 @@ func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, 
 	return s.AckAgentCommandWithConfig(machineCode, commandID, status, message, "", updatedAt)
 }
 
+func pendingString(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
+}
+
 func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, message, config string, updatedAt int64) (duplicate bool, matched bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -331,21 +336,32 @@ func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, messag
 	} else if err != nil {
 		return false, false, err
 	}
-	var pending map[string]string
-	if raw != "" && json.Unmarshal([]byte(raw), &pending) == nil && pending["id"] == commandID {
-		result, marshalErr := json.Marshal(map[string]any{
-			"id": commandID, "type": pending["type"], "status": status,
+	var pending map[string]any
+	if raw != "" && json.Unmarshal([]byte(raw), &pending) == nil && pendingString(pending, "id") == commandID {
+		pendingType := pendingString(pending, "type")
+		resultFields := map[string]any{
+			"id": commandID, "type": pendingType, "status": status,
 			"message": message, "updated_at": updatedAt,
-		})
-		if marshalErr != nil {
-			return false, false, marshalErr
 		}
-		if (pending["type"] == "read_smartdns_config" || pending["type"] == "configure_smartdns") && status == "success" {
+		if pendingType == "set_smartdns_enabled" && status == "success" {
+			enabled, ok := pending["enabled"].(bool)
+			if !ok { return false, false, fmt.Errorf("invalid SmartDNS enabled command state") }
+			resultFields["enabled"] = enabled
+			value := "false"
+			if enabled { value = "true" }
+			if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_enabled_"+machineCode, value); err != nil {
+				return false, false, err
+			}
+		}
+		result, marshalErr := json.Marshal(resultFields)
+		if marshalErr != nil { return false, false, marshalErr }
+
+		if (pendingType == "read_smartdns_config" || pendingType == "configure_smartdns") && status == "success" {
 			// Read commands return the on-disk config; configure commands carry
 			// the exact candidate in the pending record. Persist only after success.
 			savedConfig := config
-			if pending["type"] == "configure_smartdns" {
-				savedConfig = pending["config"]
+			if pendingType == "configure_smartdns" {
+				savedConfig = pendingString(pending, "config")
 			}
 			if len(savedConfig) == 0 || len(savedConfig) > 8<<10 {
 				return false, false, fmt.Errorf("invalid SmartDNS config payload")
@@ -779,7 +795,7 @@ func (s *Store) DeleteAgentBinding(machineCode string) error {
 	if credentialRows == 0 {
 		return sql.ErrNoRows
 	}
-	for _, key := range []string{"agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "smartdns_config_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
+	for _, key := range []string{"agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "smartdns_config_" + machineCode, "smartdns_enabled_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
 		if _, err := tx.Exec(`DELETE FROM settings WHERE key=?`, key); err != nil {
 			return err
 		}

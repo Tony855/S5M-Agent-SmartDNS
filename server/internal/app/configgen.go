@@ -480,6 +480,10 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	if strings.TrimSpace(machineCode) == "" {
 		return false
 	}
+	// A successful explicit disable takes precedence over stale healthy telemetry.
+	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil && desired == "false" {
+		return false
+	}
 	value, err := a.store.GetSetting("agent_status_" + machineCode)
 	if err != nil || strings.TrimSpace(value) == "" {
 		return false
@@ -487,6 +491,26 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	var status map[string]any
 	if err := json.Unmarshal([]byte(value), &status); err != nil {
 		return false
+	}
+	// A just-ACKed enable command already completed local UDP/TCP DNS probes.
+	// Trust that verified result until a newer heartbeat supersedes it, avoiding
+	// a stale "disabled" heartbeat reverting the just-applied Mihomo config.
+	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil {
+		if desired == "false" { return false }
+		if desired == "true" {
+			var result map[string]any
+			if raw, readErr := a.store.GetSetting("agent_command_result_" + machineCode); readErr == nil &&
+				json.Unmarshal([]byte(raw), &result) == nil &&
+				result["type"] == "set_smartdns_enabled" && result["status"] == "success" && result["enabled"] == true {
+				if updatedAt, ok := result["updated_at"].(float64); ok && updatedAt > 0 && updatedAt <= 9.0e15 {
+					commandAge := time.Since(time.Unix(int64(updatedAt), 0))
+					receivedAt, _ := status["received_at"].(float64)
+					if commandAge >= -30*time.Second && commandAge <= agentWSHeartbeatTTL && updatedAt >= receivedAt {
+						return true
+					}
+				}
+			}
+		}
 	}
 	// A stale healthy heartbeat must never keep the local SmartDNS endpoint
 	// selected after an Agent disconnects or stops reporting health. Use the
@@ -500,14 +524,55 @@ func (a *App) agentHasHealthySmartDNS(machineCode string) bool {
 	if age > agentWSHeartbeatTTL || age < -30*time.Second {
 		return false
 	}
+	// Primary SmartDNS health remains usable for legacy/custom configs that
+	// intentionally lack the optional domestic listener. The separate
+	// domestic capability check controls whether 6054 is injected.
 	return status["smartdns_available"] == true &&
 		status["smartdns_running"] == true &&
 		status["smartdns_dns_healthy"] == true
 }
 
+func (a *App) agentSmartDNSDomesticListenerStatus(machineCode string) (bool, bool) {
+	if strings.TrimSpace(machineCode) == "" { return false, false }
+	value, err := a.store.GetSetting("agent_status_" + machineCode)
+	if err == nil && strings.TrimSpace(value) != "" {
+		var status map[string]any
+		if json.Unmarshal([]byte(value), &status) == nil {
+			if domestic, reported := status["smartdns_domestic_listener"].(bool); reported {
+				return domestic, true
+			}
+		}
+	}
+	// A successful enable ACK proves that the Agent validated and probed both listeners.
+	if desired, err := a.store.GetSetting("smartdns_enabled_" + machineCode); err == nil && desired == "true" {
+		var result map[string]any
+		if raw, readErr := a.store.GetSetting("agent_command_result_" + machineCode); readErr == nil &&
+			json.Unmarshal([]byte(raw), &result) == nil &&
+			result["type"] == "set_smartdns_enabled" && result["status"] == "success" && result["enabled"] == true {
+			if updatedAt, ok := result["updated_at"].(float64); ok && updatedAt > 0 && updatedAt <= 9.0e15 {
+				commandAge := time.Since(time.Unix(int64(updatedAt), 0))
+				if commandAge >= -30*time.Second && commandAge <= agentWSHeartbeatTTL { return true, true }
+			}
+		}
+	}
+	return false, false
+}
+
 // applyAgentRuntimeDNS derives the outgoing Agent config without mutating its persisted source.
-func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool) (string, error) {
+func applyAgentRuntimeDNS(yml string, smartDNSHealthy bool, domesticListener ...bool) (string, error) {
 	if smartDNSHealthy {
+		if len(domesticListener) > 0 {
+			if domesticListener[0] {
+				return routeAgentDNSViaSmartDNSWithDomestic(yml)
+			}
+			// A new Agent explicitly reports that the domestic listener is
+			// absent: keep primary SmartDNS, but restore domestic fallback DNS.
+			fallback, err := routeAgentDNSFallbackIfSmartDNS(yml)
+			if err != nil { return "", err }
+			return routeAgentDNSViaSmartDNS(fallback)
+		}
+		// Older Agent builds do not report the domestic listener capability.
+		// Preserve their exact historical primary-only routing and policy.
 		return routeAgentDNSViaSmartDNS(yml)
 	}
 	// Never leave the generated SmartDNS loopback as the only resolver when
@@ -707,31 +772,94 @@ func routeAgentDNSViaSmartDNS(yml string) (string, error) {
 	root := doc.Content[0]
 	var dns *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "dns" {
-			dns = root.Content[i+1]
-			break
+		if root.Content[i].Value == "dns" { dns = root.Content[i+1]; break }
+	}
+	if dns == nil || dns.Kind != yaml.MappingNode { return "", fmt.Errorf("Agent DNS 配置缺少 dns 对象") }
+	var nameserver *yaml.Node
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		if dns.Content[i].Value == "nameserver" { nameserver = dns.Content[i+1]; break }
+	}
+	local := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+	}}
+	if nameserver == nil {
+		dns.Content = append(dns.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"}, local)
+	} else if nameserver.Kind != yaml.SequenceNode {
+		return "", fmt.Errorf("dns.nameserver 必须是 YAML 列表")
+	} else {
+		for i := 0; i+1 < len(dns.Content); i += 2 {
+			if dns.Content[i].Value == "nameserver" { dns.Content[i+1] = local; break }
 		}
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil { return "", fmt.Errorf("序列化 Agent DNS 配置失败: %w", err) }
+	return string(out), nil
+}
+
+func routeAgentDNSViaSmartDNSWithDomestic(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 Agent DNS 配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Agent DNS 配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	var dns *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dns" { dns = root.Content[i+1]; break }
 	}
 	if dns == nil || dns.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("Agent DNS 配置缺少 dns 对象")
 	}
+	setScalar := func(mapping *yaml.Node, key, value string) error {
+		if mapping == nil || mapping.Kind != yaml.MappingNode { return fmt.Errorf("%s 必须是 YAML 对象", key) }
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			if mapping.Content[i].Value == key {
+				mapping.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+				return nil
+			}
+		}
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+		)
+		return nil
+	}
+	var nameserver *yaml.Node
 	for i := 0; i+1 < len(dns.Content); i += 2 {
-		if dns.Content[i].Value == "nameserver" {
-			dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
-			}}
-			out, err := yaml.Marshal(&doc)
-			return string(out), err
+		if dns.Content[i].Value == "nameserver" { nameserver = dns.Content[i+1]; break }
+	}
+	localNameserver := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
+	}}
+	if nameserver == nil {
+		dns.Content = append(dns.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"}, localNameserver)
+	} else if nameserver.Kind != yaml.SequenceNode {
+		return "", fmt.Errorf("dns.nameserver 必须是 YAML 列表")
+	} else {
+		for i := range dns.Content {
+			if dns.Content[i].Value == "nameserver" { dns.Content[i+1] = localNameserver; break }
 		}
 	}
-	dns.Content = append(dns.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"},
-		&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "127.0.0.1:6053"},
-		}},
-	)
+	var policy *yaml.Node
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		if dns.Content[i].Value == "nameserver-policy" { policy = dns.Content[i+1]; break }
+	}
+	if policy == nil {
+		policy = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		dns.Content = append(dns.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver-policy"}, policy)
+	}
+	if policy.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("dns.nameserver-policy 必须是 YAML 对象")
+	}
+	if err := setScalar(policy, "geosite:cn", "127.0.0.1:6054"); err != nil { return "", err }
 	out, err := yaml.Marshal(&doc)
-	return string(out), err
+	if err != nil { return "", fmt.Errorf("序列化 Agent SmartDNS DNS 配置失败: %w", err) }
+	return string(out), nil
 }
 
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {

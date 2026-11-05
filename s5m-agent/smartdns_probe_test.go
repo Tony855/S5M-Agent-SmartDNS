@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -829,6 +830,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_available", true)
 		assert(t, status, "smartdns_running", true)
 		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_domestic_listener", false)
 		assert(t, status, "smartdns_version", "SmartDNS 1.2026")
 		assert(t, status, "smartdns_config_sha256", hex.EncodeToString(configHash[:]))
 		assert(t, status, "smartdns_last_error", "")
@@ -1374,5 +1376,158 @@ func TestBackupSmartDNSConfigRemovesNewSidecarAfterPostRenameSyncFailure(t *test
 	}
 	if _, statErr := os.Lstat(backupPath); !os.IsNotExist(statErr) {
 		t.Fatalf("failed first-install snapshot left sidecar behind, stat error=%v", statErr)
+	}
+}
+
+
+func TestPersistSmartDNSDisabledMarkerIsDurableAndReversible(t *testing.T) {
+	oldPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldPath })
+	if !smartDNSRuntimeEnabled() { t.Fatal("SmartDNS should default to enabled when no disable marker exists") }
+	if err := persistSmartDNSDisabled(true); err != nil { t.Fatalf("persist disabled state: %v", err) }
+	if smartDNSRuntimeEnabled() { t.Fatal("disable marker did not disable SmartDNS runtime state") }
+	if err := persistSmartDNSDisabled(false); err != nil { t.Fatalf("clear disabled state: %v", err) }
+	if !smartDNSRuntimeEnabled() { t.Fatal("clearing disable marker did not restore enabled state") }
+}
+
+func TestCollectSmartDNSStatusDoesNotRestartExplicitlyDisabledService(t *testing.T) {
+	config := []byte(`bind 127.0.0.1:6053
+bind-tcp 127.0.0.1:6053
+bind 127.0.0.1:6054 -group china-dot
+bind-tcp 127.0.0.1:6054 -group china-dot
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
+server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google
+server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+dualstack-ip-selection no
+dualstack-ip-selection-threshold 10
+dualstack-ip-allow-force-AAAA yes
+`)
+	bin := filepath.Join(t.TempDir(), "smartdns")
+	if err := os.WriteFile(bin, []byte("test"), 0700); err != nil { t.Fatal(err) }
+	binaryInfo, err := os.Stat(bin)
+	if err != nil { t.Fatal(err) }
+	restarts := 0
+	status := map[string]any{}
+	collectSmartDNSStatusWithDependencies(status, smartDNSStatusDependencies{
+		enabled: func() bool { return false },
+		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
+		readConfig: func(string) ([]byte, error) { return config, nil },
+		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
+		process: func() ([]byte, error) { return []byte("1234"), nil },
+		probe: func() bool { t.Fatal("disabled SmartDNS must not be probed"); return false },
+		restart: func() error { restarts++; return nil },
+		waitHealthy: func(time.Duration) bool { return false },
+	})
+	if status["smartdns_available"] != true || status["smartdns_control_supported"] != true || status["smartdns_enabled"] != false {
+		t.Fatalf("unexpected disabled capability state: %#v", status)
+	}
+	if status["smartdns_running"] != true || status["smartdns_dns_healthy"] != false {
+		t.Fatalf("running-but-disabled service should not be reported healthy: %#v", status)
+	}
+	if restarts != 0 { t.Fatalf("disabled SmartDNS was auto-restarted %d times", restarts) }
+}
+
+
+func TestProbeMihomoDNSFallbackUsesLocalListenerAndAddressFamilies(t *testing.T) {
+	dir := t.TempDir()
+	dig := filepath.Join(dir, "dig")
+	script := `#!/bin/sh
+case "$*" in
+  *" AAAA") echo "2001:db8::1" ;;
+  *" A") echo "192.0.2.10" ;;
+  *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(dig, []byte(script), 0700); err != nil { t.Fatal(err) }
+	t.Setenv("PATH", dir)
+	config := []byte("dns:\n  listen: 127.0.0.1:5353\n  ipv6: true\n")
+	if !probeMihomoDNSFallback(config) { t.Fatal("valid local A/AAAA fallback probes should pass") }
+	if probeMihomoDNSFallback([]byte("dns:\n  listen: 8.8.8.8:53\n  ipv6: true\n")) {
+		t.Fatal("remote DNS listener must not be treated as a local fallback resolver")
+	}
+	if probeMihomoDNSFallback([]byte("dns:\n  ipv6: true\n")) {
+		t.Fatal("missing local DNS listener must fail closed")
+	}
+}
+
+
+func TestValidateAgentSmartDNSDNSModeRequiresSafeListenerReferences(t *testing.T) {
+	enabled := []byte(`dns:
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    geosite:cn: 127.0.0.1:6054
+`)
+	if err := validateAgentSmartDNSDNSMode(enabled, true); err != nil {
+		t.Fatalf("valid enabled DNS config rejected: %v", err)
+	}
+	fallback := []byte(`dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`)
+	if err := validateAgentSmartDNSDNSMode(fallback, false); err != nil {
+		t.Fatalf("valid fallback DNS config rejected: %v", err)
+	}
+	if err := validateAgentSmartDNSDNSMode(enabled, false); err == nil {
+		t.Fatal("disabled mode must reject any remaining SmartDNS loopback references")
+	}
+	ipv6Domestic := []byte(`dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - "[::1]:6054"
+`)
+	if err := validateAgentSmartDNSDNSMode(ipv6Domestic, false); err == nil {
+		t.Fatal("disabled mode must reject the IPv6 domestic SmartDNS listener too")
+	}
+	missingDomestic := []byte(`dns:
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`)
+	if err := validateAgentSmartDNSDNSMode(missingDomestic, true); err == nil {
+		t.Fatal("enabled mode must require the domestic SmartDNS listener")
+	}
+}
+
+
+func TestProbeMihomoDNSFallbackRequiresUDPAndTCPForAllEnabledFamilies(t *testing.T) {
+	config := []byte(`dns:
+  listen: 127.0.0.1:1053
+  ipv6: true
+`)
+	calls := make([]string, 0, 6)
+	run := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		if strings.Contains(joined, " AAAA") { return []byte("2001:db8::10\n"), nil }
+		return []byte("203.0.113.10\n"), nil
+	}
+	if !probeMihomoDNSFallbackWithDig(config, run) {
+		t.Fatal("valid UDP/TCP A and AAAA fallback probes should pass")
+	}
+	if len(calls) != 6 { t.Fatalf("probe count = %d, want 6: %#v", len(calls), calls) }
+	udp, tcp := 0, 0
+	for _, call := range calls {
+		if strings.Contains(call, "+tcp") { tcp++ } else { udp++ }
+	}
+	if udp != 3 || tcp != 3 { t.Fatalf("transport probe counts UDP=%d TCP=%d, want 3 each", udp, tcp) }
+
+	failedTCP := func(args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "+tcp") { return nil, errors.New("TCP unavailable") }
+		return []byte("203.0.113.10\n"), nil
+	}
+	if probeMihomoDNSFallbackWithDig([]byte(`dns:
+  listen: 127.0.0.1:1053
+  ipv6: false
+`), failedTCP) {
+		t.Fatal("fallback must not pass when TCP DNS is unavailable")
 	}
 }

@@ -22,6 +22,10 @@ type App struct {
 	agentWSMu          sync.Mutex
 	agentWSGeneration  map[string]uint64
 	agentWSConnections map[string]*agentWSConnection
+	// Per-Agent command locks preserve ordering within a node without serializing
+	// unrelated nodes behind one slow command or ACK.
+	agentWSCommandMu    sync.Mutex
+	agentWSCommandLocks map[string]*sync.Mutex
 	agentHeartbeatAt   map[string]int64
 	agentTelemetryPersistAt map[string]time.Time
 	agentTelemetryLogAt     map[string]time.Time
@@ -115,6 +119,7 @@ func (a *App) Router(static fs.FS) http.Handler {
 		"GET /api/v1/nodes/proxy-modes":           a.handleListMachineProxyModes,
 		"GET /api/v1/nodes/{code}/proxy-mode":        a.handleGetMachineProxyMode,
 		"PUT /api/v1/nodes/{code}/proxy-mode":        a.handleSetMachineProxyMode,
+		"PUT /api/v1/nodes/{code}/smartdns":          a.handleSetMachineSmartDNSEnabled,
 		"GET /api/v1/nodes/{code}/config":          a.handleGetNodeConfig,
 		"PUT /api/v1/nodes/{code}/config":          a.handleSaveNodeConfig,
 		"POST /api/v1/nodes/config-sync":           a.handleRetryNodeConfigSync,
