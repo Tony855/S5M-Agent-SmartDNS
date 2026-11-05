@@ -8,7 +8,7 @@
 
 - SmartDNS 健康检查分别执行本机 UDP 和 TCP DNS A、AAAA 查询；四项查询都成功且进程、配置策略正常时，主控才将 Agent 的普通 `dns.nameserver` 切换到 `127.0.0.1:6053`。
 - SmartDNS 不健康时，下一次 Agent WebSocket 配置同步自动恢复节点原有 `dns.nameserver`；运行时切换不写回节点持久配置。
-- SmartDNS 默认使用 IPv6 字面地址的 Cloudflare/Google DoT 上游；国内 `china-dot` 使用阿里公共 DNS 的两个 IPv6 地址。所有上游均保留 TLS SNI 与证书主机名校验，避免 Bootstrap DNS 递归。该配置适用于 SOCKS5 入口可经 IPv4 连接、但代理出口只支持 IPv6 的节点；不支持 IPv6 的 DNSPod IPv4 端点不放入此上游池。
+- SmartDNS 默认上游使用 Cloudflare/Google 的 IPv4 与 IPv6 字面地址 DoT；国内 `china-dot` 组包含阿里 DNS 的 IPv4/IPv6 DoT，以及 DNSPod 的 IPv4 DoT。所有上游均保留 TLS SNI 与证书主机名校验。对于 SOCKS5 入口可经 IPv4 连接、但代理出口仅支持 IPv6 的节点，IPv4 DoT 端点不可达，解析应依靠 IPv6 上游；国内组中的 DNSPod IPv4 端点也不可达，不能把它们视为已验证可用。Bootstrap DNS 与 SmartDNS 的代理 DoT 上游是不同链路。
 - Agent 默认生成独立的 `SMARTDNS-PROXY` fallback 组，成员仅为当前机器绑定节点和全局节点中已启用的代理；通过 `PROCESS-NAME,smartdns,SMARTDNS-PROXY` 路由 SmartDNS 的全部上游连接。组内每 30 秒主动探测 HTTPS 204 健康地址，优先使用列表中第一个健康节点；节点失效时自动切换到下一个健康节点。组不包含 `DIRECT`，全部代理不可用时 SmartDNS 上游连接失败关闭，不会直连泄漏。普通 `PROXY` 手动选择组不受影响。按客户端独立出口仍需 SmartDNS 的客户端 IP 分组与隔离运行时，当前不自动启用。显式设置空的 `smartdns_routing_config` 可恢复旧版路由行为。
 - TUN 同时劫持 UDP/TCP 53；默认只排除本地/私有网段和代理节点出口地址，不再把公共 bootstrap DNS 地址自动加入 `route-exclude-address`，避免强制它们绕过 TUN。
 - SmartDNS 不健康时，自动回退的普通 DNS 上游改为 Cloudflare/Google DoH，而不是自动降级到明文 UDP DNS。
@@ -49,8 +49,9 @@ dns:
 3. **加密不等于经过代理。** SmartDNS 进程通常会自行建立上游连接；Mihomo 的 `respect-rules` 不会自动把 SmartDNS 进程发出的连接转入代理。因此，必须通过主机策略路由/防火墙/受控网络命名空间，验证上游连接确实按预期出口发送。
 4. 禁止客户端绕过 Mihomo 直接访问外部 TCP/UDP 53；按实际平台测试 TCP DNS、IPv6 DNS 和应用内置 DoH 的绕过情况。
 5. 不要把 `MATCH,DIRECT` 误认为全局代理。共享模式可通过进程规则将 SmartDNS 的连接统一交给一个代理，但代理不可用时仍可能直连，除非另有网络层 fail-closed 限制。按客户端独立出口不能使用单一进程规则，必须依靠 SmartDNS 的客户端 IP 分组与各组命名代理，并在运行时验证。
-6. `default-nameserver` / `proxy-server-nameserver` 是 Mihomo 启动和解析代理节点域名所需的 bootstrap。当前 `default-nameserver` 与 `proxy-server-nameserver` 使用 `tls://` 加密 DNS，并以字面 IP 作为 DoT 端点，避免明文 bootstrap 和域名解析循环。Mihomo 文档明确支持 `default-nameserver` 使用加密 DNS，示例包含 `tls://`；仍需在目标 Mihomo 版本验证证书/SNI 与连接行为。不能简单把 bootstrap 指向 SmartDNS，否则会形成启动循环。
-6. Mihomo 的 `default-nameserver` / `proxy-server-nameserver` 是代理节点域名的 Bootstrap DNS，和 SmartDNS 进程的 DoT 上游不是同一条链路。若 SOCKS5 服务端地址本身是 IPv4，应保留可从容器 IPv4 网络直连的 Bootstrap 解析器；只把 SmartDNS 进程经 SOCKS5 转发的 DoT 目标切换为 IPv6。7. 先在测试节点运行 DNS 泄漏测试、抓包并检查上游连接出口，再逐步推广。仅靠 YAML 无法保证零泄露。
+6. `default-nameserver` / `proxy-server-nameserver` 是 Mihomo 启动和解析代理节点域名所需的 Bootstrap DNS。当前默认配置使用 IPv4 字面地址的 `tls://` DoT 端点；它们必须从 Agent 容器的基础网络可达，不能依赖尚未启动的 SOCKS5 代理或 SmartDNS。
+7. SmartDNS 的 DoT 上游则由 Mihomo 进程规则交给选定 SOCKS5 节点；当该节点出口仅支持 IPv6 时，应由 IPv6 DoT 端点完成查询，IPv4 DoT 端点会失败。两条链路不要混为一谈，也不要把 Bootstrap DNS 指向 SmartDNS，否则可能形成启动循环。
+8. 先在测试节点运行 DNS 泄漏测试、抓包并检查上游连接出口，再逐步推广。仅靠 YAML 无法保证零泄露。
 
 ## SmartDNS 故障回退与 Bootstrap 边界
 
