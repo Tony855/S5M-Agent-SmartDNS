@@ -105,7 +105,12 @@ grep -Fqx 'server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host
 grep -Fqx 'server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' "$ROOT/data/smartdns.conf" || fail "AliDNS primary was not migrated to IPv6"
 grep -Fqx 'server-tls [2400:3200:baba::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' "$ROOT/data/smartdns.conf" || fail "AliDNS secondary was not migrated to IPv6"
 grep -Fqx 'cache-size 1234' "$ROOT/data/smartdns.conf" || fail "custom cache setting was not preserved"
-if grep -Eq 'server-tls (1\\.1\\.1\\.1|8\\.8\\.8\\.8|223\\.5\\.5\\.5|223\\.6\\.6\\.6|1\\.12\\.12\\.12|120\\.53\\.53\\.53):853' "$ROOT/data/smartdns.conf"; then
+if grep -Fq 'server-tls 1.1.1.1:853' "$ROOT/data/smartdns.conf" ||
+   grep -Fq 'server-tls 8.8.8.8:853' "$ROOT/data/smartdns.conf" ||
+   grep -Fq 'server-tls 223.5.5.5:853' "$ROOT/data/smartdns.conf" ||
+   grep -Fq 'server-tls 223.6.6.6:853' "$ROOT/data/smartdns.conf" ||
+   grep -Fq 'server-tls 1.12.12.12:853' "$ROOT/data/smartdns.conf" ||
+   grep -Fq 'server-tls 120.53.53.53:853' "$ROOT/data/smartdns.conf"; then
   fail "stock IPv4 DoT endpoint remained after migration"
 fi
 [ "$(stat -c %a "$ROOT/data/smartdns.conf")" = 600 ] || fail "migrated config mode is not 0600"
