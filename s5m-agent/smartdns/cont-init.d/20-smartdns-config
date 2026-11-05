@@ -63,7 +63,7 @@ if [ -s "$CONFIG_PATH" ]; then
     done
     chmod 0600 "$TEMP_CONFIG"
     if ! mv -f "$TEMP_CONFIG" "$CONFIG_PATH"; then
-      echo "Failed to atomically install the IPv6-only SmartDNS upstream migration" >&2
+      echo "Failed to atomically install the dual-stack SmartDNS upstream migration" >&2
       exit 1
     fi
     TEMP_CONFIG=""
