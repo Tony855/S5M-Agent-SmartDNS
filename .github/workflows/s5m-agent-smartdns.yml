@@ -25,6 +25,7 @@ on:
       - "s5m-agent/cont-init.d/**"
       - "s5m-agent/services/**"
       - "server/internal/app/agent_websocket.go"
+      - "server/internal/app/agent_websocket_concurrency_test.go"
       - "server/internal/app/agent_telemetry_test.go"
       - "server/internal/app/router.go"
       - "server/internal/app/configgen.go"
@@ -65,6 +66,7 @@ on:
       - "s5m-agent/cont-init.d/**"
       - "s5m-agent/services/**"
       - "server/internal/app/agent_websocket.go"
+      - "server/internal/app/agent_websocket_concurrency_test.go"
       - "server/internal/app/agent_telemetry_test.go"
       - "server/internal/app/router.go"
       - "server/internal/app/configgen.go"
@@ -112,6 +114,9 @@ jobs:
       - name: Run server tests
         working-directory: server
         run: go test ./...
+      - name: Run server race detector
+        working-directory: server
+        run: go test -race ./...
       - name: Run server vet
         working-directory: server
         run: go vet ./...
