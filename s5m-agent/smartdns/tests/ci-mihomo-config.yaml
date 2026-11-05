@@ -29,7 +29,7 @@ proxies:
     port: 1080
   - name: route-exclusion-v6
     type: socks5
-    server: "2001:db8::20"
+    server: "fd42:534d:5:1::20"
     port: 1080
 proxy-groups: []
 rules:
@@ -47,4 +47,4 @@ tun:
   # Proxy ingress endpoints must bypass TUN to prevent recursive routing.
   route-exclude-address:
     - 203.0.113.10/32
-    - 2001:db8::20/128
+    - fd42:534d:5:1::20/128
