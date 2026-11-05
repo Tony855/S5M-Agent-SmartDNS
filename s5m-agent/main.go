@@ -2328,7 +2328,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			if ack.Type != "command.acknowledged" || ack.ID != cmd.ID || !ack.OK {
 				return fmt.Errorf("主控端命令 ACK 确认无效: %s", ack.Message)
 			}
-			if commandErr != nil {
+			if commandStatus != "success" {
 				fmt.Printf("Agent 命令 %s 执行失败: %s\n", cmd.ID, message)
 			}
 		default:
