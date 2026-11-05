@@ -486,7 +486,7 @@ rules:
 	for key, want := range map[string]any{
 		"name": SmartDNSGroupName,
 		"type": "fallback",
-		"url": "https://www.gstatic.com/generate_204",
+		"url": "https://ipv6.google.com/generate_204",
 		"interval": 30,
 		"timeout": 5000,
 		"lazy": false,
@@ -590,7 +590,7 @@ rules:
 	groups := doc["proxy-groups"].([]any)
 	group := groups[0].(map[string]any)
 	for key, want := range map[string]any{
-		"type": "url-test", "url": "https://www.gstatic.com/generate_204",
+		"type": "url-test", "url": "https://ipv6.google.com/generate_204",
 		"interval": 30, "timeout": 5000, "lazy": false, "expected-status": 204, "tolerance": 50,
 	} {
 		if group[key] != want { t.Errorf("url-test %s = %#v, want %#v", key, group[key], want) }
