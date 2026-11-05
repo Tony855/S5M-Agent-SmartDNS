@@ -364,7 +364,7 @@ jobs:
               exit 1
             }
             # SOCKS5 server ingress must bypass TUN in both address families,
-            # otherwise the proxy's own transport can recurse into itself.
+            # otherwise the proxy transport can recurse into itself.
             proxy4="$(ip -4 route get 203.0.113.10)"
             printf "IPv4 SOCKS endpoint route: %s\\n" "$proxy4"
             if printf "%s\\n" "$proxy4" | grep -Eq "dev Meta([[:space:]]|$)"; then
