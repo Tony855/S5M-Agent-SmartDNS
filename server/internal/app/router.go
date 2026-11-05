@@ -22,6 +22,10 @@ type App struct {
 	agentWSMu          sync.Mutex
 	agentWSGeneration  map[string]uint64
 	agentWSConnections map[string]*agentWSConnection
+	// Per-Agent command locks preserve ordering within a node without serializing
+	// unrelated nodes behind one slow command or ACK.
+	agentWSCommandMu    sync.Mutex
+	agentWSCommandLocks map[string]*sync.Mutex
 	agentHeartbeatAt   map[string]int64
 	agentTelemetryPersistAt map[string]time.Time
 	agentTelemetryLogAt     map[string]time.Time
