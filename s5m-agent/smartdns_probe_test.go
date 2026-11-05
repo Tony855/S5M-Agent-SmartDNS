@@ -530,8 +530,8 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 			t.Errorf("bundled SmartDNS config missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"server-tls 1.1.1.1:853", "server-tls 8.8.8.8:853", "server-tls 223.5.5.5:853", "server-tls 223.6.6.6:853", "server-tls 1.12.12.12:853", "server-tls 120.53.53.53:853"} {
-		if strings.Contains(text, forbidden) { t.Fatalf("IPv4-only DoT endpoint remains in IPv6 egress profile: %s", forbidden) }
+	for _, required := range []string{"server-tls 1.1.1.1:853", "server-tls 8.8.8.8:853", "server-tls 223.5.5.5:853", "server-tls 223.6.6.6:853", "server-tls 1.12.12.12:853", "server-tls 120.53.53.53:853"} {
+		if !strings.Contains(text, required) { t.Fatalf("dual-stack profile missing IPv4 DoT endpoint: %s", required) }
 	}
 	if strings.Contains(text, "server 223.5.5.5") || strings.Contains(text, "server 119.29.29.29") {
 		t.Fatal("bundled SmartDNS config must not contain plaintext DNS upstreams")
