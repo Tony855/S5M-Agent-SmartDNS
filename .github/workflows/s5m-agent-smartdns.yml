@@ -347,9 +347,17 @@ jobs:
           # Prove Mihomo actually installs an IPv6 default route through its TUN
           # interface. AAAA DNS answers alone do not prove IPv6 packet routing.
           docker exec "$container" sh -ec '
-            route="$(ip -6 route get 2606:4700:4700::1111)"
-            printf "IPv6 TUN route: %s\\n" "$route"
-            printf "%s\\n" "$route" | grep -Eq "dev Meta([[:space:]]|$)" || {
+            route4="$(ip -4 route get 1.1.1.1)"
+            printf "IPv4 TUN route: %s\\n" "$route4"
+            printf "%s\\n" "$route4" | grep -Eq "dev Meta([[:space:]]|$)" || {
+              echo "IPv4 destination is not routed through Mihomo TUN (Meta)" >&2
+              ip -4 route show >&2
+              ip -4 addr show >&2
+              exit 1
+            }
+            route6="$(ip -6 route get 2606:4700:4700::1111)"
+            printf "IPv6 TUN route: %s\\n" "$route6"
+            printf "%s\\n" "$route6" | grep -Eq "dev Meta([[:space:]]|$)" || {
               echo "IPv6 destination is not routed through Mihomo TUN (Meta)" >&2
               ip -6 route show >&2
               ip -6 addr show >&2
