@@ -2445,11 +2445,16 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "机器码和密钥不能为空")
 		return
 	}
-	// Serialize revocation with token allocation as well as heartbeat persistence.
+	// Serialize revocation with token allocation as well as command delivery/ACK.
 	// Without the shared token lock, a concurrent generator could insert a new
 	// credential after this delete commits, effectively resurrecting the binding.
+	// The per-node command lock closes the gap between a WebSocket authorization
+	// check and its subsequent DB read/write: revocation must not race a command
+	// frame onto an already-revoked Agent connection.
 	agentTokenGenerateMu.Lock()
 	defer agentTokenGenerateMu.Unlock()
+	unlockCommand := a.lockAgentWSCommand(code)
+	defer unlockCommand()
 	a.agentWSMu.Lock()
 	if err := a.store.DeleteAgentBinding(code); err != nil {
 		a.agentWSMu.Unlock()
