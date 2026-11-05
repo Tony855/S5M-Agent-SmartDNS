@@ -363,6 +363,22 @@ jobs:
               ip -6 addr show >&2
               exit 1
             }
+            # SOCKS5 server ingress must bypass TUN in both address families,
+            # otherwise the proxy's own transport can recurse into itself.
+            proxy4="$(ip -4 route get 203.0.113.10)"
+            printf "IPv4 SOCKS endpoint route: %s\\n" "$proxy4"
+            if printf "%s\\n" "$proxy4" | grep -Eq "dev Meta([[:space:]]|$)"; then
+              echo "IPv4 SOCKS endpoint was recursively captured by TUN" >&2
+              ip -4 route show >&2
+              exit 1
+            fi
+            proxy6="$(ip -6 route get 2001:db8::20)"
+            printf "IPv6 SOCKS endpoint route: %s\\n" "$proxy6"
+            if printf "%s\\n" "$proxy6" | grep -Eq "dev Meta([[:space:]]|$)"; then
+              echo "IPv6 SOCKS endpoint was recursively captured by TUN" >&2
+              ip -6 route show >&2
+              exit 1
+            fi
           '
 
           # Existing operator configuration must survive restart without being overwritten.
