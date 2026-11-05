@@ -460,6 +460,8 @@ func validateSmartDNSConfig(data []byte) error {
 				allowed := map[string]string{
 					"223.5.5.5:853": "dns.alidns.com",
 					"223.6.6.6:853": "dns.alidns.com",
+					"[2400:3200::1]:853": "dns.alidns.com",
+					"[2400:3200:baba::1]:853": "dns.alidns.com",
 					"1.12.12.12:853": "dot.pub",
 					"120.53.53.53:853": "dot.pub",
 				}
