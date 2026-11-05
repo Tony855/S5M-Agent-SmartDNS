@@ -1732,7 +1732,7 @@ proxy-groups:
     type: fallback
     proxies:
       - node-a
-    url: https://www.gstatic.com/generate_204
+    url: https://ipv6.google.com/generate_204
     interval: 60
 rules:
   - PROCESS-NAME,smartdns,SMARTDNS-PROXY
