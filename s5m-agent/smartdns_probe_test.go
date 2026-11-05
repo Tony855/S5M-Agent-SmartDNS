@@ -492,6 +492,7 @@ func TestValidateSmartDNSConfigAcceptsLiteralIPEncryptedUpstreams(t *testing.T) 
 		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 	}
 	for _, upstream := range cases {
 		t.Run(upstream, func(t *testing.T) {
