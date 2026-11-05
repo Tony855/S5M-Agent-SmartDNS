@@ -383,7 +383,9 @@ jobs:
 
           # Existing operator configuration must survive restart without being overwritten.
           docker exec "$container" test -s /data/smartdns.conf
-          docker exec "$container" sh -ec 'test -s /data/smartdns.conf; printf "\n# s5m-persistence-test\n" >> /data/smartdns.conf; test -s /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
+          printf '\n# s5m-persistence-test\n' | docker exec -i "$container" tee -a /data/smartdns.conf >/dev/null
+          docker exec "$container" test -s /data/smartdns.conf
+          [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
           docker restart "$container" >/dev/null
           for attempt in $(seq 1 30); do
             health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
@@ -609,7 +611,9 @@ jobs:
           docker exec "$container" pidof smartdns >/dev/null
 
           # Preserve custom SmartDNS config across a complete container restart.
-          docker exec "$container" sh -ec 'printf "\\n# s5m-persistence-test\\n" >> /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
+          printf '\n# s5m-persistence-test\n' | docker exec -i "$container" tee -a /data/smartdns.conf >/dev/null
+          docker exec "$container" test -s /data/smartdns.conf
+          [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
           docker restart "$container" >/dev/null
           for attempt in $(seq 1 30); do
             health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
