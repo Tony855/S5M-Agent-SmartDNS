@@ -1956,7 +1956,7 @@ func TestBuildConfigForMachineExplicitlyEnablesScopedSmartDNSURLTest(t *testing.
 		if group["name"] == SmartDNSGroupName { smart = group }
 	}
 	if smart == nil { t.Fatalf("explicitly enabled SmartDNS url-test group missing: %#v", groups) }
-	if smart["type"] != "url-test" || smart["url"] != "https://www.gstatic.com/generate_204" ||
+	if smart["type"] != "url-test" || smart["url"] != "https://ipv6.google.com/generate_204" ||
 		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 || smart["tolerance"] != 50 {
 		t.Fatalf("unexpected automatic latency-test settings: %#v", smart)
 	}
@@ -2442,7 +2442,7 @@ func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T)
 	}}
 	generated := []any{map[string]any{
 		"name": SmartDNSGroupName, "type": "url-test",
-		"proxies": []any{"new-node"}, "url": "https://www.gstatic.com/generate_204",
+		"proxies": []any{"new-node"}, "url": "https://ipv6.google.com/generate_204",
 		"interval": 30, "tolerance": 50,
 	}}
 	got, err := mergeManagedProxyGroupValues(custom, generated)
@@ -2450,7 +2450,7 @@ func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T)
 	if len(got) != 1 { t.Fatalf("expected one managed group, got %#v", got) }
 	group := got[0].(map[string]any)
 	members := group["proxies"].([]any)
-	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 {
+	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 || group["url"] != "https://ipv6.google.com/generate_204" {
 		t.Fatalf("url-test group was not refreshed atomically: %#v", group)
 	}
 }
