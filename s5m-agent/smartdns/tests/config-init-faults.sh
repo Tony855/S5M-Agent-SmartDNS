@@ -90,6 +90,29 @@ run_init || fail "existing config should be retained"
 pass "existing operator config is preserved and permissions hardened"
 
 reset_case
+cat > "$ROOT/data/smartdns.conf" <<'CONFIG'
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
+server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google
+server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+server-tls 223.6.6.6:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
+server-tls 120.53.53.53:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
+cache-size 1234
+CONFIG
+run_init || fail "stock IPv4 SmartDNS profile should migrate to dual-stack"
+grep -Fqx 'server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com' "$ROOT/data/smartdns.conf" || fail "Cloudflare IPv6 DoT peer was not added"
+grep -Fqx 'server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google' "$ROOT/data/smartdns.conf" || fail "Google IPv6 DoT peer was not added"
+grep -Fqx 'server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' "$ROOT/data/smartdns.conf" || fail "AliDNS IPv6 primary peer was not added"
+grep -Fqx 'server-tls [2400:3200:baba::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' "$ROOT/data/smartdns.conf" || fail "AliDNS IPv6 secondary peer was not added"
+grep -Fqx 'cache-size 1234' "$ROOT/data/smartdns.conf" || fail "custom cache setting was not preserved"
+grep -Fqx 'server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com' "$ROOT/data/smartdns.conf" || fail "Cloudflare IPv4 DoT was removed"
+grep -Fqx 'server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google' "$ROOT/data/smartdns.conf" || fail "Google IPv4 DoT was removed"
+grep -Fqx 'server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' "$ROOT/data/smartdns.conf" || fail "AliDNS IPv4 DoT was removed"
+grep -Fqx 'server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group' "$ROOT/data/smartdns.conf" || fail "DNSPod IPv4 DoT was removed"
+[ "$(stat -c %a "$ROOT/data/smartdns.conf")" = 600 ] || fail "migrated config mode is not 0600"
+pass "stock IPv4 SmartDNS profile migrates atomically to dual-stack and preserves IPv4/custom settings"
+
+reset_case
 cat > "$BIN/cp" <<'WRAPPER'
 #!/bin/sh
 [ "${FAIL_CP:-0}" = 1 ] && exit 73

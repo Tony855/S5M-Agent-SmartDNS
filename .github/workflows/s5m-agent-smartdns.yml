@@ -152,8 +152,15 @@ jobs:
           grep -q '^cache-file /data/smartdns.cache$' s5m-agent/smartdns/smartdns.conf
           grep -q '^cache-checkpoint-time 3600$' s5m-agent/smartdns/smartdns.conf
           grep -q 'bind-tcp 127.0.0.1:6054 -group china-dot' s5m-agent/smartdns/smartdns.conf
-          grep -q 'server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
-          grep -q 'server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls [2400:3200:baba::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls 1.1.1.1:853' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls 8.8.8.8:853' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls 223.5.5.5:853' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls 223.6.6.6:853' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls 1.12.12.12:853' s5m-agent/smartdns/smartdns.conf
+          grep -Fq 'server-tls 120.53.53.53:853' s5m-agent/smartdns/smartdns.conf
+          grep -q '' s5m-agent/smartdns/smartdns.conf
           grep -q 'GEOIP,CN,PROXY' server/internal/app/configgen.go
           grep -q 'GEOIP,CN,REJECT' server/internal/app/configgen.go
           grep -q 'rules = append(rules, "MATCH,DIRECT")' server/internal/app/configgen.go
@@ -337,8 +344,48 @@ jobs:
           docker exec "$container" pidof mihomo >/dev/null
           docker exec "$container" pidof smartdns >/dev/null
 
+          # Prove Mihomo actually installs an IPv6 default route through its TUN
+          # interface. AAAA DNS answers alone do not prove IPv6 packet routing.
+          docker exec "$container" sh -ec '
+            route4="$(ip -4 route get 1.1.1.1)"
+            printf "IPv4 TUN route: %s\\n" "$route4"
+            printf "%s\\n" "$route4" | grep -Eq "dev Meta([[:space:]]|$)" || {
+              echo "IPv4 destination is not routed through Mihomo TUN (Meta)" >&2
+              ip -4 route show >&2
+              ip -4 addr show >&2
+              exit 1
+            }
+            route6="$(ip -6 route get 2606:4700:4700::1111)"
+            printf "IPv6 TUN route: %s\\n" "$route6"
+            printf "%s\\n" "$route6" | grep -Eq "dev Meta([[:space:]]|$)" || {
+              echo "IPv6 destination is not routed through Mihomo TUN (Meta)" >&2
+              ip -6 route show >&2
+              ip -6 addr show >&2
+              exit 1
+            }
+            # SOCKS5 server ingress must bypass TUN in both address families,
+            # otherwise the proxy transport can recurse into itself.
+            proxy4="$(ip -4 route get 203.0.113.10)"
+            printf "IPv4 SOCKS endpoint route: %s\\n" "$proxy4"
+            if printf "%s\\n" "$proxy4" | grep -Eq "dev Meta([[:space:]]|$)"; then
+              echo "IPv4 SOCKS endpoint was recursively captured by TUN" >&2
+              ip -4 route show >&2
+              exit 1
+            fi
+            proxy6="$(ip -6 route get fd42:534d:5:1::20)"
+            printf "IPv6 SOCKS endpoint route: %s\\n" "$proxy6"
+            if printf "%s\\n" "$proxy6" | grep -Eq "dev Meta([[:space:]]|$)"; then
+              echo "IPv6 SOCKS endpoint was recursively captured by TUN" >&2
+              ip -6 route show >&2
+              exit 1
+            fi
+          '
+
           # Existing operator configuration must survive restart without being overwritten.
-          docker exec "$container" sh -ec 'printf "\\n# s5m-persistence-test\\n" >> /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
+          docker exec "$container" test -s /data/smartdns.conf
+          printf '\n# s5m-persistence-test\n' | docker exec -i "$container" tee -a /data/smartdns.conf >/dev/null
+          docker exec "$container" test -s /data/smartdns.conf
+          [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
           docker restart "$container" >/dev/null
           for attempt in $(seq 1 30); do
             health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
@@ -357,7 +404,7 @@ jobs:
           docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
-          agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
+          agent_port="$(docker port "$container" 80/tcp | sed 's/.*://')"
           [[ -n "$agent_port" ]]
           if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
             echo "Explicit proxy port 7890 must not be published" >&2
@@ -564,7 +611,9 @@ jobs:
           docker exec "$container" pidof smartdns >/dev/null
 
           # Preserve custom SmartDNS config across a complete container restart.
-          docker exec "$container" sh -ec 'printf "\\n# s5m-persistence-test\\n" >> /data/smartdns.conf; test "$(stat -c %a /data/smartdns.conf)" = "600"'
+          printf '\n# s5m-persistence-test\n' | docker exec -i "$container" tee -a /data/smartdns.conf >/dev/null
+          docker exec "$container" test -s /data/smartdns.conf
+          [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
           docker restart "$container" >/dev/null
           for attempt in $(seq 1 30); do
             health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
@@ -583,7 +632,7 @@ jobs:
           docker exec "$container" grep -q '^# s5m-persistence-test' /data/smartdns.conf
           [[ "$(docker exec "$container" stat -c %a /data/smartdns.conf)" == "600" ]]
 
-          agent_port="$(docker port "$container" 80/tcp | awk -F: 'NR==1 {print $NF}')"
+          agent_port="$(docker port "$container" 80/tcp | sed 's/.*://')"
           [[ -n "$agent_port" ]]
           if docker port "$container" 7890/tcp 2>/dev/null | grep -q .; then
             echo "Explicit proxy port 7890 must not be published" >&2

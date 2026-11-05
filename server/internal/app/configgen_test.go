@@ -40,6 +40,10 @@ proxies:
     type: socks5
     server: 203.0.113.10
     port: 1080
+  - name: upstream-v6
+    type: socks5
+    server: 2001:db8::20
+    port: 1081
 `
 	got, err := normalizeAgentProxyConfig(input)
 	if err != nil {
@@ -108,7 +112,7 @@ proxies:
 	if !foundTCPDNSHijack { t.Errorf("tun dns-hijack missing tcp://any:53: %#v", dnsHijack) }
 	addresses, ok := tun["route-exclude-address"].([]any)
 	if !ok { t.Fatalf("route-exclude-address is not a sequence: %#v", tun["route-exclude-address"]) }
-	for _, want := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.10/32", "10.1.2.0/24"} {
+	for _, want := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.10/32", "2001:db8::20/128", "10.1.2.0/24"} {
 		found := false
 		for _, item := range addresses { if item == want { found = true; break } }
 		if !found { t.Errorf("route-exclude-address missing %q: %#v", want, addresses) }
@@ -1719,6 +1723,12 @@ func TestMergeManagedProxySectionsPreservesCustomGroupsAndAddsSmartDNSFallback(t
     type: select
     proxies:
       - DIRECT
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies:
+      - old-node
+    url: https://www.gstatic.com/generate_204
+    interval: 60
 rules:
   - DOMAIN,custom.example.com,DIRECT
 `
@@ -1743,10 +1753,16 @@ rules:
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
 	groups := doc["proxy-groups"].([]any)
-	if len(groups) != 2 { t.Fatalf("expected custom + managed groups, got %#v", groups) }
+	if len(groups) != 2 { t.Fatalf("expected custom + migrated managed groups, got %#v", groups) }
 	names := map[string]bool{}
 	for _, raw := range groups { names[raw.(map[string]any)["name"].(string)] = true }
 	if !names["MANUAL-SELECT"] || !names[SmartDNSGroupName] { t.Fatalf("custom or SmartDNS group lost: %#v", names) }
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		if group["name"] == SmartDNSGroupName && group["url"] != "https://www.gstatic.com/generate_204" {
+			t.Fatalf("legacy SmartDNS group was not upgraded to dual-stack health check: %#v", group)
+		}
+	}
 }
 
 func TestMergeManagedProxySectionsRejectsReservedSmartDNSGroupCollision(t *testing.T) {
@@ -2438,7 +2454,7 @@ func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T)
 	if len(got) != 1 { t.Fatalf("expected one managed group, got %#v", got) }
 	group := got[0].(map[string]any)
 	members := group["proxies"].([]any)
-	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 {
+	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 || group["url"] != "https://www.gstatic.com/generate_204" {
 		t.Fatalf("url-test group was not refreshed atomically: %#v", group)
 	}
 }
