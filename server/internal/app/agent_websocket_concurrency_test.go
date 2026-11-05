@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -42,5 +43,34 @@ func TestAgentWSCommandLocksArePerMachine(t *testing.T) {
 	case <-nodeASecondAcquired:
 	case <-time.After(time.Second):
 		t.Fatal("queued same-node command did not proceed after lock release")
+	}
+}
+
+func TestAgentWSCommandLocksScaleAcrossNodes(t *testing.T) {
+	app := &App{}
+	for _, count := range []int{100, 300, 500} {
+		acquired := make(chan func(), count)
+		for i := 0; i < count; i++ {
+			machineCode := fmt.Sprintf("node-%d-%d", count, i)
+			go func(code string) {
+				acquired <- app.lockAgentWSCommand(code)
+			}(machineCode)
+		}
+		unlocks := make([]func(), 0, count)
+		deadline := time.After(5 * time.Second)
+		for len(unlocks) < count {
+			select {
+			case unlock := <-acquired:
+				unlocks = append(unlocks, unlock)
+			case <-deadline:
+				for _, unlock := range unlocks {
+					unlock()
+				}
+				t.Fatalf("%d distinct node locks did not acquire concurrently; acquired %d", count, len(unlocks))
+			}
+		}
+		for _, unlock := range unlocks {
+			unlock()
+		}
 	}
 }
