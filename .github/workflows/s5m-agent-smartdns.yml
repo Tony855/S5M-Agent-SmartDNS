@@ -153,6 +153,8 @@ jobs:
           grep -q '^cache-checkpoint-time 3600$' s5m-agent/smartdns/smartdns.conf
           grep -q 'bind-tcp 127.0.0.1:6054 -group china-dot' s5m-agent/smartdns/smartdns.conf
           grep -q 'server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
+          grep -q 'server-tls [2400:3200:baba::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' s5m-agent/smartdns/smartdns.conf
+          ! grep -Eq '^server-tls (1\\.1\\.1\\.1|8\\.8\\.8\\.8|223\\.5\\.5\\.5|223\\.6\\.6\\.6|1\\.12\\.12\\.12|120\\.53\\.53\\.53):853' s5m-agent/smartdns/smartdns.conf
           grep -q '' s5m-agent/smartdns/smartdns.conf
           grep -q 'GEOIP,CN,PROXY' server/internal/app/configgen.go
           grep -q 'GEOIP,CN,REJECT' server/internal/app/configgen.go
