@@ -317,10 +317,134 @@ rules:
             proxy_b.close()
 
 
+
+def ipv6_socks_atyp_main():
+    """Verify Mihomo sends IPv6 CONNECT targets through an IPv4 SOCKS5 endpoint."""
+    upstream = socket.socket()
+    upstream.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(1)
+    upstream.settimeout(8)
+    upstream_port = upstream.getsockname()[1]
+    mixed = free_port()
+    observed = {}
+
+    def read_exact(conn, size):
+        data = b""
+        while len(data) < size:
+            chunk = conn.recv(size - len(data))
+            if not chunk:
+                raise RuntimeError("unexpected EOF in SOCKS5 exchange")
+            data += chunk
+        return data
+
+    def fake_socks_server():
+        try:
+            conn, _ = upstream.accept()
+            with conn:
+                conn.settimeout(5)
+                greeting = read_exact(conn, 2)
+                if greeting[0] != 5:
+                    raise RuntimeError(f"unexpected SOCKS greeting: {greeting!r}")
+                read_exact(conn, greeting[1])
+                conn.sendall(b"\x05\x00")
+                header = read_exact(conn, 4)
+                if header[:3] != b"\x05\x01\x00":
+                    raise RuntimeError(f"unexpected SOCKS CONNECT header: {header!r}")
+                atyp = header[3]
+                if atyp == 4:
+                    address = socket.inet_ntop(socket.AF_INET6, read_exact(conn, 16))
+                elif atyp == 1:
+                    address = socket.inet_ntop(socket.AF_INET, read_exact(conn, 4))
+                elif atyp == 3:
+                    length = read_exact(conn, 1)[0]
+                    address = read_exact(conn, length).decode("ascii")
+                else:
+                    raise RuntimeError(f"unsupported SOCKS ATYP: {atyp}")
+                port = int.from_bytes(read_exact(conn, 2), "big")
+                observed.update(atyp=atyp, address=address, port=port)
+                # A successful CONNECT response is enough to test the upstream
+                # SOCKS address encoding; no external IPv6 network is required.
+                conn.sendall(b"\x05\x00\x00\x04" + socket.inet_pton(socket.AF_INET6, "::1") + b"\x00\x00")
+        except Exception as exc:
+            observed["error"] = str(exc)
+
+    server_thread = threading.Thread(target=fake_socks_server, daemon=True)
+    server_thread.start()
+    name = NAME + "-ipv6-atyp"
+    with tempfile.TemporaryDirectory(prefix="mihomo-ipv6-atyp-") as temp:
+        config = f"""\
+mixed-port: {mixed}
+allow-lan: false
+mode: rule
+log-level: debug
+proxies:
+  - name: ipv4-socks-ingress
+    type: socks5
+    server: 127.0.0.1
+    port: {upstream_port}
+rules:
+  - MATCH,ipv4-socks-ingress
+"""
+        Path(temp, "config.yaml").write_text(config, encoding="utf-8")
+        command = [
+            "docker", "run", "-d", "--rm", "--name", name, "--network", "host",
+            "-v", f"{temp}:/tmp/mihomo:ro",
+            "--entrypoint", "/usr/local/bin/mihomo", IMAGE,
+            "-d", "/tmp/mihomo", "-f", "/tmp/mihomo/config.yaml",
+        ]
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                try:
+                    with socket.create_connection(("127.0.0.1", mixed), timeout=0.5):
+                        break
+                except OSError:
+                    time.sleep(0.2)
+            else:
+                raise RuntimeError("Mihomo mixed-port did not become ready")
+
+            with socket.create_connection(("127.0.0.1", mixed), timeout=5) as client:
+                client.settimeout(5)
+                client.sendall(b"\x05\x01\x00")
+                if read_exact(client, 2) != b"\x05\x00":
+                    raise RuntimeError("Mihomo SOCKS listener rejected no-auth method")
+                target = socket.inet_pton(socket.AF_INET6, "2606:4700:4700::1111")
+                client.sendall(b"\x05\x01\x00\x04" + target + (853).to_bytes(2, "big"))
+                reply = read_exact(client, 4)
+                if reply[:2] != b"\x05\x00":
+                    raise RuntimeError(f"Mihomo CONNECT failed: {reply!r}")
+                atyp = reply[3]
+                if atyp == 4:
+                    read_exact(client, 16)
+                elif atyp == 1:
+                    read_exact(client, 4)
+                elif atyp == 3:
+                    read_exact(client, read_exact(client, 1)[0])
+                read_exact(client, 2)
+
+            server_thread.join(timeout=6)
+            if observed.get("error"):
+                raise RuntimeError(f"fake SOCKS5 upstream failed: {observed['error']}")
+            expected = {"atyp": 4, "address": "2606:4700:4700::1111", "port": 853}
+            if observed != expected:
+                raise RuntimeError(f"IPv6 destination was not preserved as SOCKS5 ATYP=4: {observed!r}")
+            print("PASS: IPv4 SOCKS5 ingress carries IPv6 CONNECT destination as ATYP=4 to TCP/853")
+        finally:
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            upstream.close()
+            server_thread.join(timeout=1)
+
+
 if __name__ == "__main__":
     try:
         main()
         url_test_main()
+        ipv6_socks_atyp_main()
     finally:
         for server in servers:
             server.shutdown()
