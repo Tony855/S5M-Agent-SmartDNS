@@ -407,7 +407,7 @@ func TestRestoreSmartDNSConfigVerifiedRejectsUnrestoredContent(t *testing.T) {
 }
 
 func TestValidateSmartDNSConfigRestrictsPersistentCachePathsAndOptions(t *testing.T) {
-	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	valid := base + "cache-persist yes\ncache-file /data/smartdns.cache\ncache-checkpoint-time 3600\n"
 	if err := validateSmartDNSConfig([]byte(valid)); err != nil {
 		t.Fatalf("valid persistent cache config rejected: %v", err)
@@ -449,8 +449,7 @@ bind-tcp 127.0.0.1:6053
 bind 127.0.0.1:6054 -group china-dot
 bind-tcp 127.0.0.1:6054 -group china-dot
 server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
-server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
-server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
+server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
 `)
 	if err := validateSmartDNSConfig(valid); err != nil {
 		t.Fatalf("valid domestic DoT group rejected: %v", err)
@@ -490,6 +489,7 @@ func TestValidateSmartDNSConfigAcceptsLiteralIPEncryptedUpstreams(t *testing.T) 
 		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 		"server-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 	}
 	for _, upstream := range cases {
 		t.Run(upstream, func(t *testing.T) {
@@ -514,7 +514,7 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 		"bind 127.0.0.1:6053",
 		"bind-tcp 127.0.0.1:6053",
 		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
-		"server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google",
+		"server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google",
 		"bind 127.0.0.1:6054 -group china-dot",
 		"bind-tcp 127.0.0.1:6054 -group china-dot",
 		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
