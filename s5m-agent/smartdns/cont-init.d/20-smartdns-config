@@ -21,8 +21,58 @@ if [ -L "$CONFIG_PATH" ] || { [ -e "$CONFIG_PATH" ] && [ ! -f "$CONFIG_PATH" ]; 
   exit 1
 fi
 
-# Preserve any existing non-empty operator configuration exactly as-is.
+# Existing non-empty configurations are preserved. The only automatic edit is a
+# signature-gated migration of the exact six-resolver stock profile shipped by
+# earlier S5M images. Custom resolver lines and all unrelated directives remain
+# untouched. This is required for IPv6-only SOCKS5 egress: IPv4 DoT targets
+# cannot be reached through that proxy even when its IPv4 SOCKS5 listener works.
 if [ -s "$CONFIG_PATH" ]; then
+  OLD_CF='server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com'
+  OLD_GOOGLE='server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google'
+  OLD_ALI_1='server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group'
+  OLD_ALI_2='server-tls 223.6.6.6:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group'
+  OLD_TENCENT_1='server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group'
+  OLD_TENCENT_2='server-tls 120.53.53.53:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group'
+
+  if grep -Fqx "$OLD_CF" "$CONFIG_PATH" &&
+     grep -Fqx "$OLD_GOOGLE" "$CONFIG_PATH" &&
+     grep -Fqx "$OLD_ALI_1" "$CONFIG_PATH" &&
+     grep -Fqx "$OLD_ALI_2" "$CONFIG_PATH" &&
+     grep -Fqx "$OLD_TENCENT_1" "$CONFIG_PATH" &&
+     grep -Fqx "$OLD_TENCENT_2" "$CONFIG_PATH"; then
+    umask 077
+    TEMP_CONFIG="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
+    if ! awk \
+      -v old_cf="$OLD_CF" -v new_cf='server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com' \
+      -v old_google="$OLD_GOOGLE" -v new_google='server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google' \
+      -v old_ali_1="$OLD_ALI_1" -v new_ali_1='server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' \
+      -v old_ali_2="$OLD_ALI_2" -v new_ali_2='server-tls [2400:3200:baba::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' \
+      -v old_tencent_1="$OLD_TENCENT_1" -v old_tencent_2="$OLD_TENCENT_2" '
+      BEGIN { print "# S5M IPv6-only proxy egress upstream migration v1" }
+      $0 == old_cf { print new_cf; next }
+      $0 == old_google { print new_google; next }
+      $0 == old_ali_1 { print new_ali_1; next }
+      $0 == old_ali_2 { print new_ali_2; next }
+      $0 == old_tencent_1 || $0 == old_tencent_2 { next }
+      { print }
+    ' "$CONFIG_PATH" > "$TEMP_CONFIG"; then
+      echo "Failed to stage the IPv6-only SmartDNS upstream migration" >&2
+      exit 1
+    fi
+    for expected in 'server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com' 'server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google' 'server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group' 'server-tls [2400:3200:baba::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group'; do
+      grep -Fqx "$expected" "$TEMP_CONFIG" || {
+        echo "IPv6-only SmartDNS migration output is incomplete" >&2
+        exit 1
+      }
+    done
+    chmod 0600 "$TEMP_CONFIG"
+    if ! mv -f "$TEMP_CONFIG" "$CONFIG_PATH"; then
+      echo "Failed to atomically install the IPv6-only SmartDNS upstream migration" >&2
+      exit 1
+    fi
+    TEMP_CONFIG=""
+    echo "Migrated the stock SmartDNS DoT profile to IPv6-only proxy egress"
+  fi
   chmod 0600 "$CONFIG_PATH"
   exit 0
 fi
