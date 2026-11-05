@@ -454,7 +454,7 @@ server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.ali
 	if err := validateSmartDNSConfig(valid); err != nil {
 		t.Fatalf("valid domestic DoT group rejected: %v", err)
 	}
-	invalid := strings.Replace(string(valid), "223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", "9.9.9.9:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", 1)
+	invalid := strings.Replace(string(valid), "[2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", "[2001:db8::53]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", 1)
 	if err := validateSmartDNSConfig([]byte(invalid)); err == nil {
 		t.Fatal("unapproved resolver must not enter china-dot group")
 	}
