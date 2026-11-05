@@ -1651,7 +1651,7 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 					current, ok := existing.(map[string]any)
 					if !ok || current["name"] != SmartDNSGroupName { continue }
 					managed = (current["type"] == "fallback" || current["type"] == "url-test") &&
-						current["url"] == "https://www.gstatic.com/generate_204"
+						current["url"] == "https://ipv6.google.com/generate_204"
 					if !managed { break }
 					merged[i] = raw
 					break
