@@ -52,7 +52,7 @@ func applySmartDNSSharedFallback(document string, plan SmartDNSRoutingPlan) (str
 		// selects the lowest-latency healthy egress. fallback preserves ordered
 		// failover, while select exposes a persistent operator-controlled choice.
 		if plan.Strategy == SmartDNSStrategyURLTest || plan.Strategy == SmartDNSStrategyFallback {
-			group["url"] = "https://www.gstatic.com/generate_204"
+			group["url"] = "https://ipv6.google.com/generate_204"
 			group["interval"] = 30
 			group["timeout"] = 5000
 			group["lazy"] = false
