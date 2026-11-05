@@ -2310,7 +2310,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				"type": "command.ack", "id": cmd.ID,
 				"command_status": commandStatus, "message": message,
 			}
-			if cmd.Type == "read_smartdns_config" && commandErr == nil {
+			if cmd.Type == "read_smartdns_config" && commandStatus == "success" {
 				ackPayload["config"] = commandConfig
 			}
 			if err := writeAgentWSJSON(conn, ackPayload); err != nil {
