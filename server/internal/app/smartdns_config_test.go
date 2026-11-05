@@ -14,6 +14,9 @@ func TestBuildSmartDNSPerClientConfigUsesExactLoopbackListenerMappings(t *testin
 	if err != nil {
 		t.Fatalf("build SmartDNS config: %v", err)
 	}
+	if len(got) > smartDNSAgentConfigMaxBytes {
+		t.Fatalf("generated config size %d exceeds Agent limit %d", len(got), smartDNSAgentConfigMaxBytes)
+	}
 	for _, want := range []string{
 		"bind 127.0.0.1:6053",
 		"bind-tcp 127.0.0.1:6053",
@@ -107,5 +110,22 @@ func TestBuildSmartDNSPerClientConfigSupportsIPv6ClientCIDR(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated IPv6 config missing %q:\\n%s", want, got)
 		}
+	}
+}
+
+func TestBuildSmartDNSPerClientConfigRejectsAgentPayloadOverflow(t *testing.T) {
+	mappings := make([]SmartDNSClientRuntimeMapping, 0, 64)
+	for i := 0; i < 64; i++ {
+		port := 16000 + i
+		mappings = append(mappings, SmartDNSClientRuntimeMapping{
+			ClientCIDR: fmt.Sprintf("10.%d.%d.0/24", i/256, i%256),
+			ProxyName: fmt.Sprintf("proxy-%d", i),
+			ListenerName: fmt.Sprintf("s5m-smartdns-%d", port),
+			ListenerAddress: "127.0.0.1",
+			ListenerPort: port,
+		})
+	}
+	if _, err := buildSmartDNSPerClientConfig(mappings); err == nil || !strings.Contains(err.Error(), "超过 Agent 允许的") {
+		t.Fatalf("expected clear Agent payload size error, got %v", err)
 	}
 }
