@@ -1719,6 +1719,12 @@ func TestMergeManagedProxySectionsPreservesCustomGroupsAndAddsSmartDNSFallback(t
     type: select
     proxies:
       - DIRECT
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies:
+      - old-node
+    url: https://www.gstatic.com/generate_204
+    interval: 60
 rules:
   - DOMAIN,custom.example.com,DIRECT
 `
@@ -1743,10 +1749,16 @@ rules:
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
 	groups := doc["proxy-groups"].([]any)
-	if len(groups) != 2 { t.Fatalf("expected custom + managed groups, got %#v", groups) }
+	if len(groups) != 2 { t.Fatalf("expected custom + migrated managed groups, got %#v", groups) }
 	names := map[string]bool{}
 	for _, raw := range groups { names[raw.(map[string]any)["name"].(string)] = true }
 	if !names["MANUAL-SELECT"] || !names[SmartDNSGroupName] { t.Fatalf("custom or SmartDNS group lost: %#v", names) }
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		if group["name"] == SmartDNSGroupName && group["url"] != "https://ipv6.google.com/generate_204" {
+			t.Fatalf("legacy SmartDNS group was not upgraded to IPv6-only health check: %#v", group)
+		}
+	}
 }
 
 func TestMergeManagedProxySectionsRejectsReservedSmartDNSGroupCollision(t *testing.T) {
