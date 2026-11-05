@@ -530,3 +530,47 @@ func TestConfigTransactionRollsBackWhenFallbackDNSProbeFails(t *testing.T) {
 	if reloads != 2 { t.Fatalf("expected candidate and rollback reload, got %d", reloads) }
 }
 
+
+
+func TestEnsureSmartDNSServiceStartedRecoversAlreadyEnabledService(t *testing.T) {
+	oldStart, oldStop, oldPath := smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	startCalls, stopCalls := 0, 0
+	smartDNSServiceStart = func() error { startCalls++; return nil }
+	smartDNSServiceStop = func() error { stopCalls++; return nil }
+	t.Cleanup(func() {
+		smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath = oldStart, oldStop, oldPath
+	})
+
+	if err := ensureSmartDNSServiceStarted(true); err != nil {
+		t.Fatalf("ensure already-enabled service: %v", err)
+	}
+	if startCalls != 1 || stopCalls != 0 {
+		t.Fatalf("expected s6 start to be requested once without stop; starts=%d stops=%d", startCalls, stopCalls)
+	}
+	if _, err := os.Lstat(smartDNSDisabledPath); !os.IsNotExist(err) {
+		t.Fatalf("already-enabled state must not create disabled marker, lstat err=%v", err)
+	}
+}
+
+func TestEnsureSmartDNSServiceStartedRollsBackFailedFirstEnable(t *testing.T) {
+	oldStart, oldStop, oldPath := smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	startErr := errors.New("simulated s6 start failure")
+	stopCalls := 0
+	smartDNSServiceStart = func() error { return startErr }
+	smartDNSServiceStop = func() error { stopCalls++; return nil }
+	t.Cleanup(func() {
+		smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath = oldStart, oldStop, oldPath
+	})
+
+	if err := ensureSmartDNSServiceStarted(false); !errors.Is(err, startErr) {
+		t.Fatalf("expected original start error, got %v", err)
+	}
+	if stopCalls != 1 {
+		t.Fatalf("failed first enable must request service stop, got %d calls", stopCalls)
+	}
+	if !os.IsNotExist(func() error { _, err := os.Lstat(smartDNSDisabledPath); return err }()) {
+		t.Fatal("failed first enable must restore persistent disabled marker")
+	}
+}
