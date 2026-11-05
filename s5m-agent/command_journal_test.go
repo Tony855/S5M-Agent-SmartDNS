@@ -141,3 +141,48 @@ func TestExecuteAgentCommandWithJournalRejectsInvalidCommand(t *testing.T) {
 		t.Fatalf("invalid command must not execute: status=%q executions=%d err=%v", status, executions, err)
 	}
 }
+
+
+func TestReadAgentCommandJournalRejectsCorruptAndInvalidEntries(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "malformed JSON", data: `{"id":`},
+		{name: "invalid hash", data: `{"id":"cmd","payload_hash":"not-a-hash","state":"running"}`},
+		{name: "unknown state", data: `{"id":"cmd","payload_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"pending"}`},
+		{name: "completed without status", data: `{"id":"cmd","payload_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"completed"}`},
+		{name: "oversized message", data: `{"id":"cmd","payload_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"completed","status":"success","message":"` + strings.Repeat("x", 2049) + `"}`},
+		{name: "oversized config", data: `{"id":"cmd","payload_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"completed","status":"success","config":"` + strings.Repeat("x", (8<<10)+1) + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MIHOMO_HOME", t.TempDir())
+			if err := os.WriteFile(agentCommandJournalPath(), []byte(tt.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readAgentCommandJournal(); err == nil {
+				t.Fatalf("invalid journal entry %q was accepted", tt.name)
+			}
+		})
+	}
+}
+
+func TestReadAgentCommandJournalAcceptsValidRunningEntry(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	entry := agentCommandJournalEntry{
+		ID: "cmd-valid",
+		PayloadHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		State: "running",
+	}
+	if err := writeAgentCommandJournal(entry); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readAgentCommandJournal()
+	if err != nil {
+		t.Fatalf("valid running journal rejected: %v", err)
+	}
+	if got.ID != entry.ID || got.PayloadHash != entry.PayloadHash || got.State != entry.State {
+		t.Fatalf("journal mismatch: got %+v want %+v", got, entry)
+	}
+}
