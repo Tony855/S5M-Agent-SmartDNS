@@ -20,7 +20,17 @@ dns:
     - 127.0.0.1:6053
   nameserver-policy:
     "geosite:cn": 127.0.0.1:6054
-proxies: []
+# Synthetic proxy endpoints exercise route-exclusion behavior without
+# requiring real credentials or making outbound proxy connections.
+proxies:
+  - name: route-exclusion-v4
+    type: socks5
+    server: 203.0.113.10
+    port: 1080
+  - name: route-exclusion-v6
+    type: socks5
+    server: "2001:db8::20"
+    port: 1080
 proxy-groups: []
 rules:
   - DOMAIN-SUFFIX,v2net.cc,DIRECT
