@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// Keep generated per-client configuration within the Agent's validated
+// SmartDNS file and command-journal payload limit.
+const smartDNSAgentConfigMaxBytes = 8 << 10
+
 // buildSmartDNSPerClientConfig renders the SmartDNS half of the per-client
 // routing plan. It consumes the exact listener assignments produced for
 // Mihomo; it must never allocate ports or infer proxy mappings independently.
@@ -67,5 +71,10 @@ func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (stri
 	b.WriteString("# Preserve A and AAAA answers; allow IPv6-only domains on dual-stack resolvers.\n")
 	b.WriteString("dualstack-ip-selection no\ndualstack-ip-selection-threshold 10\ndualstack-ip-allow-force-AAAA yes\n")
 	b.WriteString("cache-size 16384\nprefetch-domain yes\nserve-expired yes\nlog-level info\nlog-console yes\nlog-syslog no\n")
-	return b.String(), nil
+
+	config := b.String()
+	if len(config) > smartDNSAgentConfigMaxBytes {
+		return "", fmt.Errorf("生成的 SmartDNS 按客户端配置为 %d 字节，超过 Agent 允许的 %d 字节；请减少客户端映射数量", len(config), smartDNSAgentConfigMaxBytes)
+	}
+	return config, nil
 }
