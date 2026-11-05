@@ -570,7 +570,8 @@ func TestEnsureSmartDNSServiceStartedRollsBackFailedFirstEnable(t *testing.T) {
 	if stopCalls != 1 {
 		t.Fatalf("failed first enable must request service stop, got %d calls", stopCalls)
 	}
-	if !os.IsNotExist(func() error { _, err := os.Lstat(smartDNSDisabledPath); return err }()) {
-		t.Fatal("failed first enable must restore persistent disabled marker")
+	_, statErr := os.Lstat(smartDNSDisabledPath)
+	if !os.IsNotExist(statErr) {
+		t.Fatalf("failed first enable must restore persistent disabled marker, lstat err=%v", statErr)
 	}
 }
