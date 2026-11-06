@@ -138,7 +138,7 @@
     if (/^https?:\/\/$/i.test(url)) return showMsg('主控服务器地址配置无效，请联系管理员。', false);
     const btn = document.getElementById('btn'); bindingInProgress = true; btn.innerText = '正在绑定...'; updateBindButton(); setStatus('', '正在绑定设备…');
     try {
-      const res = await fetch('/api/bind', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({central_url: url, secret: secret}) });
+      const res = await fetchWithTimeout('/api/bind', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({central_url: url, secret: secret}) }, 20000);
       const text = await res.text(); let data = {};
       try { data = JSON.parse(text); } catch { data = { message: text }; }
       if (!res.ok) throw new Error(data.error || data.message || '绑定失败');
@@ -150,10 +150,13 @@
       btn.innerText = '重新绑定';
       await refreshBindingStatus();
     } catch (e) {
-      // Do not expose backend validation details or security configuration to end users.
-      showMsg('绑定失败，请检查服务器地址和注册密钥后重试；如持续失败，请联系管理员。', false);
+      // The local Agent returns an allowlisted, non-secret diagnostic from the controller.
+      const reason = e && e.message ? e.message : '';
+      const safeReason = /专属注册密钥|HTTP 403|HTTP 400|HTTP 404|HTTP 500|HTTPS|TLS|连接主控端|主控端注册/.test(reason)
+        ? reason : '绑定请求超时或网络中断，请检查节点到主控端的 DNS、HTTPS/TLS 和网络连通性。';
+      showMsg('绑定失败：' + safeReason, false);
       btn.innerText = '重试绑定';
-      setStatus('error', '绑定未成功，请检查填写的<密钥>或服务器地址是否正确');
+      setStatus('error', safeReason);
     } finally {
       bindingInProgress = false;
       updateBindButton();

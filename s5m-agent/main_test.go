@@ -2241,3 +2241,18 @@ func TestClearRevokedAgentBindingRemovesOnlyLocalCredential(t *testing.T) {
 		t.Fatal("connection error state must reset after revocation")
 	}
 }
+
+func TestSafeAgentRegistrationFailureDiagnostics(t *testing.T) {
+	tests := []struct { name string; status int; body string; want string }{
+		{name:"dedicated token mismatch", status:http.StatusForbidden, body:"机器码或专属 Token 不匹配", want:"没有匹配的专属注册密钥"},
+		{name:"global token not initialized", status:http.StatusInternalServerError, body:"主控台未初始化全局 Token", want:"尚未初始化 Agent 全局授权配置"},
+		{name:"invalid machine code", status:http.StatusBadRequest, body:"机器码格式错误", want:"机器码格式无效"},
+		{name:"unknown upstream body is not leaked", status:http.StatusForbidden, body:"secret=do-not-leak", want:"HTTP 403"},
+		{name:"not found", status:http.StatusNotFound, body:"", want:"HTTP 404"},
+	}
+	for _, tt := range tests { t.Run(tt.name, func(t *testing.T) {
+		got := safeAgentRegistrationFailure(tt.status, []byte(tt.body))
+		if !strings.Contains(got, tt.want) { t.Fatalf("diagnostic %q does not contain %q", got, tt.want) }
+		if strings.Contains(got, "do-not-leak") { t.Fatalf("upstream body leaked: %q", got) }
+	}) }
+}
