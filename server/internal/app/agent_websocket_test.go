@@ -890,7 +890,11 @@ func TestAgentWebSocketConfigSyncAndUnchangedHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build expected managed Agent config: %v", err)
 	}
-	expectedYAML, err := mergeManagedProxySections(configYAML, generatedYAML)
+	normalizedSavedYAML, err := normalizeAgentProxyConfig(configYAML)
+	if err != nil {
+		t.Fatalf("normalize expected saved Agent config: %v", err)
+	}
+	expectedYAML, err := mergeManagedProxySections(normalizedSavedYAML, generatedYAML)
 	if err != nil {
 		t.Fatalf("merge expected managed Agent config: %v", err)
 	}
@@ -1175,7 +1179,11 @@ func TestAgentWebSocketSupportsMultipleRuntimeOperationsOnOneSession(t *testing.
 	if err != nil {
 		t.Fatalf("build expected managed Agent config: %v", err)
 	}
-	expectedYAML, err := mergeManagedProxySections(configYAML, generatedYAML)
+	normalizedSavedYAML, err := normalizeAgentProxyConfig(configYAML)
+	if err != nil {
+		t.Fatalf("normalize expected saved Agent config: %v", err)
+	}
+	expectedYAML, err := mergeManagedProxySections(normalizedSavedYAML, generatedYAML)
 	if err != nil {
 		t.Fatalf("merge expected managed Agent config: %v", err)
 	}
