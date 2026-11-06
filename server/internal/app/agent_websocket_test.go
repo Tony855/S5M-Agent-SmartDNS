@@ -1913,6 +1913,48 @@ func TestQueueAgentSmartDNSRejectsUnsupportedAndRequiresSavedConfig(t *testing.T
 	}
 }
 
+func TestQueueAgentSmartDNSEnableIncludesManagedProxyRoute(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	now := time.Now().Unix()
+	status := map[string]any{
+		"received_at": now, "smartdns_available": true,
+		"smartdns_control_supported": true, "smartdns_domestic_listener": true,
+	}
+	raw, _ := json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{
+		"agent_lastseen_" + code: strconv.FormatInt(now, 10),
+		"agent_status_" + code: string(raw),
+		"smartdns_config_" + code: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"smartdns_enabled_" + code: "false",
+	}); err != nil { t.Fatal(err) }
+	proxy := Proxy{Name: "node-proxy", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: code, Enabled: true}
+	if err := app.store.CreateProxy(&proxy); err != nil { t.Fatalf("create proxy: %v", err) }
+	if err := app.store.SaveNodeConfig(code, "mode: rule\ndns:\n  enable: true\n  nameserver:\n    - https://dns.cloudflare.com/dns-query\nrules:\n  - MATCH,REJECT\n"); err != nil {
+		t.Fatalf("save node config: %v", err)
+	}
+	if err := app.queueAgentSmartDNSEnabled(code, true); err != nil {
+		t.Fatalf("queue enable command: %v", err)
+	}
+	pendingRaw, err := app.store.GetSetting("agent_command_" + code)
+	if err != nil { t.Fatal(err) }
+	var command map[string]any
+	if err := json.Unmarshal([]byte(pendingRaw), &command); err != nil { t.Fatal(err) }
+	mihomoConfig, ok := command["mihomo_config"].(string)
+	if command["type"] != "set_smartdns_enabled" || command["enabled"] != true || !ok {
+		t.Fatalf("unexpected enable command: %#v", command)
+	}
+	if !strings.Contains(mihomoConfig, "name: "+SmartDNSGroupName) ||
+		!strings.Contains(mihomoConfig, "PROCESS-NAME,smartdns,"+SmartDNSGroupName) ||
+		!strings.Contains(mihomoConfig, "127.0.0.1:6053") ||
+		!strings.Contains(mihomoConfig, "127.0.0.1:6054") {
+		t.Fatalf("enable command must include proxy route and both SmartDNS listeners:\n%s", mihomoConfig)
+	}
+	persisted, err := app.store.GetSetting("smartdns_enabled_" + code)
+	if err != nil || persisted != "false" {
+		t.Fatalf("queueing must not commit desired state before ACK: value=%q err=%v", persisted, err)
+	}
+}
+
 func TestQueueAgentSmartDNSDisableIncludesFallbackMihomoConfig(t *testing.T) {
 	app, code, _ := websocketTestApp(t)
 	now := time.Now().Unix()
