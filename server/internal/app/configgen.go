@@ -863,6 +863,14 @@ func routeAgentDNSViaSmartDNSWithDomestic(yml string) (string, error) {
 }
 
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
+	return a.buildConfigForMachineWithSmartDNSOverride(machineCode, nil)
+}
+
+// buildConfigForMachineWithSmartDNSOverride builds the same managed config while
+// evaluating the requested SmartDNS state without mutating persisted settings.
+// This is used when queueing an enable/disable command, before its ACK commits
+// the desired state to the store.
+func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smartDNSEnabled *bool) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
 		return "", err
@@ -878,6 +886,9 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	settings, err := a.store.GetSettings()
 	if err != nil {
 		return "", fmt.Errorf("读取 Mihomo 设置失败: %w", err)
+	}
+	if smartDNSEnabled != nil && strings.TrimSpace(machineCode) != "" {
+		settings["smartdns_enabled_"+machineCode] = fmt.Sprint(*smartDNSEnabled)
 	}
 	mode := "rule"
 	if strings.TrimSpace(machineCode) != "" {
