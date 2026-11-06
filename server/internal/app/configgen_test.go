@@ -2181,6 +2181,29 @@ rules:
 }
 
 
+func TestMergeManagedProxySectionsRemovesStaleSmartDNSRouteWhenDisabled(t *testing.T) {
+	custom := `mode: rule
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [old-node]
+    url: https://www.gstatic.com/generate_204
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	generated := `mode: rule
+proxies: []
+rules:
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("merge disabled SmartDNS config: %v", err) }
+	if strings.Contains(got, SmartDNSGroupName) || strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("disabled SmartDNS config retained stale proxy group or process rule:\n%s", got)
+	}
+}
+
 func TestMergeManagedProxySectionsInjectsGeneratedNodesIntoCustomPROXYGroup(t *testing.T) {
 	custom := `mode: rule
 proxies:
