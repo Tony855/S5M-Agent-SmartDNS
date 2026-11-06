@@ -1717,7 +1717,9 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("合并代理组失败: %w", err)
 	}
-	if len(mergedGroups) > 0 {
+	// Assign even an empty slice: an explicitly disabled SmartDNS route must
+	// remove stale reserved groups from the saved node YAML, not preserve them.
+	if _, hasCustomGroups := customDoc["proxy-groups"]; hasCustomGroups || len(mergedGroups) > 0 {
 		customDoc["proxy-groups"] = mergedGroups
 	}
 	mergedRules, err := mergeManagedRuleValues(customDoc["rules"], generatedDoc["rules"])
