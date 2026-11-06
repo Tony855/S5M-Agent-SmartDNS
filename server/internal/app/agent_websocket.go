@@ -701,16 +701,21 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 		return fmt.Errorf("该节点尚无已保存的 SmartDNS 配置，请先读取并保存 SmartDNS 配置")
 	}
 	if len(config) > 8<<10 { return fmt.Errorf("SmartDNS 配置超过 Agent 允许的 8 KiB 限制") }
+	// Generate managed routing for the requested target state rather than the
+	// currently persisted state: the desired flag is committed only after Agent ACK.
+	generated, err := a.buildConfigForMachineWithSmartDNSOverride(machineCode, &enabled)
+	if err != nil { return fmt.Errorf("生成目标 SmartDNS 状态的节点配置失败: %w", err) }
 	nodeConfig, err := a.store.GetNodeConfig(machineCode)
 	if err != nil { return fmt.Errorf("读取节点配置失败: %w", err) }
-	yml := ""
-	if nodeConfig != nil { yml = nodeConfig.YAML }
-	if strings.TrimSpace(yml) == "" {
-		yml, err = a.BuildConfigForMachine(machineCode)
-		if err != nil { return fmt.Errorf("生成节点 Mihomo 配置失败: %w", err) }
+	yml := generated
+	if nodeConfig != nil && strings.TrimSpace(nodeConfig.YAML) != "" {
+		normalizedSaved, normalizeErr := normalizeAgentProxyConfig(nodeConfig.YAML)
+		if normalizeErr != nil { return fmt.Errorf("校验节点 Mihomo 配置失败: %w", normalizeErr) }
+		yml, err = mergeManagedProxySections(normalizedSaved, generated)
+		if err != nil { return fmt.Errorf("合并节点托管代理路由失败: %w", err) }
 	}
 	normalized, err := normalizeAgentProxyConfig(yml)
-	if err != nil { return fmt.Errorf("校验节点 Mihomo 配置失败: %w", err) }
+	if err != nil { return fmt.Errorf("规范化节点 Mihomo 配置失败: %w", err) }
 	yml, err = applyAgentRuntimeDNS(normalized, enabled, enabled)
 	if err != nil { return fmt.Errorf("生成 SmartDNS 切换 DNS 配置失败: %w", err) }
 	commandID, err := newAgentCommandID()
