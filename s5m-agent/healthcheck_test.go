@@ -12,11 +12,20 @@ func TestHealthcheckSupportsSmartDNSDisabledMode(t *testing.T) {
 	runHealthcheckFixture(t, true, false)
 }
 
+func TestHealthcheckRejectsRunningSmartDNSWhenDisabled(t *testing.T) {
+	runHealthcheckFixtureExpected(t, true, true, false)
+}
+
 func TestHealthcheckRequiresSmartDNSWhenEnabled(t *testing.T) {
 	runHealthcheckFixture(t, false, true)
 }
 
 func runHealthcheckFixture(t *testing.T, disabled, smartDNSRunning bool) {
+	t.Helper()
+	runHealthcheckFixtureExpected(t, disabled, smartDNSRunning, true)
+}
+
+func runHealthcheckFixtureExpected(t *testing.T, disabled, smartDNSRunning, wantSuccess bool) {
 	t.Helper()
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
@@ -59,7 +68,11 @@ func runHealthcheckFixture(t *testing.T, disabled, smartDNSRunning bool) {
 		"PATH="+binDir+":"+os.Getenv("PATH"),
 		"MOCK_SMARTDNS="+map[bool]string{true:"1", false:"0"}[smartDNSRunning],
 	)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	output, err := cmd.CombinedOutput()
+	if wantSuccess && err != nil {
 		t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v failed: %v\n%s", disabled, smartDNSRunning, err, output)
+	}
+	if !wantSuccess && err == nil {
+		t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v unexpectedly succeeded:\n%s", disabled, smartDNSRunning, output)
 	}
 }
