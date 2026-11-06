@@ -58,7 +58,7 @@ RUN set -eux; \
 
 FROM alpine:${ALPINE_VERSION} AS runtime
 LABEL org.opencontainers.image.source="https://github.com/Tony855/S5M-Agent-SmartDNS"
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata bind-tools \
     && addgroup -S s5m && adduser -S -D -H -G s5m s5m \
     && mkdir -p /data /app
 COPY --from=s6-overlay-fetch /out/ /
@@ -66,7 +66,7 @@ WORKDIR /app
 COPY --from=agent-builder /out/s5m-agent /app/s5m-agent
 COPY --from=mihomo-fetch /usr/local/bin/mihomo /usr/local/bin/mihomo
 COPY s5m-agent/index.html /app/index.html
-COPY s5m-agent/healthcheck.sh /healthcheck.sh
+COPY s5m-agent/smartdns/healthcheck.sh /healthcheck.sh
 COPY s5m-agent/default-config.yaml /app/default-config.yaml
 COPY s5m-agent/cont-init.d/ /etc/cont-init.d/
 COPY s5m-agent/services/ /etc/s6-overlay/s6-rc.d/
