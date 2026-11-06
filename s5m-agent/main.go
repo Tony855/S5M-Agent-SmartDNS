@@ -73,6 +73,30 @@ func mihomoHome() string {
 // registration secret is in the POST body, so following a 307/308 redirect
 // could disclose it to a different origin even when Authorization headers are
 // stripped by net/http.
+// safeAgentRegistrationFailure maps the controller's bounded response to actionable,
+// non-secret diagnostics. Never echo arbitrary upstream bodies into the local UI.
+func safeAgentRegistrationFailure(status int, body []byte) string {
+	message := strings.TrimSpace(string(body))
+	switch status {
+	case http.StatusForbidden:
+		if strings.Contains(message, "机器码或专属 Token 不匹配") {
+			return "主控端拒绝绑定：该机器码没有匹配的专属注册密钥。请在主控端核对机器码并重新生成/复制该设备的专属密钥；不要使用全局 Token。"
+		}
+		return "主控端拒绝注册（HTTP 403）：请核对该机器码对应的专属注册密钥及设备授权状态。"
+	case http.StatusBadRequest:
+		if strings.Contains(message, "机器码格式错误") { return "主控端认为机器码格式无效，请升级 Agent 并核对机器码。" }
+		if strings.Contains(message, "专属 Token 长度无效") { return "主控端认为专属注册密钥长度无效，请重新复制密钥。" }
+		return "主控端拒绝注册请求（HTTP 400）：请检查机器码和注册密钥格式。"
+	case http.StatusInternalServerError:
+		if strings.Contains(message, "未初始化全局 Token") { return "主控端尚未初始化 Agent 全局授权配置，请管理员先完成初始化。" }
+		return "主控端注册服务内部错误（HTTP 500），请管理员检查主控端日志。"
+	case http.StatusNotFound:
+		return "主控端没有找到 Agent 注册接口（HTTP 404），请检查服务器地址和部署版本。"
+	default:
+		return fmt.Sprintf("主控端注册失败（HTTP %d），请管理员检查主控端日志。", status)
+	}
+}
+
 func newAgentRegistrationHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 10 * time.Second,
@@ -2522,8 +2546,10 @@ func main() {
 			}
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
-				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-				http.Error(w, "主控端拒绝注册，请检查授权密钥", http.StatusUnauthorized)
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				status := http.StatusBadGateway
+				if resp.StatusCode >= 400 && resp.StatusCode < 500 { status = http.StatusUnauthorized }
+				http.Error(w, safeAgentRegistrationFailure(resp.StatusCode, body), status)
 				return
 			}
 			var result struct {
