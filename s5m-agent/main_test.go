@@ -2256,3 +2256,20 @@ func TestSafeAgentRegistrationFailureDiagnostics(t *testing.T) {
 		if strings.Contains(got, "do-not-leak") { t.Fatalf("upstream body leaked: %q", got) }
 	}) }
 }
+
+func TestRegistrationPageAllowsAllSafeControllerDiagnostics(t *testing.T) {
+	page, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read registration page: %v", err)
+	}
+	// safeAgentRegistrationFailure returns controlled, non-secret messages.
+	// Keep all controller-originated diagnostics visible instead of rewriting
+	// machine-code, initialization, or missing-endpoint errors as network timeouts.
+	for _, want := range []string{
+		"专属注册密钥|机器码格式|主控端|HTTP 403|HTTP 400|HTTP 404|HTTP 500|HTTPS|TLS|连接主控端",
+	} {
+		if !strings.Contains(string(page), want) {
+			t.Fatalf("registration page diagnostic allowlist is missing %q", want)
+		}
+	}
+}
