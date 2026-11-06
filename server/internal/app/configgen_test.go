@@ -2046,6 +2046,37 @@ func TestBuildConfigForMachineExplicitlyEnablesScopedSmartDNSURLTest(t *testing.
 	if !manual { t.Fatalf("ordinary manual PROXY select group was changed or removed: %#v", groups) }
 }
 
+// A SmartDNS enable command must build routing for its requested target state,
+// even though the persisted desired-state flag is committed only after ACK.
+func TestBuildConfigForMachineSmartDNSStateOverride(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-state-override.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "rule"); err != nil { t.Fatal(err) }
+	proxy := Proxy{Name: "node-proxy", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: "node-a", Enabled: true}
+	if err := store.CreateProxy(&proxy); err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a": "false"}); err != nil { t.Fatal(err) }
+	app := &App{store: store}
+
+	enabled := true
+	got, err := app.buildConfigForMachineWithSmartDNSOverride("node-a", &enabled)
+	if err != nil { t.Fatalf("build enabled target config: %v", err) }
+	if !strings.Contains(got, "PROCESS-NAME,smartdns,"+SmartDNSGroupName) || !strings.Contains(got, "name: "+SmartDNSGroupName) {
+		t.Fatalf("enable target config must include the managed SmartDNS proxy group and process route:\n%s", got)
+	}
+	persisted, err := store.GetSetting("smartdns_enabled_node-a")
+	if err != nil || persisted != "false" {
+		t.Fatalf("building target config must not mutate persisted desired state: value=%q err=%v", persisted, err)
+	}
+
+	disabled := false
+	got, err = app.buildConfigForMachineWithSmartDNSOverride("node-a", &disabled)
+	if err != nil { t.Fatalf("build disabled target config: %v", err) }
+	if strings.Contains(got, "PROCESS-NAME,smartdns,"+SmartDNSGroupName) {
+		t.Fatalf("disable target config must not route SmartDNS process through proxy group:\n%s", got)
+	}
+}
+
 // A missing setting is the upgrade path for existing nodes: do not inject
 // SmartDNS process rules or a dedicated proxy group unless an administrator opts in.
 func TestBuildConfigForMachinePreservesLegacySmartDNSRoutingWhenUnset(t *testing.T) {
