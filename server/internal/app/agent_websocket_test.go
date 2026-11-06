@@ -886,7 +886,15 @@ func TestAgentWebSocketConfigSyncAndUnchangedHash(t *testing.T) {
 	if err := conn.ReadJSON(&first); err != nil {
 		t.Fatalf("read initial config response: %v", err)
 	}
-	expectedYAML, err := normalizeAgentProxyConfig(configYAML)
+	generatedYAML, err := app.BuildConfigForMachine(code)
+	if err != nil {
+		t.Fatalf("build expected managed Agent config: %v", err)
+	}
+	expectedYAML, err := mergeManagedProxySections(configYAML, generatedYAML)
+	if err != nil {
+		t.Fatalf("merge expected managed Agent config: %v", err)
+	}
+	expectedYAML, err = normalizeAgentProxyConfig(expectedYAML)
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
 	}
@@ -1163,7 +1171,15 @@ func TestAgentWebSocketSupportsMultipleRuntimeOperationsOnOneSession(t *testing.
 	if err := conn.ReadJSON(&configResponse); err != nil {
 		t.Fatalf("read config response: %v", err)
 	}
-	expectedYAML, err := normalizeAgentProxyConfig(configYAML)
+	generatedYAML, err := app.BuildConfigForMachine(code)
+	if err != nil {
+		t.Fatalf("build expected managed Agent config: %v", err)
+	}
+	expectedYAML, err := mergeManagedProxySections(configYAML, generatedYAML)
+	if err != nil {
+		t.Fatalf("merge expected managed Agent config: %v", err)
+	}
+	expectedYAML, err = normalizeAgentProxyConfig(expectedYAML)
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
 	}
