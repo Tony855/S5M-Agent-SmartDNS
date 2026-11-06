@@ -72,10 +72,10 @@ func runHealthcheckFixtureExpected(t *testing.T, disabled, smartDNSRunning, want
 			)
 			output, err := cmd.CombinedOutput()
 			if wantSuccess && err != nil {
-				t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v failed: %v\\n%s", disabled, smartDNSRunning, err, output)
+				t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v failed: %v\n%s", disabled, smartDNSRunning, err, output)
 			}
 			if !wantSuccess && err == nil {
-				t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v unexpectedly succeeded:\\n%s", disabled, smartDNSRunning, output)
+				t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v unexpectedly succeeded:\n%s", disabled, smartDNSRunning, output)
 			}
 		})
 	}
