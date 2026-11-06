@@ -324,7 +324,7 @@ def ipv6_socks_atyp_main():
     upstream.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     upstream.bind(("127.0.0.1", 0))
     upstream.listen(1)
-    upstream.settimeout(8)
+    upstream.settimeout(20)
     upstream_port = upstream.getsockname()[1]
     mixed = free_port()
     observed = {}
@@ -370,7 +370,6 @@ def ipv6_socks_atyp_main():
             observed["error"] = str(exc)
 
     server_thread = threading.Thread(target=fake_socks_server, daemon=True)
-    server_thread.start()
     name = NAME + "-ipv6-atyp"
     with tempfile.TemporaryDirectory(prefix="mihomo-ipv6-atyp-") as temp:
         config = f"""\
@@ -405,8 +404,12 @@ rules:
             else:
                 raise RuntimeError("Mihomo mixed-port did not become ready")
 
-            with socket.create_connection(("127.0.0.1", mixed), timeout=5) as client:
-                client.settimeout(5)
+            # Start the fake upstream only after the emulated ARM64 daemon is
+            # ready. QEMU startup can exceed a short accept timeout, which
+            # otherwise expires before the first SOCKS CONNECT is sent.
+            server_thread.start()
+            with socket.create_connection(("127.0.0.1", mixed), timeout=10) as client:
+                client.settimeout(10)
                 client.sendall(b"\x05\x01\x00")
                 if read_exact(client, 2) != b"\x05\x00":
                     raise RuntimeError("Mihomo SOCKS listener rejected no-auth method")
@@ -424,7 +427,7 @@ rules:
                     read_exact(client, read_exact(client, 1)[0])
                 read_exact(client, 2)
 
-            server_thread.join(timeout=6)
+            server_thread.join(timeout=10)
             if observed.get("error"):
                 raise RuntimeError(f"fake SOCKS5 upstream failed: {observed['error']}")
             expected = {"atyp": 4, "address": "2606:4700:4700::1111", "port": 853}
