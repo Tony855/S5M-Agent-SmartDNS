@@ -141,7 +141,8 @@ jobs:
           grep -q 'CREATE TABLE IF NOT EXISTS machine_proxy_settings' server/internal/app/store.go
           grep -q 'DOMAIN-SUFFIX,v2net.cc,DIRECT' server/internal/app/configgen.go
           grep -q 'PROCESS-NAME,smartdns,%s' server/internal/app/configgen.go
-          grep -q 'MATCH,REJECT' s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -q 'MATCH,DIRECT' s5m-agent/smartdns/default-config-smartdns.yaml
+          ! grep -q 'MATCH,REJECT' s5m-agent/smartdns/default-config-smartdns.yaml
           ! grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
           grep -q 'MATCH,REJECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
