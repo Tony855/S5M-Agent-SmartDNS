@@ -889,9 +889,12 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// SmartDNS proxy routing is opt-in. A missing or explicitly empty setting
-	// preserves the node's historical DNS/process routing exactly; this is
-	// essential for upgrades because existing nodes may not have SmartDNS.
+	// An explicitly configured routing value remains authoritative. For upgraded
+	// installations without that global setting, enabling SmartDNS on a node
+	// automatically opts that node into the shared proxy route. This prevents a
+	// running SmartDNS daemon from sending DoT through the terminal MATCH,REJECT
+	// rule merely because the operator has not separately configured a strategy.
+	// An explicitly empty global value still opts out for backward compatibility.
 	// Controller config (machineCode == "") is never changed by this Agent-only policy.
 	rawRouting, routingSettingExists := settings["smartdns_routing_config"]
 	applySharedFallback := false
@@ -900,6 +903,10 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
+		applySharedFallback = true
+	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
+		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") {
+		routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
 		applySharedFallback = true
 	}
 	if applySharedFallback {
