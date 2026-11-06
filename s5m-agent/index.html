@@ -152,7 +152,7 @@
     } catch (e) {
       // The local Agent returns an allowlisted, non-secret diagnostic from the controller.
       const reason = e && e.message ? e.message : '';
-      const safeReason = /专属注册密钥|HTTP 403|HTTP 400|HTTP 404|HTTP 500|HTTPS|TLS|连接主控端|主控端注册/.test(reason)
+      const safeReason = /专属注册密钥|机器码格式|主控端|HTTP 403|HTTP 400|HTTP 404|HTTP 500|HTTPS|TLS|连接主控端/.test(reason)
         ? reason : '绑定请求超时或网络中断，请检查节点到主控端的 DNS、HTTPS/TLS 和网络连通性。';
       showMsg('绑定失败：' + safeReason, false);
       btn.innerText = '重试绑定';
