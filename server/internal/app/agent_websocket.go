@@ -1171,6 +1171,22 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		}
 	}
 
+	// Saved per-node YAML is authoritative for operator settings, but database-managed
+	// proxy groups and routing rules must still be refreshed from the generated snapshot.
+	// Otherwise an older saved YAML can omit SMARTDNS-PROXY even after SmartDNS is enabled.
+	generated, generateErr := a.BuildConfigForMachine(machineCode)
+	if generateErr != nil {
+		return fmt.Errorf("生成节点托管代理路由失败: %w", generateErr)
+	}
+	merged, mergeErr := mergeManagedProxySections(yml, generated)
+	if mergeErr != nil {
+		return fmt.Errorf("合并节点托管代理路由失败: %w", mergeErr)
+	}
+	yml, normalizeErr = normalizeAgentProxyConfig(merged)
+	if normalizeErr != nil {
+		return fmt.Errorf("规范化节点托管代理路由失败: %w", normalizeErr)
+	}
+
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
 	// Apply it only to the outgoing payload so health loss immediately falls back
 	// to the original configured nameservers on the next config request.
