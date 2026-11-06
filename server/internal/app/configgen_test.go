@@ -722,6 +722,68 @@ func TestMergeManagedRuleValuesRequiresOneTerminalMatchAndValidCustomRules(t *te
 	}
 }
 
+func TestMergeManagedProxySectionsInjectsSmartDNSRouteIntoSavedYAML(t *testing.T) {
+	custom := `mode: rule
+secret: keep-me
+proxies:
+  - name: old
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+proxy-groups:
+  - name: CUSTOM
+    type: select
+    proxies: [DIRECT]
+rules:
+  - DOMAIN,internal.example,DIRECT
+  - MATCH,REJECT
+`
+	generated := `mode: rule
+proxies:
+  - name: node-proxy
+    type: socks5
+    server: 192.0.2.20
+    port: 1080
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [node-proxy]
+  - name: SMARTDNS-PROXY
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+    interval: 30
+    proxies: [node-proxy]
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	merged, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("mergeManagedProxySections: %v", err) }
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil { t.Fatalf("decode merged YAML: %v", err) }
+	if got["secret"] != "keep-me" { t.Fatalf("operator secret was not preserved: %#v", got["secret"]) }
+	groups, ok := got["proxy-groups"].([]any)
+	if !ok { t.Fatalf("proxy-groups missing: %#v", got["proxy-groups"]) }
+	foundSmartDNS := false
+	foundCustom := false
+	for _, raw := range groups {
+		group, ok := raw.(map[string]any); if !ok { continue }
+		switch group["name"] {
+		case "SMARTDNS-PROXY": foundSmartDNS = true
+		case "CUSTOM": foundCustom = true
+		}
+	}
+	if !foundSmartDNS || !foundCustom { t.Fatalf("managed and custom groups not both preserved: %#v", groups) }
+	rules, ok := got["rules"].([]any)
+	if !ok { t.Fatalf("rules missing: %#v", got["rules"]) }
+	foundProcessRule := false
+	for _, raw := range rules {
+		if rule, ok := raw.(string); ok && rule == "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { foundProcessRule = true }
+	}
+	if !foundProcessRule { t.Fatalf("SmartDNS process route missing: %#v", rules) }
+}
+
 func TestMergeManagedProxySectionsPreservesCustomSettings(t *testing.T) {
 	custom := `mode: global
 mixed-port: 7890
