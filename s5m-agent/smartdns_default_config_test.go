@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestSmartDNSImageDefaultConfigFailsClosed(t *testing.T) {
+func TestSmartDNSImageDefaultConfigUsesDirectFallback(t *testing.T) {
 	data, err := os.ReadFile("smartdns/default-config-smartdns.yaml")
 	if err != nil {
 		t.Fatalf("read SmartDNS image default config: %v", err)
@@ -15,11 +15,11 @@ func TestSmartDNSImageDefaultConfigFailsClosed(t *testing.T) {
 	if !strings.Contains(config, "  - DOMAIN-SUFFIX,v2net.cc,DIRECT") {
 		t.Fatal("controller domain direct rule is missing")
 	}
-	if !strings.Contains(config, "  - MATCH,REJECT") {
-		t.Fatal("unmatched traffic must be rejected by the default rule")
+	if !strings.Contains(config, "  - MATCH,DIRECT") {
+		t.Fatal("unmatched traffic must use the requested direct fallback")
 	}
-	if strings.Contains(config, "MATCH,DIRECT") {
-		t.Fatal("default config must not send unmatched traffic direct")
+	if strings.Contains(config, "MATCH,REJECT") {
+		t.Fatal("image default config must not retain a terminal REJECT rule")
 	}
 }
 
