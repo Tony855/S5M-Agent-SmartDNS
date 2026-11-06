@@ -910,7 +910,9 @@ func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smar
 	rawRouting, routingSettingExists := settings["smartdns_routing_config"]
 	applySharedFallback := false
 	var routing SmartDNSRoutingConfig
-	if routingSettingExists && strings.TrimSpace(rawRouting) != "" {
+	nodeSmartDNSExplicitlyDisabled := strings.TrimSpace(machineCode) != "" &&
+		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false")
+	if routingSettingExists && strings.TrimSpace(rawRouting) != "" && !nodeSmartDNSExplicitlyDisabled {
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
@@ -1586,10 +1588,11 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 	merged := make([]any, 0, len(custom)+len(generated))
 	seen := make(map[string]bool, len(custom)+len(generated))
 	generatedHasProxyGroup := false
+	generatedHasSmartDNSGroup := false
 	for _, raw := range generated {
-		if group, ok := raw.(map[string]any); ok && group["name"] == "PROXY" {
-			generatedHasProxyGroup = true
-			break
+		if group, ok := raw.(map[string]any); ok {
+			if group["name"] == "PROXY" { generatedHasProxyGroup = true }
+			if group["name"] == SmartDNSGroupName { generatedHasSmartDNSGroup = true }
 		}
 	}
 	for _, raw := range custom {
@@ -1603,6 +1606,11 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 		// outbound proxies, discard a stale custom copy as well, or Mihomo
 		// will still reject an empty group after the managed sections merge.
 		if name == "PROXY" && !generatedHasProxyGroup {
+			continue
+		}
+		// SMARTDNS-PROXY is reserved for the managed per-node SmartDNS route.
+		// Remove a stale copy when the target state is disabled or routing is opted out.
+		if name == SmartDNSGroupName && !generatedHasSmartDNSGroup {
 			continue
 		}
 		seen[name] = true
