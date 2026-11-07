@@ -9,6 +9,7 @@ run_dns_probe() {
 wget -q -T 3 -O /dev/null http://127.0.0.1:80/api/config || fail "Agent API is not ready"
 pidof mihomo >/dev/null 2>&1 || fail "Mihomo process is not running"
 if command -v smartdns >/dev/null 2>&1 || pidof smartdns >/dev/null 2>&1; then fail "SmartDNS must not be installed or running in this image"; fi
+if grep -Eq "127\\.0\\.0\\.1:(6053|6054)|\\[::1\\]:(6053|6054)|localhost:(6053|6054)" /data/config.yaml; then fail "runtime Mihomo config still references retired SmartDNS listeners"; fi
 dns_listener="$(awk '
   /^dns:[[:space:]]*$/ { in_dns=1; next }
   in_dns && /^[^[:space:]]/ { in_dns=0 }
