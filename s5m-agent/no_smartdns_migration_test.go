@@ -64,3 +64,28 @@ func TestMigrateNoSmartDNSConfigRejectsMalformedConfigWithoutMutation(t *testing
 	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
 	if string(got) != string(original) { t.Fatal("malformed config was modified") }
 }
+
+func TestNormalizeNoSmartDNSYAMLForControllerPush(t *testing.T) {
+	previous := agentSupportsSmartDNS
+	agentSupportsSmartDNS = "false"
+	defer func() { agentSupportsSmartDNS = previous }()
+	input := []byte(`dns:
+  enable: true
+  listen: 127.0.0.1:5353
+  nameserver: [127.0.0.1:6053, 9.9.9.9]
+  nameserver-policy:
+    "geosite:cn": [127.0.0.1:6054, 223.5.5.5]
+    "+.corp.example": 192.0.2.80
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - MATCH,DIRECT
+`)
+	got, err := normalizeNoSmartDNSYAML(input)
+	if err != nil { t.Fatal(err) }
+	for _, stale := range []string{"127.0.0.1:6053", "127.0.0.1:6054"} {
+		if strings.Contains(string(got), stale) { t.Fatalf("controller config still contains %s: %s", stale, got) }
+	}
+	for _, keep := range []string{"9.9.9.9", "223.5.5.5", "192.0.2.80", "v2net.cc,DIRECT", "MATCH,DIRECT"} {
+		if !strings.Contains(string(got), keep) { t.Fatalf("controller config lost %s: %s", keep, got) }
+	}
+}
