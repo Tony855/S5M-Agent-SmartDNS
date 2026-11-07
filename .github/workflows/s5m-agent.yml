@@ -61,6 +61,8 @@ jobs:
             runner_arch: arm64
     steps:
       - uses: actions/checkout@v4
+      - name: Validate no-SmartDNS healthcheck shell syntax
+        run: sh -n s5m-agent/healthcheck-no-smartdns.sh
       - name: Run Agent unit tests
         run: |
           cd s5m-agent
