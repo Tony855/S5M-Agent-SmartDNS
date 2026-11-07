@@ -172,7 +172,7 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 func isInternalSettingKey(key string) bool {
 	for _, prefix := range []string{
 		"agent_machine_", "agent_mihomo_secret_", "agent_secret_", "agent_command_",
-		"agent_command_result_", "smartdns_config_", "agent_lastseen_", "agent_status_", "mihomo_secret_",
+		"agent_command_result_", "smartdns_config_", "smartdns_enabled_", "agent_lastseen_", "agent_status_", "mihomo_secret_",
 	} {
 		if strings.HasPrefix(key, prefix) {
 			return true
@@ -236,11 +236,13 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, "SmartDNS 模式必须是 shared；留空可恢复旧行为")
 				return
 			}
-			if cfg.Strategy != "" && cfg.Strategy != SmartDNSDefaultStrategy {
-				writeErr(w, http.StatusBadRequest, "当前 SmartDNS 统一代理策略仅支持 fallback")
+			if cfg.Strategy != "" && cfg.Strategy != SmartDNSStrategyFallback && cfg.Strategy != SmartDNSStrategyURLTest && cfg.Strategy != SmartDNSStrategySelect {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 策略必须是 fallback、url-test 或 select")
 				return
 			}
-			cfg.Strategy = SmartDNSDefaultStrategy
+			if cfg.Strategy == "" {
+				cfg.Strategy = SmartDNSDefaultStrategy
+			}
 			normalized, err := json.Marshal(cfg)
 			if err != nil {
 				writeErr(w, http.StatusBadRequest, "SmartDNS 路由设置无法序列化")
@@ -323,6 +325,10 @@ func (a *App) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.store.DeleteInstance(id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "实例不存在")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "删除实例失败")
 		return
 	}
@@ -352,6 +358,34 @@ func (a *App) handleSetMachineProxyMode(w http.ResponseWriter, r *http.Request) 
 	if err := a.store.SetMachineProxyMode(code, in.RoutingMode); err != nil { writeErr(w, http.StatusBadRequest, err.Error()); return }
 	if err := a.syncAuthorizedNodeConfigs(); err != nil { writeErr(w, http.StatusInternalServerError, "机器模式已保存，但节点配置同步失败: "+err.Error()); return }
 	writeJSON(w, http.StatusOK, map[string]string{"machine_code": code, "routing_mode": strings.ToLower(strings.TrimSpace(in.RoutingMode)), "message": "机器代理模式已保存并同步"})
+}
+
+func (a *App) handleSetMachineSmartDNSEnabled(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	if user == nil || user.Role != "admin" {
+		writeErr(w, http.StatusForbidden, "仅管理员可以启停节点 SmartDNS")
+		return
+	}
+	code := strings.TrimSpace(r.PathValue("code"))
+	if code == "" || code == "__GLOBAL__" || len(code) > 64 || !regexp.MustCompile("^[A-Za-z0-9_-]+$").MatchString(code) {
+		writeErr(w, http.StatusBadRequest, "机器码格式无效")
+		return
+	}
+	var in struct { Enabled *bool `json:"enabled"` }
+	if err := decodeLimited(r, 8<<10, "8 KiB", &in); err != nil || in.Enabled == nil {
+		writeErr(w, http.StatusBadRequest, "必须明确提供 enabled 布尔值")
+		return
+	}
+	if err := a.queueAgentSmartDNSEnabled(code, *in.Enabled); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	state := "禁用"
+	if *in.Enabled { state = "启用" }
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"machine_code": code, "enabled": *in.Enabled,
+		"message": "SmartDNS " + state + "命令已排队，等待 Agent 执行并完成 DNS 健康验证",
+	})
 }
 
 func (a *App) handleListProxies(w http.ResponseWriter, r *http.Request) {
@@ -2312,6 +2346,11 @@ func (a *App) handleAgentCommandAck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "命令 ID、状态或结果消息无效")
 		return
 	}
+	// Keep the legacy HTTP ACK path consistent with WebSocket ACK handling:
+	// Agent diagnostics are untrusted and must not persist credentials or
+	// machine-local filesystem paths in command history or browser events.
+	in.Message = sanitizeAgentWebSocketText(in.Message)
+
 	// Serialize ACK persistence with Agent binding revocation, then revalidate
 	// the credential while holding the same mutex used by DeleteAgentBinding.
 	// The initial authentication above can become stale while the request is decoded.
@@ -2406,14 +2445,23 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "机器码和密钥不能为空")
 		return
 	}
-	// Serialize revocation with token allocation as well as heartbeat persistence.
+	// Serialize revocation with token allocation as well as command delivery/ACK.
 	// Without the shared token lock, a concurrent generator could insert a new
 	// credential after this delete commits, effectively resurrecting the binding.
+	// The per-node command lock closes the gap between a WebSocket authorization
+	// check and its subsequent DB read/write: revocation must not race a command
+	// frame onto an already-revoked Agent connection.
 	agentTokenGenerateMu.Lock()
 	defer agentTokenGenerateMu.Unlock()
+	unlockCommand := a.lockAgentWSCommand(code)
+	defer unlockCommand()
 	a.agentWSMu.Lock()
 	if err := a.store.DeleteAgentBinding(code); err != nil {
 		a.agentWSMu.Unlock()
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "Agent 绑定不存在")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "删除失败")
 		return
 	}
@@ -2456,8 +2504,9 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		ServerTime          int64             `json:"server_time"`
 		Status              map[string]any    `json:"status,omitempty"`
 		CommandResult       map[string]any    `json:"command_result,omitempty"`
-		PendingCommand      map[string]string `json:"pending_command,omitempty"`
+		PendingCommand      map[string]any    `json:"pending_command,omitempty"`
 		DesiredConfigSHA256 string            `json:"desired_config_sha256,omitempty"`
+		SmartDNSEnabled      *bool             `json:"smartdns_enabled,omitempty"`
 	}
 	result := make(map[string]AgentInfo)
 
@@ -2493,13 +2542,17 @@ func (a *App) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		if raw := settings["agent_command_result_"+code]; raw != "" {
 			_ = json.Unmarshal([]byte(raw), &commandResult)
 		}
-		var pendingCommand map[string]string
+		var pendingCommand map[string]any
 		if raw := settings["agent_command_"+code]; raw != "" {
 			_ = json.Unmarshal([]byte(raw), &pendingCommand)
 		}
 		info := AgentInfo{
 			Authorized: true, TokenConfigured: true, LastSeen: lastSeen, ServerTime: time.Now().Unix(), Status: status,
 			CommandResult: commandResult, PendingCommand: pendingCommand,
+		}
+		if desired, ok := settings["smartdns_enabled_"+code]; ok {
+			enabled := desired == "true"
+			info.SmartDNSEnabled = &enabled
 		}
 		if nodeConfig, configErr := a.store.GetNodeConfig(code); configErr == nil && nodeConfig != nil && strings.TrimSpace(nodeConfig.YAML) != "" {
 			sum := sha256.Sum256([]byte(strings.TrimSpace(nodeConfig.YAML)))

@@ -40,6 +40,10 @@ proxies:
     type: socks5
     server: 203.0.113.10
     port: 1080
+  - name: upstream-v6
+    type: socks5
+    server: 2001:db8::20
+    port: 1081
 `
 	got, err := normalizeAgentProxyConfig(input)
 	if err != nil {
@@ -84,8 +88,14 @@ proxies:
 		}
 		if !found { t.Errorf("fake-ip-filter missing %q: %#v", want, filters) }
 	}
-	if dns["ipv6"] != false {
-		t.Errorf("dns.ipv6 = %#v, want false", dns["ipv6"])
+	if config["ipv6"] != true {
+		t.Errorf("ipv6 = %#v, want true for dual-stack TUN routing", config["ipv6"])
+	}
+	if dns["fake-ip-range6"] != "fdfe:dcba:9876::1/64" {
+		t.Errorf("dns.fake-ip-range6 = %#v, want fdfe:dcba:9876::1/64", dns["fake-ip-range6"])
+	}
+	if dns["ipv6"] != true {
+		t.Errorf("dns.ipv6 = %#v, want true to preserve AAAA answers", dns["ipv6"])
 	}
 	tun, ok := config["tun"].(map[string]any)
 	if !ok { t.Fatalf("tun is not a mapping: %#v", config["tun"]) }
@@ -102,7 +112,7 @@ proxies:
 	if !foundTCPDNSHijack { t.Errorf("tun dns-hijack missing tcp://any:53: %#v", dnsHijack) }
 	addresses, ok := tun["route-exclude-address"].([]any)
 	if !ok { t.Fatalf("route-exclude-address is not a sequence: %#v", tun["route-exclude-address"]) }
-	for _, want := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.10/32", "10.1.2.0/24"} {
+	for _, want := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.10/32", "2001:db8::20/128", "10.1.2.0/24"} {
 		found := false
 		for _, item := range addresses { if item == want { found = true; break } }
 		if !found { t.Errorf("route-exclude-address missing %q: %#v", want, addresses) }
@@ -712,6 +722,68 @@ func TestMergeManagedRuleValuesRequiresOneTerminalMatchAndValidCustomRules(t *te
 	}
 }
 
+func TestMergeManagedProxySectionsInjectsSmartDNSRouteIntoSavedYAML(t *testing.T) {
+	custom := `mode: rule
+secret: keep-me
+proxies:
+  - name: old
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+proxy-groups:
+  - name: CUSTOM
+    type: select
+    proxies: [DIRECT]
+rules:
+  - DOMAIN,internal.example,DIRECT
+  - MATCH,REJECT
+`
+	generated := `mode: rule
+proxies:
+  - name: node-proxy
+    type: socks5
+    server: 192.0.2.20
+    port: 1080
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [node-proxy]
+  - name: SMARTDNS-PROXY
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+    interval: 30
+    proxies: [node-proxy]
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	merged, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("mergeManagedProxySections: %v", err) }
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil { t.Fatalf("decode merged YAML: %v", err) }
+	if got["secret"] != "keep-me" { t.Fatalf("operator secret was not preserved: %#v", got["secret"]) }
+	groups, ok := got["proxy-groups"].([]any)
+	if !ok { t.Fatalf("proxy-groups missing: %#v", got["proxy-groups"]) }
+	foundSmartDNS := false
+	foundCustom := false
+	for _, raw := range groups {
+		group, ok := raw.(map[string]any); if !ok { continue }
+		switch group["name"] {
+		case "SMARTDNS-PROXY": foundSmartDNS = true
+		case "CUSTOM": foundCustom = true
+		}
+	}
+	if !foundSmartDNS || !foundCustom { t.Fatalf("managed and custom groups not both preserved: %#v", groups) }
+	rules, ok := got["rules"].([]any)
+	if !ok { t.Fatalf("rules missing: %#v", got["rules"]) }
+	foundProcessRule := false
+	for _, raw := range rules {
+		if rule, ok := raw.(string); ok && rule == "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { foundProcessRule = true }
+	}
+	if !foundProcessRule { t.Fatalf("SmartDNS process route missing: %#v", rules) }
+}
+
 func TestMergeManagedProxySectionsPreservesCustomSettings(t *testing.T) {
 	custom := `mode: global
 mixed-port: 7890
@@ -1054,6 +1126,7 @@ func TestBuildConfigRoutesConfiguredDoHThroughProxy(t *testing.T) {
 	for _, want := range []string{
 		"listen: 127.0.0.1:5353",
 		"fake-ip-range: 198.18.0.1/16",
+		"fake-ip-range6: fdfe:dcba:9876::1/64",
 		"DOMAIN-SUFFIX,v2net.cc,DIRECT",
 		"DOMAIN-SUFFIX,dns.alidns.com,PROXY",
 		"DOMAIN-SUFFIX,doh.pub,PROXY",
@@ -1101,7 +1174,7 @@ func TestBuildConfigIncludesTUNDNSDefaults(t *testing.T) {
 		"proxy-server-nameserver:",
 		"fallback:",
 		"dns-hijack:",
-		"ipv6: false",
+		"ipv6: true",
 		"https://dns.cloudflare.com/dns-query",
 		"https://dns.google/dns-query",
 		"fallback-filter:",
@@ -1382,15 +1455,15 @@ func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 	app := &App{store: store}
 	now := time.Now().Unix()
 	healthy := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now,
 	}
 	stale := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now - int64(agentWSHeartbeatTTL.Seconds()) - 1,
 	}
 	future := map[string]any{
-		"smartdns_available": true, "smartdns_running": true,
+		"smartdns_available": true, "smartdns_domestic_listener": true, "smartdns_running": true,
 		"smartdns_dns_healthy": true, "received_at": now + 120,
 	}
 	cases := []struct{name string; status map[string]any; want bool}{
@@ -1398,6 +1471,8 @@ func TestAgentHasHealthySmartDNSRequiresFreshProcessAndDNSProbe(t *testing.T) {
 		{"binary only", map[string]any{"smartdns_available": true, "received_at": now}, false},
 		{"running without probe", map[string]any{"smartdns_available": true, "smartdns_running": true, "received_at": now}, false},
 		{"healthy and fresh", healthy, true},
+		{"legacy healthy without domestic telemetry", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true, "received_at": now}, true},
+		{"primary-only healthy with domestic disabled", map[string]any{"smartdns_available": true, "smartdns_domestic_listener": false, "smartdns_running": true, "smartdns_dns_healthy": true, "received_at": now}, true},
 		{"healthy but stale", stale, false},
 		{"future timestamp", future, false},
 		{"missing heartbeat timestamp", map[string]any{"smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true}, false},
@@ -1710,6 +1785,12 @@ func TestMergeManagedProxySectionsPreservesCustomGroupsAndAddsSmartDNSFallback(t
     type: select
     proxies:
       - DIRECT
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies:
+      - old-node
+    url: https://www.gstatic.com/generate_204
+    interval: 60
 rules:
   - DOMAIN,custom.example.com,DIRECT
 `
@@ -1734,10 +1815,16 @@ rules:
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
 	groups := doc["proxy-groups"].([]any)
-	if len(groups) != 2 { t.Fatalf("expected custom + managed groups, got %#v", groups) }
+	if len(groups) != 2 { t.Fatalf("expected custom + migrated managed groups, got %#v", groups) }
 	names := map[string]bool{}
 	for _, raw := range groups { names[raw.(map[string]any)["name"].(string)] = true }
 	if !names["MANUAL-SELECT"] || !names[SmartDNSGroupName] { t.Fatalf("custom or SmartDNS group lost: %#v", names) }
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		if group["name"] == SmartDNSGroupName && group["url"] != "https://www.gstatic.com/generate_204" {
+			t.Fatalf("legacy SmartDNS group was not upgraded to dual-stack health check: %#v", group)
+		}
+	}
 }
 
 func TestMergeManagedProxySectionsRejectsReservedSmartDNSGroupCollision(t *testing.T) {
@@ -1906,14 +1993,14 @@ func TestBuildConfigRejectsUnsafeProxyNames(t *testing.T) {
 }
 
 
-// TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback verifies that
-// every Agent gets an independent fallback group containing only enabled
-// global and machine-bound nodes, including in return mode.
-func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
+// TestBuildConfigForMachineExplicitlyEnablesScopedSmartDNSURLTest verifies
+// that the opt-in policy contains only enabled global and machine-bound nodes.
+func TestBuildConfigForMachineExplicitlyEnablesScopedSmartDNSURLTest(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-default-fallback.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{"smartdns_routing_config": `{"mode":"shared","strategy":"url-test"}`}); err != nil { t.Fatal(err) }
 	proxies := []Proxy{
 		{Name: "24587", Type: "vmess", Server: "192.0.2.10", Port: 24587, MachineCode: "__GLOBAL__", Enabled: true},
 		{Name: "24588", Type: "vmess", Server: "192.0.2.11", Port: 24588, MachineCode: "node-a", Enabled: true},
@@ -1934,10 +2021,10 @@ func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
 		group := raw.(map[string]any)
 		if group["name"] == SmartDNSGroupName { smart = group }
 	}
-	if smart == nil { t.Fatalf("default SmartDNS fallback group missing: %#v", groups) }
-	if smart["type"] != "fallback" || smart["url"] != "https://www.gstatic.com/generate_204" ||
-		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 {
-		t.Fatalf("unexpected fallback health-check settings: %#v", smart)
+	if smart == nil { t.Fatalf("explicitly enabled SmartDNS url-test group missing: %#v", groups) }
+	if smart["type"] != "url-test" || smart["url"] != "https://www.gstatic.com/generate_204" ||
+		smart["interval"] != 30 || smart["timeout"] != 5000 || smart["lazy"] != false || smart["expected-status"] != 204 || smart["tolerance"] != 50 {
+		t.Fatalf("unexpected automatic latency-test settings: %#v", smart)
 	}
 	members := smart["proxies"].([]any)
 	if len(members) != 2 || members[0] != "24587" || members[1] != "24588" {
@@ -1959,8 +2046,56 @@ func TestBuildConfigForMachineDefaultsToScopedSmartDNSFallback(t *testing.T) {
 	if !manual { t.Fatalf("ordinary manual PROXY select group was changed or removed: %#v", groups) }
 }
 
-// An explicitly stored empty setting is the backwards-compatible opt-out.
-func TestBuildConfigForMachineExplicitlyDisablesDefaultSmartDNSFallback(t *testing.T) {
+// A SmartDNS enable command must build routing for its requested target state,
+// even though the persisted desired-state flag is committed only after ACK.
+func TestBuildConfigForMachineSmartDNSStateOverride(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-state-override.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "rule"); err != nil { t.Fatal(err) }
+	proxy := Proxy{Name: "node-proxy", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: "node-a", Enabled: true}
+	if err := store.CreateProxy(&proxy); err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a": "false"}); err != nil { t.Fatal(err) }
+	app := &App{store: store}
+
+	enabled := true
+	got, err := app.buildConfigForMachineWithSmartDNSOverride("node-a", &enabled)
+	if err != nil { t.Fatalf("build enabled target config: %v", err) }
+	if !strings.Contains(got, "PROCESS-NAME,smartdns,"+SmartDNSGroupName) || !strings.Contains(got, "name: "+SmartDNSGroupName) {
+		t.Fatalf("enable target config must include the managed SmartDNS proxy group and process route:\n%s", got)
+	}
+	persisted, err := store.GetSetting("smartdns_enabled_node-a")
+	if err != nil || persisted != "false" {
+		t.Fatalf("building target config must not mutate persisted desired state: value=%q err=%v", persisted, err)
+	}
+
+	disabled := false
+	got, err = app.buildConfigForMachineWithSmartDNSOverride("node-a", &disabled)
+	if err != nil { t.Fatalf("build disabled target config: %v", err) }
+	if strings.Contains(got, "PROCESS-NAME,smartdns,"+SmartDNSGroupName) {
+		t.Fatalf("disable target config must not route SmartDNS process through proxy group:\n%s", got)
+	}
+}
+
+// A missing setting is the upgrade path for existing nodes: do not inject
+// SmartDNS process rules or a dedicated proxy group unless an administrator opts in.
+func TestBuildConfigForMachinePreservesLegacySmartDNSRoutingWhenUnset(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-unset-legacy.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	if strings.Contains(got, SmartDNSGroupName) || strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("unset SmartDNS routing setting changed legacy node behavior:\\n%s", got)
+	}
+	if !strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("legacy return-mode fallback was unexpectedly changed:\\n%s", got)
+	}
+}
+
+// A missing setting preserves legacy routing; an explicitly empty setting also remains an opt-out.
+func TestBuildConfigForMachineExplicitlyDisablesSmartDNSRouting(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-fallback-optout.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
@@ -1974,13 +2109,14 @@ func TestBuildConfigForMachineExplicitlyDisablesDefaultSmartDNSFallback(t *testi
 	if strings.Contains(got, "PROCESS-NAME,smartdns,") { t.Fatalf("explicit opt-out changed legacy return-mode process routing:\n%s", got) }
 }
 
-// With no enabled eligible proxy, the default policy must reject SmartDNS
+// With SmartDNS routing explicitly enabled but no eligible proxy, reject SmartDNS
 // rather than allowing return-mode MATCH,DIRECT to leak overseas DNS upstreams.
 func TestBuildConfigForMachineRejectsSmartDNSWhenNoEligibleProxy(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-no-proxy.db"))
 	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 	if err := store.SetMachineProxyMode("node-a", "return"); err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{"smartdns_routing_config": `{"mode":"shared","strategy":"url-test"}`}); err != nil { t.Fatal(err) }
 	p := Proxy{Name: "foreign-only", Type: "vmess", Server: "192.0.2.20", Port: 24587, MachineCode: "node-b", Enabled: true}
 	if err := store.CreateProxy(&p); err != nil { t.Fatal(err) }
 	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
@@ -2044,6 +2180,29 @@ rules:
 	}
 }
 
+
+func TestMergeManagedProxySectionsRemovesStaleSmartDNSRouteWhenDisabled(t *testing.T) {
+	custom := `mode: rule
+proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [old-node]
+    url: https://www.gstatic.com/generate_204
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,REJECT
+`
+	generated := `mode: rule
+proxies: []
+rules:
+  - MATCH,REJECT
+`
+	got, err := mergeManagedProxySections(custom, generated)
+	if err != nil { t.Fatalf("merge disabled SmartDNS config: %v", err) }
+	if strings.Contains(got, SmartDNSGroupName) || strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("disabled SmartDNS config retained stale proxy group or process rule:\n%s", got)
+	}
+}
 
 func TestMergeManagedProxySectionsInjectsGeneratedNodesIntoCustomPROXYGroup(t *testing.T) {
 	custom := `mode: rule
@@ -2310,4 +2469,213 @@ func TestBuildConfigFromSocks5HImportGeneratesCanonicalMihomoProxy(t *testing.T)
 	if _, exists := generated["remote_dns"]; exists {
 		t.Fatalf("non-standard remote_dns field must not leak into Mihomo YAML: %#v", generated)
 	}
+}
+
+func TestApplyAgentRuntimeDNSFallbackRemovesPrimaryAndDomesticSmartDNS(t *testing.T) {
+	source := `dns:
+  enable: true
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    "geosite:cn": 127.0.0.1:6054
+    "geosite:private": 192.0.2.53
+  default-nameserver:
+    - tls://223.5.5.5
+`
+	got, err := applyAgentRuntimeDNS(source, false)
+	if err != nil {
+		t.Fatalf("apply SmartDNS fallback: %v", err)
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(got), &root); err != nil {
+		t.Fatalf("decode fallback YAML: %v", err)
+	}
+	dns := root["dns"].(map[string]any)
+	for _, raw := range dns["nameserver"].([]any) {
+		if strings.Contains(raw.(string), "127.0.0.1:6053") || strings.Contains(raw.(string), "127.0.0.1:6054") {
+			t.Fatalf("primary nameserver still points to SmartDNS: %#v", dns["nameserver"])
+		}
+	}
+	wantPrimary := map[string]bool{
+		"https://dns.cloudflare.com/dns-query": false,
+		"https://dns.google/dns-query": false,
+	}
+	for _, raw := range dns["nameserver"].([]any) {
+		if _, ok := wantPrimary[raw.(string)]; ok {
+			wantPrimary[raw.(string)] = true
+		}
+	}
+	for server, found := range wantPrimary {
+		if !found { t.Errorf("missing encrypted fallback %q", server) }
+	}
+	policy := dns["nameserver-policy"].(map[string]any)
+	cnFallback, ok := policy["geosite:cn"].([]any)
+	if !ok { t.Fatalf("China policy was not converted to fallback list: %#v", policy["geosite:cn"]) }
+	wantCN := map[string]bool{
+		"https://dns.alidns.com/dns-query": false,
+		"https://doh.pub/dns-query": false,
+	}
+	for _, raw := range cnFallback {
+		server := raw.(string)
+		if strings.Contains(server, "127.0.0.1:6054") { t.Fatalf("China policy still points to SmartDNS: %#v", cnFallback) }
+		if _, ok := wantCN[server]; ok { wantCN[server] = true }
+	}
+	for server, found := range wantCN {
+		if !found { t.Errorf("missing domestic encrypted fallback %q", server) }
+	}
+	if policy["geosite:private"] != "192.0.2.53" {
+		t.Fatalf("unrelated operator nameserver policy changed: %#v", policy["geosite:private"])
+	}
+	if !strings.Contains(got, "tls://223.5.5.5") {
+		t.Fatal("bootstrap DNS was unexpectedly changed")
+	}
+}
+
+func TestApplyAgentRuntimeDNSFallbackFiltersOnlySmartDNSFromMixedLists(t *testing.T) {
+	source := `dns:
+  nameserver:
+    - 127.0.0.1:6053
+    - 1.1.1.1
+  nameserver-policy:
+    "geosite:cn":
+      - 127.0.0.1:6054
+      - 223.5.5.5
+`
+	got, err := applyAgentRuntimeDNS(source, false)
+	if err != nil { t.Fatal(err) }
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(got), &root); err != nil { t.Fatal(err) }
+	dns := root["dns"].(map[string]any)
+	if got := dns["nameserver"].([]any); len(got) != 1 || got[0] != "1.1.1.1" {
+		t.Fatalf("mixed nameserver list not safely filtered: %#v", got)
+	}
+	policy := dns["nameserver-policy"].(map[string]any)
+	if got := policy["geosite:cn"].([]any); len(got) != 1 || got[0] != "223.5.5.5" {
+		t.Fatalf("mixed nameserver-policy list not safely filtered: %#v", got)
+	}
+}
+
+func TestMergeManagedProxyGroupValuesRefreshesExistingURLTestGroup(t *testing.T) {
+	custom := []any{map[string]any{
+		"name": SmartDNSGroupName, "type": "url-test",
+		"proxies": []any{"old-node"}, "url": "https://www.gstatic.com/generate_204", "interval": 30,
+	}}
+	generated := []any{map[string]any{
+		"name": SmartDNSGroupName, "type": "url-test",
+		"proxies": []any{"new-node"}, "url": "https://www.gstatic.com/generate_204",
+		"interval": 30, "tolerance": 50,
+	}}
+	got, err := mergeManagedProxyGroupValues(custom, generated)
+	if err != nil { t.Fatal(err) }
+	if len(got) != 1 { t.Fatalf("expected one managed group, got %#v", got) }
+	group := got[0].(map[string]any)
+	members := group["proxies"].([]any)
+	if len(members) != 1 || members[0] != "new-node" || group["tolerance"] != 50 || group["url"] != "https://www.gstatic.com/generate_204" {
+		t.Fatalf("url-test group was not refreshed atomically: %#v", group)
+	}
+}
+
+
+func TestRouteAgentDNSViaSmartDNSRestoresDomesticPolicyAfterFallback(t *testing.T) {
+	input := `dns:
+  ipv6: true
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+    geosite:geolocation-!cn:
+      - https://dns.google/dns-query
+`
+	fallback, err := routeAgentDNSFallbackIfSmartDNS(input)
+	if err != nil { t.Fatalf("route fallback: %v", err) }
+	got, err := routeAgentDNSViaSmartDNSWithDomestic(fallback)
+	if err != nil { t.Fatalf("restore SmartDNS route: %v", err) }
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode: %v", err) }
+	dns := config["dns"].(map[string]any)
+	if values := dns["nameserver"].([]any); len(values) != 1 || values[0] != "127.0.0.1:6053" {
+		t.Fatalf("primary nameserver = %#v, want SmartDNS 6053", values)
+	}
+	policy := dns["nameserver-policy"].(map[string]any)
+	if got := policy["geosite:cn"]; got != "127.0.0.1:6054" {
+		t.Fatalf("domestic nameserver-policy = %#v, want SmartDNS 6054", got)
+	}
+	if values := policy["geosite:geolocation-!cn"].([]any); len(values) != 1 || values[0] != "https://dns.google/dns-query" {
+		t.Fatalf("unrelated nameserver policy changed: %#v", values)
+	}
+}
+
+
+func TestAgentHasHealthySmartDNSHonorsDesiredStateAndFreshEnableAck(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-desired-state.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	now := time.Now().Unix()
+	staleDisabled := map[string]any{
+		"smartdns_available": true, "smartdns_enabled": false,
+		"smartdns_running": false, "smartdns_dns_healthy": false,
+		"received_at": now - 10,
+	}
+	statusJSON, _ := json.Marshal(staleDisabled)
+	resultJSON, _ := json.Marshal(map[string]any{
+		"type": "set_smartdns_enabled", "status": "success",
+		"enabled": true, "updated_at": now,
+	})
+	if err := store.UpdateSettings(map[string]string{
+		"agent_status_node-a": string(statusJSON),
+		"smartdns_enabled_node-a": "true",
+		"agent_command_result_node-a": string(resultJSON),
+	}); err != nil { t.Fatal(err) }
+	if !app.agentHasHealthySmartDNS("node-a") {
+		t.Fatal("fresh successful enable ACK should bridge the stale pre-enable heartbeat")
+	}
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a": "false"}); err != nil { t.Fatal(err) }
+	if app.agentHasHealthySmartDNS("node-a") {
+		t.Fatal("explicitly disabled node must never use stale healthy SmartDNS telemetry")
+	}
+}
+
+
+func TestApplyAgentRuntimeDNSPreservesLegacySmartDNSPolicy(t *testing.T) {
+	input := `dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+`
+	got, err := applyAgentRuntimeDNS(input, true)
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(got, "127.0.0.1:6053") { t.Fatalf("legacy primary SmartDNS listener was not applied: %s", got) }
+	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("legacy config without a domestic policy must not gain a new 6054 dependency: %s", got) }
+}
+
+
+func TestAgentHasDomesticSmartDNSRequiresCapabilityOrFreshEnableAck(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-domestic-capability.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	app := &App{store: store}
+	now := time.Now().Unix()
+	legacyStatus, _ := json.Marshal(map[string]any{"received_at": now, "smartdns_available": true, "smartdns_running": true, "smartdns_dns_healthy": true})
+	if err := store.UpdateSettings(map[string]string{"agent_status_node-a": string(legacyStatus)}); err != nil { t.Fatal(err) }
+	if domestic, reported := app.agentSmartDNSDomesticListenerStatus("node-a"); reported || domestic { t.Fatal("legacy Agent without domestic capability must retain primary-only SmartDNS routing") }
+	result, _ := json.Marshal(map[string]any{"type":"set_smartdns_enabled","status":"success","enabled":true,"updated_at":now})
+	if err := store.UpdateSettings(map[string]string{"smartdns_enabled_node-a":"true","agent_command_result_node-a":string(result)}); err != nil { t.Fatal(err) }
+	if domestic, reported := app.agentSmartDNSDomesticListenerStatus("node-a"); !reported || !domestic { t.Fatal("fresh verified enable ACK should activate domestic SmartDNS policy") }
+}
+
+
+func TestApplyAgentRuntimeDNSFallsBackDomesticWhenListenerExplicitlyUnavailable(t *testing.T) {
+	input := `dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`
+	got, err := applyAgentRuntimeDNS(input, true, false)
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(got, "127.0.0.1:6053") { t.Fatalf("primary SmartDNS listener should remain active: %s", got) }
+	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("missing domestic listener must not remain referenced: %s", got) }
+	if !strings.Contains(got, "dns.alidns.com/dns-query") { t.Fatalf("domestic fallback resolver was not restored: %s", got) }
 }

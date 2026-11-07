@@ -170,3 +170,30 @@ func TestDeleteMihomoTemplateVersionFailsClosedWhenCurrentVersionMissing(t *test
 		t.Fatal("template version was deleted despite missing current-version setting")
 	}
 }
+
+func TestDeleteMihomoTemplateVersionCleansOrphanBindingsAfterCursorRead(t *testing.T) {
+	a, cleanup := newTemplateDeleteTestApp(t)
+	defer cleanup()
+	seedTemplateDeleteTest(t, a, 4, 2, 4)
+	if _, err := a.store.db.Exec(`INSERT OR REPLACE INTO settings(key,value) VALUES('agent_token','global-token')`); err != nil {
+		t.Fatalf("seed global Agent token: %v", err)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO node_template_bindings(machine_code,template_version,source) VALUES('revoked-node',2,'template')`); err != nil {
+		t.Fatalf("seed orphan binding: %v", err)
+	}
+
+	rec := callDeleteTemplateVersion(a, "2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var bindings int
+	if err := a.store.db.QueryRow(`SELECT COUNT(*) FROM node_template_bindings WHERE machine_code='revoked-node' AND template_version=2`).Scan(&bindings); err != nil {
+		t.Fatalf("count orphan binding: %v", err)
+	}
+	if bindings != 0 {
+		t.Fatalf("orphan binding count = %d, want 0", bindings)
+	}
+	if templateVersionExists(t, a, 2) {
+		t.Fatal("unbound historical template version was not deleted")
+	}
+}

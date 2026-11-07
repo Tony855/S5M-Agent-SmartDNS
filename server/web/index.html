@@ -375,6 +375,29 @@
                 <el-button size="small" type="primary" :loading="savingMachineProxyMode[item.code]" @click="saveMachineProxyMode(item.code)">保存模式</el-button>
                 <span class="section-hint">仅影响此机器；代理节点的增删、禁用或重新绑定不会改变此设置</span>
               </div>
+              <div class="machine-smartdns" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--border,#e5e7eb);">
+                <strong>SmartDNS 服务管理</strong>
+                <template v-if="item.smartdnsAvailable">
+                  <el-switch
+                    :model-value="item.smartdnsEnabled"
+                    active-text="启用"
+                    inactive-text="禁用"
+                    :disabled="!item.online || !!(item.pendingCommand && item.pendingCommand.type === 'set_smartdns_enabled') || savingMachineSmartDNS[item.code] === true"
+                    @change="enabled => setMachineSmartDNS(item.code, enabled)"
+                  ></el-switch>
+                  <span class="instance-summary-mihomo" :class="item.smartdnsRunning && item.smartdnsDNSHealthy ? 'is-running' : (item.smartdnsEnabled ? 'is-unknown' : 'is-stopped')">
+                    {{ !item.online ? 'Agent 离线' : (item.pendingCommand && item.pendingCommand.type === 'set_smartdns_enabled' ? '启停命令执行中' : (!item.smartdnsEnabled ? (item.smartdnsRunning ? '已禁用 · 检测到残留进程' : '已禁用 · 进程已停止') : (item.smartdnsRunning ? (item.smartdnsDNSHealthy ? '运行中 · DNS 健康' : (item.smartdnsDomesticReported && !item.smartdnsDomesticListener ? '进程运行中 · 缺少国内 DNS 监听' : '进程运行中 · DNS 异常')) : '已启用 · 等待健康上报'))) }}
+                  </span>
+                  <span v-if="item.smartdnsLastError" class="instance-summary-error">{{ item.smartdnsLastError }}</span>
+                  <span v-if="item.commandResult && item.commandResult.type === 'set_smartdns_enabled'" class="section-hint">
+                    最近操作：{{ item.commandResult.status === 'success' ? '成功' : '失败' }} · {{ item.commandResult.message || '' }}
+                  </span>
+                </template>
+                <span v-else class="section-hint">
+                  {{ item.smartdnsBinaryAvailable ? 'SmartDNS 已安装，但 Agent 版本过旧，不支持远程启停，请先升级 Agent' : (item.online && item.runtimeReported ? '此节点未安装 SmartDNS（普通 Agent 镜像），不支持启停' : '尚未收到 SmartDNS 能力上报，暂不可操作') }}
+                </span>
+                <span class="section-hint">仅影响当前节点；禁用前先切换并验证 Mihomo 备用 DNS，再停止 SmartDNS。Agent 重启后仍保持此状态。</span>
+              </div>
             </div>
           </div>
 
@@ -382,6 +405,20 @@
       </div>
 
       <div v-if="page === 'config'">
+        <div class="card-panel">
+          <div class="card-title">SmartDNS 上游代理出口</div>
+          <p class="import-note">统一控制所有已授权 Agent 的 SmartDNS 加密上游出口。自动优选每 30 秒检测可用代理，并在延迟差超过 50 毫秒时切换到更快的健康节点以避免频繁抖动；手动选择会跟随该节点 Mihomo 的 PROXY 分组当前选中出口；顺序故障切换则按代理列表顺序选择可用节点。所有模式都不允许回落到 DIRECT。</p>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">
+            <el-select v-model="smartdnsRoutingStrategy" style="min-width:280px;max-width:100%;" aria-label="SmartDNS 上游代理出口策略">
+              <el-option label="自动优选（动态选择最低延迟节点）" value="url-test"></el-option>
+              <el-option label="跟随已选代理（使用 PROXY 手动选择）" value="select"></el-option>
+              <el-option label="顺序故障切换（按节点名称排序）" value="fallback"></el-option>
+              <el-option label="保持旧节点行为（不接管 SmartDNS 出口）" value="legacy"></el-option>
+            </el-select>
+            <el-button type="primary" :loading="savingSmartDNSRouting" @click="saveSmartDNSRoutingStrategy">保存 SmartDNS 出口策略</el-button>
+          </div>
+          <p class="section-hint">未保存策略时保持节点原有 DNS/SmartDNS 路由行为，不会因升级自动切换。保存策略后才会在主控下次同步配置时启用；已保存的 fallback 策略不会被覆盖。</p>
+        </div>
         <div class="card-panel">
           <div class="card-title">当前配置节点</div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">

@@ -25,7 +25,7 @@ while [ "$i" -lt 30 ]; do
   UDP_PORT="${UDP_BINDING##*:}"
   TCP_PORT="${TCP_BINDING##*:}"
   if [ -n "$UDP_PORT" ] && [ -n "$TCP_PORT" ] \
-    && dig @127.0.0.1 -p "$UDP_PORT" example.com A +time=2 +tries=1 +short 2>/dev/null | grep -Eq '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
+    && dig @127.0.0.1 -p "$UDP_PORT" example.com A +time=2 +tries=1 +short 2>/dev/null | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
     break
   fi
   i=$((i + 1))
@@ -39,17 +39,33 @@ if [ -z "${UDP_PORT:-}" ] || [ -z "${TCP_PORT:-}" ]; then
 fi
 
 UDP_RESULT="$(dig @127.0.0.1 -p "$UDP_PORT" example.com A +time=3 +tries=1 +short)"
-printf '%s\n' "$UDP_RESULT" | grep -Eq '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || {
+printf '%s\n' "$UDP_RESULT" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || {
   docker logs "$NAME" || true
   echo "UDP DNS query failed" >&2
   exit 1
 }
 
 TCP_RESULT="$(dig +tcp @127.0.0.1 -p "$TCP_PORT" example.com A +time=3 +tries=1 +short)"
-printf '%s\n' "$TCP_RESULT" | grep -Eq '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || {
+printf '%s\n' "$TCP_RESULT" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || {
   docker logs "$NAME" || true
   echo "TCP DNS query failed" >&2
   exit 1
 }
 
 echo "PASS: SmartDNS answered example.com over UDP (port $UDP_PORT) and TCP (port $TCP_PORT)."
+
+# AAAA DNS data is checked separately from IPv6 route reachability.
+AAAA_UDP="$(dig @127.0.0.1 -p "$UDP_PORT" cloudflare.com AAAA +time=3 +tries=1 +short)"
+printf '%s\n' "$AAAA_UDP" | grep -Eq '^[0-9a-fA-F:]+$' || {
+  docker logs "$NAME" || true
+  echo "UDP AAAA DNS query failed or returned no IPv6 address" >&2
+  exit 1
+}
+AAAA_TCP="$(dig +tcp @127.0.0.1 -p "$TCP_PORT" cloudflare.com AAAA +time=3 +tries=1 +short)"
+printf '%s\n' "$AAAA_TCP" | grep -Eq '^[0-9a-fA-F:]+$' || {
+  docker logs "$NAME" || true
+  echo "TCP AAAA DNS query failed or returned no IPv6 address" >&2
+  exit 1
+}
+
+echo "PASS: SmartDNS returned AAAA records over UDP and TCP."

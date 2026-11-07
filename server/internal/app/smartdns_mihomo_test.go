@@ -25,7 +25,7 @@ rules:
   - MATCH,REJECT
 `
 	plan := SmartDNSRoutingPlan{
-		Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy,
+		Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategyFallback,
 		GroupName: SmartDNSGroupName, ProxyNames: []string{"node-a", "node-b"},
 	}
 	got, err := applySmartDNSSharedFallback(input, plan)
@@ -46,7 +46,7 @@ rules:
 }
 
 func TestApplySmartDNSSharedFallbackRejectsReservedNameCollision(t *testing.T) {
-	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategyFallback, ProxyNames: []string{"node-a"}}
 	for _, input := range []string{
 		"proxy-groups:\n  - name: SMARTDNS-PROXY\n    type: select\n    proxies: [node-a]\nrules:\n  - PROCESS-NAME,smartdns,node-a\n",
 	} {
@@ -76,7 +76,7 @@ proxies:
     server: 192.0.2.1
     port: 1080
 `
-	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategyFallback, ProxyNames: []string{"node-a"}}
 	got, err := applySmartDNSSharedFallback(input, plan)
 	if err != nil { t.Fatal(err) }
 	var doc map[string]any
@@ -106,7 +106,7 @@ proxies:
     server: 192.0.2.1
     port: 1080
 `
-	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategyFallback, ProxyNames: []string{"node-a"}}
 	got, err := applySmartDNSSharedFallback(input, plan)
 	if err != nil { t.Fatal(err) }
 	var doc map[string]any
@@ -443,7 +443,7 @@ func TestApplySmartDNSSharedFallbackRejectsWhenNoProxyExists(t *testing.T) {
   - MATCH,DIRECT
 `
 	got, err := applySmartDNSSharedFallback(input, SmartDNSRoutingPlan{
-		Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy,
+		Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategyFallback,
 	})
 	if err != nil { t.Fatal(err) }
 	var doc map[string]any
@@ -472,7 +472,7 @@ rules:
 `
 	plan := SmartDNSRoutingPlan{
 		Mode: SmartDNSProxyModeShared,
-		Strategy: SmartDNSDefaultStrategy,
+		Strategy: SmartDNSStrategyFallback,
 		ProxyNames: []string{"node-a", "node-b"},
 	}
 	got, err := applySmartDNSSharedFallback(input, plan)
@@ -519,7 +519,7 @@ func TestApplySmartDNSSharedFallbackRewritesEverySmartDNSProcessRule(t *testing.
 `
 	got, err := applySmartDNSSharedFallback(input, SmartDNSRoutingPlan{
 		Mode: SmartDNSProxyModeShared,
-		Strategy: SmartDNSDefaultStrategy,
+		Strategy: SmartDNSStrategyFallback,
 		ProxyNames: []string{"node-a"},
 	})
 	if err != nil { t.Fatal(err) }
@@ -548,7 +548,7 @@ proxies:
     server: 192.0.2.1
     port: 1080
 `
-	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy, ProxyNames: []string{"node-a"}}
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategyFallback, ProxyNames: []string{"node-a"}}
 	got, err := applySmartDNSSharedFallback(input, plan)
 	if err != nil { t.Fatalf("normalize duplicate SmartDNS rules: %v", err) }
 	var doc map[string]any
@@ -565,4 +565,62 @@ proxies:
 		}
 	}
 	if count != 1 { t.Fatalf("expected exactly one SmartDNS process rule, got %d: %#v", count, rules) }
+}
+
+
+func TestApplySmartDNSSharedURLTestSelectsLowestLatencyProxy(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.1
+    port: 1080
+  - name: node-b
+    type: socks5
+    server: 192.0.2.2
+    port: 1080
+rules:
+  - PROCESS-NAME,smartdns,node-a
+  - MATCH,REJECT
+`
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategyURLTest, ProxyNames: []string{"node-a", "node-b"}}
+	got, err := applySmartDNSSharedFallback(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	groups := doc["proxy-groups"].([]any)
+	group := groups[0].(map[string]any)
+	for key, want := range map[string]any{
+		"type": "url-test", "url": "https://www.gstatic.com/generate_204",
+		"interval": 30, "timeout": 5000, "lazy": false, "expected-status": 204, "tolerance": 50,
+	} {
+		if group[key] != want { t.Errorf("url-test %s = %#v, want %#v", key, group[key], want) }
+	}
+	rules := doc["rules"].([]any)
+	if rules[0] != "PROCESS-NAME,smartdns,SMARTDNS-PROXY" { t.Fatalf("SmartDNS process bypassed auto-select group: %#v", rules) }
+}
+
+func TestApplySmartDNSSharedSelectUsesExistingManualProxyGroup(t *testing.T) {
+	input := `proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [node-a, node-b]
+rules:
+  - PROCESS-NAME,smartdns,node-a
+  - MATCH,REJECT
+`
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect, GroupName: "PROXY", ProxyNames: []string{"node-a", "node-b"}}
+	got, err := applySmartDNSSharedFallback(input, plan)
+	if err != nil { t.Fatal(err) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil { t.Fatal(err) }
+	groups := doc["proxy-groups"].([]any)
+	if len(groups) != 1 || groups[0].(map[string]any)["name"] != "PROXY" { t.Fatalf("manual selection must reuse PROXY without creating a second group: %#v", groups) }
+	rules := doc["rules"].([]any)
+	if rules[0] != "PROCESS-NAME,smartdns,PROXY" { t.Fatalf("SmartDNS must follow the selected PROXY egress: %#v", rules) }
+}
+
+func TestApplySmartDNSSharedSelectRejectsMissingManualProxyGroup(t *testing.T) {
+	input := "proxy-groups: []\\nrules:\\n  - MATCH,REJECT\\n"
+	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect, GroupName: "PROXY", ProxyNames: []string{"node-a"}}
+	if _, err := applySmartDNSSharedFallback(input, plan); err == nil { t.Fatal("manual selection must fail if the managed PROXY group is absent") }
 }

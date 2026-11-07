@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -14,12 +15,22 @@ func TestBuildSmartDNSPerClientConfigUsesExactLoopbackListenerMappings(t *testin
 	if err != nil {
 		t.Fatalf("build SmartDNS config: %v", err)
 	}
+	if len(got) > smartDNSAgentConfigMaxBytes {
+		t.Fatalf("generated config size %d exceeds Agent limit %d", len(got), smartDNSAgentConfigMaxBytes)
+	}
 	for _, want := range []string{
 		"bind 127.0.0.1:6053",
 		"bind-tcp 127.0.0.1:6053",
+		"bind [::1]:6053",
+		"bind-tcp [::1]:6053",
+		"dualstack-ip-selection no",
+		"dualstack-ip-selection-threshold 10",
+		"dualstack-ip-allow-force-AAAA yes",
 		"proxy-server socks5://127.0.0.1:16000 -name s5m-smartdns-16000",
 		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
 		"server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
+		"server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
 		"group-match -client-ip 192.168.10.0/24 -g s5m-smartdns-group-16000",
 		"proxy-server socks5://127.0.0.1:16001 -name s5m-smartdns-16001",
 		"group-match -client-ip 192.168.20.0/24 -g s5m-smartdns-group-16001",
@@ -82,5 +93,42 @@ func TestBuildSmartDNSPerClientConfigRejectsDuplicateCIDRsAndPorts(t *testing.T)
 	second.ClientCIDR = "192.168.20.0/24"
 	if _, err := buildSmartDNSPerClientConfig([]SmartDNSClientRuntimeMapping{first, second}); err == nil {
 		t.Fatal("duplicate listener port accepted")
+	}
+}
+
+func TestBuildSmartDNSPerClientConfigSupportsIPv6ClientCIDR(t *testing.T) {
+	mapping := SmartDNSClientRuntimeMapping{
+		ClientCIDR: "2001:db8:1234::/64", ProxyName: "node-v6",
+		ListenerName: "s5m-smartdns-16010", ListenerAddress: "127.0.0.1", ListenerPort: 16010,
+	}
+	got, err := buildSmartDNSPerClientConfig([]SmartDNSClientRuntimeMapping{mapping})
+	if err != nil {
+		t.Fatalf("build IPv6 client config: %v", err)
+	}
+	for _, want := range []string{
+		"bind [::1]:6053", "bind-tcp [::1]:6053",
+		"dualstack-ip-allow-force-AAAA yes",
+		"group-match -client-ip 2001:db8:1234::/64 -g s5m-smartdns-group-16010",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated IPv6 config missing %q:\\n%s", want, got)
+		}
+	}
+}
+
+func TestBuildSmartDNSPerClientConfigRejectsAgentPayloadOverflow(t *testing.T) {
+	mappings := make([]SmartDNSClientRuntimeMapping, 0, 64)
+	for i := 0; i < 64; i++ {
+		port := 16000 + i
+		mappings = append(mappings, SmartDNSClientRuntimeMapping{
+			ClientCIDR: fmt.Sprintf("10.%d.%d.0/24", i/256, i%256),
+			ProxyName: fmt.Sprintf("proxy-%d", i),
+			ListenerName: fmt.Sprintf("s5m-smartdns-%d", port),
+			ListenerAddress: "127.0.0.1",
+			ListenerPort: port,
+		})
+	}
+	if _, err := buildSmartDNSPerClientConfig(mappings); err == nil || !strings.Contains(err.Error(), "超过 Agent 允许的") {
+		t.Fatalf("expected clear Agent payload size error, got %v", err)
 	}
 }

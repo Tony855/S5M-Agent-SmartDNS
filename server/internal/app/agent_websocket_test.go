@@ -886,9 +886,25 @@ func TestAgentWebSocketConfigSyncAndUnchangedHash(t *testing.T) {
 	if err := conn.ReadJSON(&first); err != nil {
 		t.Fatalf("read initial config response: %v", err)
 	}
-	expectedYAML, err := normalizeAgentProxyConfig(configYAML)
+	generatedYAML, err := app.BuildConfigForMachine(code)
+	if err != nil {
+		t.Fatalf("build expected managed Agent config: %v", err)
+	}
+	normalizedSavedYAML, err := normalizeAgentProxyConfig(configYAML)
+	if err != nil {
+		t.Fatalf("normalize expected saved Agent config: %v", err)
+	}
+	expectedYAML, err := mergeManagedProxySections(normalizedSavedYAML, generatedYAML)
+	if err != nil {
+		t.Fatalf("merge expected managed Agent config: %v", err)
+	}
+	expectedYAML, err = normalizeAgentProxyConfig(expectedYAML)
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
+	}
+	expectedYAML, err = applyAgentRuntimeDNS(expectedYAML, false)
+	if err != nil {
+		t.Fatalf("apply expected SmartDNS fallback: %v", err)
 	}
 	sum := sha256.Sum256([]byte(expectedYAML))
 	expectedHash := hex.EncodeToString(sum[:])
@@ -1159,9 +1175,25 @@ func TestAgentWebSocketSupportsMultipleRuntimeOperationsOnOneSession(t *testing.
 	if err := conn.ReadJSON(&configResponse); err != nil {
 		t.Fatalf("read config response: %v", err)
 	}
-	expectedYAML, err := normalizeAgentProxyConfig(configYAML)
+	generatedYAML, err := app.BuildConfigForMachine(code)
+	if err != nil {
+		t.Fatalf("build expected managed Agent config: %v", err)
+	}
+	normalizedSavedYAML, err := normalizeAgentProxyConfig(configYAML)
+	if err != nil {
+		t.Fatalf("normalize expected saved Agent config: %v", err)
+	}
+	expectedYAML, err := mergeManagedProxySections(normalizedSavedYAML, generatedYAML)
+	if err != nil {
+		t.Fatalf("merge expected managed Agent config: %v", err)
+	}
+	expectedYAML, err = normalizeAgentProxyConfig(expectedYAML)
 	if err != nil {
 		t.Fatalf("normalize expected Agent config: %v", err)
+	}
+	expectedYAML, err = applyAgentRuntimeDNS(expectedYAML, false)
+	if err != nil {
+		t.Fatalf("apply expected SmartDNS fallback: %v", err)
 	}
 	if configResponse["type"] != "config.sync" || configResponse["id"] != "cfg-session-1" || configResponse["yaml"] != expectedYAML {
 		t.Fatalf("unexpected config response: %#v", configResponse)
@@ -1559,6 +1591,7 @@ func TestAgentWebSocketSmartDNSHealthTransitionResyncsWithoutPersistingRuntimeDN
 			"config_sha256": strings.Repeat("a", 64),
 			"last_error": "",
 			"smartdns_available": true,
+			"smartdns_domestic_listener": true,
 			"smartdns_running": healthy,
 			"smartdns_dns_healthy": healthy,
 		}
@@ -1773,5 +1806,177 @@ func TestShouldLogAgentTelemetryRateLimitsPerNode(t *testing.T) {
 	}
 	if shouldLogAgentTelemetry(base.Add(time.Hour), base, 0) {
 		t.Fatal("non-positive interval must disable logging")
+	}
+}
+
+
+
+func TestAgentWebSocketHandshakeRevalidatesBindingAfterUpgrade(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+
+	// Hold the session/revocation mutex so the handler completes its initial
+	// JWT check and HTTP upgrade, then blocks before registering the socket.
+	app.agentWSMu.Lock()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+	if err != nil {
+		app.agentWSMu.Unlock()
+		t.Fatalf("dial authenticated WebSocket: err=%v response=%v", err, response)
+	}
+	defer conn.Close()
+
+	// Model the revocation transaction winning the lock race after the first
+	// authentication check but before the upgraded socket can register.
+	if err := app.store.DeleteAgentBinding(code); err != nil {
+		app.agentWSMu.Unlock()
+		t.Fatalf("revoke binding during handshake: %v", err)
+	}
+	app.agentWSMu.Unlock()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var welcome map[string]any
+	if err := conn.ReadJSON(&welcome); err == nil {
+		t.Fatalf("revoked Agent unexpectedly received WebSocket frame: %#v", welcome)
+	}
+
+	settings, err := app.store.GetSettings()
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if settings["agent_lastseen_"+code] != "" || settings["agent_status_"+code] != "" {
+		t.Fatalf("revoked handshake mutated Agent state: lastseen=%q status=%q", settings["agent_lastseen_"+code], settings["agent_status_"+code])
+	}
+}
+
+
+func TestSmartDNSToggleAckPersistsDesiredStateOnlyAfterSuccess(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	payload, err := json.Marshal(map[string]any{
+		"id": "smartdns-toggle-success", "type": "set_smartdns_enabled", "enabled": true,
+		"config": "", "mihomo_config": "dns: {}",
+	})
+	if err != nil { t.Fatal(err) }
+	if err := app.store.QueueAuthorizedAgentCommand(code, string(payload)); err != nil { t.Fatalf("queue toggle: %v", err) }
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-toggle-success", "failed", "simulated failure", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("failed ACK: matched=%v err=%v", matched, err)
+	}
+	if _, err := app.store.GetSetting("smartdns_enabled_" + code); err == nil {
+		t.Fatal("failed command must not persist desired SmartDNS state")
+	}
+	payload, err = json.Marshal(map[string]any{
+		"id": "smartdns-toggle-success-2", "type": "set_smartdns_enabled", "enabled": true,
+		"config": "", "mihomo_config": "dns: {}",
+	})
+	if err != nil { t.Fatal(err) }
+	if err := app.store.QueueAuthorizedAgentCommand(code, string(payload)); err != nil { t.Fatalf("queue second toggle: %v", err) }
+	if _, matched, err := app.store.AckAgentCommandWithConfig(code, "smartdns-toggle-success-2", "success", "enabled", "", time.Now().Unix()); err != nil || !matched {
+		t.Fatalf("successful ACK: matched=%v err=%v", matched, err)
+	}
+	got, err := app.store.GetSetting("smartdns_enabled_" + code)
+	if err != nil || got != "true" { t.Fatalf("desired state = %q err=%v, want true", got, err) }
+	settings, err := app.store.GetSettings()
+	if err != nil { t.Fatal(err) }
+	var result map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_command_result_"+code]), &result); err != nil { t.Fatal(err) }
+	if result["enabled"] != true { t.Fatalf("command result did not expose enabled state: %#v", result) }
+}
+
+
+func TestQueueAgentSmartDNSRejectsUnsupportedAndRequiresSavedConfig(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	now := time.Now().Unix()
+	status := map[string]any{"received_at": now, "smartdns_available": false}
+	raw, _ := json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{
+		"agent_lastseen_"+code: strconv.FormatInt(now, 10),
+		"agent_status_"+code: string(raw),
+	}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, false); err == nil || !strings.Contains(err.Error(), "普通 Agent") {
+		t.Fatalf("ordinary Agent image should be rejected, got %v", err)
+	}
+	status["smartdns_available"] = true
+	status["smartdns_control_supported"] = true
+	status["smartdns_domestic_listener"] = false
+	raw, _ = json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{"agent_status_"+code: string(raw)}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, true); err == nil || !strings.Contains(err.Error(), "6054") {
+		t.Fatalf("enable must reject missing domestic listener, got %v", err)
+	}
+	status["smartdns_domestic_listener"] = true
+	raw, _ = json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{"agent_status_"+code: string(raw)}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, true); err == nil || !strings.Contains(err.Error(), "尚无已保存的 SmartDNS 配置") {
+		t.Fatalf("enable must require a saved SmartDNS config, got %v", err)
+	}
+}
+
+func TestQueueAgentSmartDNSEnableIncludesManagedProxyRoute(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	now := time.Now().Unix()
+	status := map[string]any{
+		"received_at": now, "smartdns_available": true,
+		"smartdns_control_supported": true, "smartdns_domestic_listener": true,
+	}
+	raw, _ := json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{
+		"agent_lastseen_" + code: strconv.FormatInt(now, 10),
+		"agent_status_" + code: string(raw),
+		"smartdns_config_" + code: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
+		"smartdns_enabled_" + code: "false",
+	}); err != nil { t.Fatal(err) }
+	proxy := Proxy{Name: "node-proxy", Type: "socks5", Server: "192.0.2.10", Port: 1080, MachineCode: code, Enabled: true}
+	if err := app.store.CreateProxy(&proxy); err != nil { t.Fatalf("create proxy: %v", err) }
+	if err := app.store.SaveNodeConfig(code, "mode: rule\ndns:\n  enable: true\n  nameserver:\n    - https://dns.cloudflare.com/dns-query\nrules:\n  - MATCH,REJECT\n"); err != nil {
+		t.Fatalf("save node config: %v", err)
+	}
+	if err := app.queueAgentSmartDNSEnabled(code, true); err != nil {
+		t.Fatalf("queue enable command: %v", err)
+	}
+	pendingRaw, err := app.store.GetSetting("agent_command_" + code)
+	if err != nil { t.Fatal(err) }
+	var command map[string]any
+	if err := json.Unmarshal([]byte(pendingRaw), &command); err != nil { t.Fatal(err) }
+	mihomoConfig, ok := command["mihomo_config"].(string)
+	if command["type"] != "set_smartdns_enabled" || command["enabled"] != true || !ok {
+		t.Fatalf("unexpected enable command: %#v", command)
+	}
+	if !strings.Contains(mihomoConfig, "name: "+SmartDNSGroupName) ||
+		!strings.Contains(mihomoConfig, "PROCESS-NAME,smartdns,"+SmartDNSGroupName) ||
+		!strings.Contains(mihomoConfig, "127.0.0.1:6053") ||
+		!strings.Contains(mihomoConfig, "127.0.0.1:6054") {
+		t.Fatalf("enable command must include proxy route and both SmartDNS listeners:\n%s", mihomoConfig)
+	}
+	persisted, err := app.store.GetSetting("smartdns_enabled_" + code)
+	if err != nil || persisted != "false" {
+		t.Fatalf("queueing must not commit desired state before ACK: value=%q err=%v", persisted, err)
+	}
+}
+
+func TestQueueAgentSmartDNSDisableIncludesFallbackMihomoConfig(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	now := time.Now().Unix()
+	status := map[string]any{"received_at": now, "smartdns_available": true, "smartdns_control_supported": true, "smartdns_domestic_listener": true}
+	raw, _ := json.Marshal(status)
+	if err := app.store.UpdateSettings(map[string]string{
+		"agent_lastseen_"+code: strconv.FormatInt(now, 10),
+		"agent_status_"+code: string(raw),
+	}); err != nil { t.Fatal(err) }
+	if err := app.queueAgentSmartDNSEnabled(code, false); err != nil {
+		t.Fatalf("queue disable command: %v", err)
+	}
+	pendingRaw, err := app.store.GetSetting("agent_command_" + code)
+	if err != nil { t.Fatal(err) }
+	var command map[string]any
+	if err := json.Unmarshal([]byte(pendingRaw), &command); err != nil { t.Fatal(err) }
+	if command["type"] != "set_smartdns_enabled" || command["enabled"] != false {
+		t.Fatalf("unexpected pending command: %#v", command)
+	}
+	mihomoConfig, ok := command["mihomo_config"].(string)
+	if !ok || !strings.Contains(mihomoConfig, "dns.cloudflare.com/dns-query") ||
+		strings.Contains(mihomoConfig, "127.0.0.1:6053") || strings.Contains(mihomoConfig, "127.0.0.1:6054") {
+		t.Fatalf("disable command must carry a SmartDNS-free fallback config: %s", mihomoConfig)
 	}
 }

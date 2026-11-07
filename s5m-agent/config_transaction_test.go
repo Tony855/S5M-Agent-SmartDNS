@@ -107,6 +107,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 	oldWriteController := transactionWriteControllerConfig
 	oldRemoveBackup := transactionRemoveBackup
 	oldSnapshotFile := transactionSnapshotFile
+	oldProbeFallbackDNS := transactionProbeMihomoDNS
 	restore := func() {
 		smartDNSConfigPath = oldSmartPath
 		transactionMergeMihomo = oldMerge
@@ -117,6 +118,7 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 		transactionWriteControllerConfig = oldWriteController
 		transactionRemoveBackup = oldRemoveBackup
 		transactionSnapshotFile = oldSnapshotFile
+		transactionProbeMihomoDNS = oldProbeFallbackDNS
 	}
 	t.Cleanup(restore)
 
@@ -481,5 +483,94 @@ func TestWriteTransactionBackupPreservingPriorRemovesNewSidecarAfterFailure(t *t
 	}
 	if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
 		t.Fatalf("new sidecar must be removed after failed snapshot, stat error=%v", statErr)
+	}
+}
+
+
+func TestConfigTransactionSkipsSmartDNSHealthWhenExplicitlyDisabled(t *testing.T) {
+	_, _ = setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+	if err := persistSmartDNSDisabled(true); err != nil { t.Fatal(err) }
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) { return false, nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionWriteControllerConfig = func([]byte) error { return nil }
+	waitCalls, restartCalls := 0, 0
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { waitCalls++; return false }
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	if err := applyAgentConfigTransaction([]byte("fallback-mihomo"), nil, false, ""); err != nil {
+		t.Fatalf("disabled SmartDNS must not block Mihomo fallback config transaction: %v", err)
+	}
+	if waitCalls != 0 || restartCalls != 0 {
+		t.Fatalf("disabled SmartDNS must not be health-checked/restarted: waits=%d restarts=%d", waitCalls, restartCalls)
+	}
+}
+
+
+func TestConfigTransactionRollsBackWhenFallbackDNSProbeFails(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+	if err := persistSmartDNSDisabled(true); err != nil { t.Fatal(err) }
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
+		return true, atomicWriteFile(mihomoConfigPath(), []byte("candidate-fallback"), 0600)
+	}
+	reloads := 0
+	transactionReloadMihomo = func() error { reloads++; return nil }
+	transactionProbeMihomoDNS = func([]byte) bool { return false }
+	transactionWriteControllerConfig = func([]byte) error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { t.Fatal("disabled SmartDNS must not be probed"); return false }
+	transactionRestartSmartDNS = func() error { t.Fatal("disabled SmartDNS must not be restarted during rollback"); return nil }
+	err := applyAgentConfigTransactionWithFallbackProbe([]byte("fallback-yaml"), nil, false, "", true)
+	if err == nil || !strings.Contains(err.Error(), "备用 DNS") { t.Fatalf("expected fallback DNS probe failure, got %v", err) }
+	got, readErr := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if readErr != nil || string(got) != "old-mihomo" { t.Fatalf("failed fallback probe must restore old Mihomo config: %q err=%v", got, readErr) }
+	if reloads != 2 { t.Fatalf("expected candidate and rollback reload, got %d", reloads) }
+}
+
+
+
+func TestEnsureSmartDNSServiceStartedRecoversAlreadyEnabledService(t *testing.T) {
+	oldStart, oldStop, oldPath := smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	startCalls, stopCalls := 0, 0
+	smartDNSServiceStart = func() error { startCalls++; return nil }
+	smartDNSServiceStop = func() error { stopCalls++; return nil }
+	t.Cleanup(func() {
+		smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath = oldStart, oldStop, oldPath
+	})
+
+	if err := ensureSmartDNSServiceStarted(true); err != nil {
+		t.Fatalf("ensure already-enabled service: %v", err)
+	}
+	if startCalls != 1 || stopCalls != 0 {
+		t.Fatalf("expected s6 start to be requested once without stop; starts=%d stops=%d", startCalls, stopCalls)
+	}
+	if _, err := os.Lstat(smartDNSDisabledPath); !os.IsNotExist(err) {
+		t.Fatalf("already-enabled state must not create disabled marker, lstat err=%v", err)
+	}
+}
+
+func TestEnsureSmartDNSServiceStartedRollsBackFailedFirstEnable(t *testing.T) {
+	oldStart, oldStop, oldPath := smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	startErr := errors.New("simulated s6 start failure")
+	stopCalls := 0
+	smartDNSServiceStart = func() error { return startErr }
+	smartDNSServiceStop = func() error { stopCalls++; return nil }
+	t.Cleanup(func() {
+		smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath = oldStart, oldStop, oldPath
+	})
+
+	if err := ensureSmartDNSServiceStarted(false); !errors.Is(err, startErr) {
+		t.Fatalf("expected original start error, got %v", err)
+	}
+	if stopCalls != 1 {
+		t.Fatalf("failed first enable must request service stop, got %d calls", stopCalls)
+	}
+	if _, statErr := os.Lstat(smartDNSDisabledPath); statErr != nil {
+		t.Fatalf("failed first enable must restore persistent disabled marker, lstat err=%v", statErr)
 	}
 }

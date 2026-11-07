@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -91,7 +92,7 @@ func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 				done <- err
 			}()
 
-			got := probeSmartDNSDNSAt(conn.LocalAddr().String())
+			got := probeSmartDNSDNSAtType(conn.LocalAddr().String(), 1)
 			if got != tt.want {
 				t.Errorf("probeSmartDNSDNSAt() = %v, want %v", got, tt.want)
 			}
@@ -104,6 +105,146 @@ func TestProbeSmartDNSDNSAtRequiresSuccessfulAnswer(t *testing.T) {
 				t.Fatal("DNS test server did not finish")
 			}
 		})
+	}
+}
+
+func TestSmartDNSResponseRequiresRequestedAddressRecord(t *testing.T) {
+	makeResponse := func(rrType uint16, rdata []byte) []byte {
+		message := make([]byte, 12)
+		binary.BigEndian.PutUint16(message[0:2], 0x534d)
+		binary.BigEndian.PutUint16(message[2:4], 0x8180)
+		binary.BigEndian.PutUint16(message[4:6], 1)
+		binary.BigEndian.PutUint16(message[6:8], 1)
+		message = append(message, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+		message = append(message, 0, 28, 0, 1)
+		message = append(message, 0xc0, 0x0c)
+		record := make([]byte, 10)
+		binary.BigEndian.PutUint16(record[0:2], rrType)
+		binary.BigEndian.PutUint16(record[2:4], 1)
+		binary.BigEndian.PutUint32(record[4:8], 60)
+		binary.BigEndian.PutUint16(record[8:10], uint16(len(rdata)))
+		message = append(message, record...)
+		message = append(message, rdata...)
+		return message
+	}
+
+	t.Run("AAAA address record passes", func(t *testing.T) {
+		response := makeResponse(28, make([]byte, net.IPv6len))
+		if !smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("valid AAAA answer was rejected")
+		}
+	})
+	t.Run("CNAME only does not pass AAAA health", func(t *testing.T) {
+		response := makeResponse(5, []byte{0xc0, 0x0c})
+		if smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("CNAME-only response incorrectly passed AAAA health")
+		}
+	})
+	t.Run("wrong address family does not pass", func(t *testing.T) {
+		response := makeResponse(1, make([]byte, net.IPv4len))
+		if smartDNSResponseHasAnswer(response, 0x534d, 28) {
+			t.Fatal("A record incorrectly passed AAAA health")
+		}
+	})
+}
+
+func TestProbeSmartDNSDNSAtQueriesAAAAAfterA(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 2; i++ {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			query := make([]byte, 1500)
+			n, client, readErr := conn.ReadFromUDP(query)
+			if readErr != nil {
+				done <- readErr
+				return
+			}
+			qtype := binary.BigEndian.Uint16(query[n-4 : n-2])
+			response := append([]byte(nil), query[:n]...)
+			binary.BigEndian.PutUint16(response[2:4], 0x8180)
+			// Return a complete, valid A RR, but an empty NOERROR AAAA response.
+			if qtype == 1 {
+				binary.BigEndian.PutUint16(response[6:8], 1)
+				response = append(response, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+			} else {
+				binary.BigEndian.PutUint16(response[6:8], 0)
+			}
+			if _, writeErr := conn.WriteToUDP(response, client); writeErr != nil {
+				done <- writeErr
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	if probeSmartDNSDNSAt(conn.LocalAddr().String()) {
+		t.Fatal("A success must not hide an empty AAAA response")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProbeSmartDNSDNSTCPAtQueriesAAAAAfterA(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 2; i++ {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				done <- acceptErr
+				return
+			}
+			var size [2]byte
+			if _, readErr := io.ReadFull(conn, size[:]); readErr != nil {
+				conn.Close()
+				done <- readErr
+				return
+			}
+			query := make([]byte, int(binary.BigEndian.Uint16(size[:])))
+			if _, readErr := io.ReadFull(conn, query); readErr != nil {
+				conn.Close()
+				done <- readErr
+				return
+			}
+			qtype := binary.BigEndian.Uint16(query[len(query)-4 : len(query)-2])
+			binary.BigEndian.PutUint16(query[2:4], 0x8180)
+			if qtype == 1 {
+				binary.BigEndian.PutUint16(query[6:8], 1)
+				query = append(query, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+			} else {
+				binary.BigEndian.PutUint16(query[6:8], 0)
+			}
+			binary.BigEndian.PutUint16(size[:], uint16(len(query)))
+			_, writeErr := conn.Write(size[:])
+			if writeErr == nil {
+				_, writeErr = conn.Write(query)
+			}
+			conn.Close()
+			if writeErr != nil {
+				done <- writeErr
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
+		t.Fatal("A success must not hide an empty AAAA TCP response")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -132,7 +273,7 @@ func TestProbeSmartDNSDNSAtRejectsMismatchedTransactionID(t *testing.T) {
 		done <- err
 	}()
 
-	if probeSmartDNSDNSAt(conn.LocalAddr().String()) {
+	if probeSmartDNSDNSAtType(conn.LocalAddr().String(), 1) {
 		t.Fatal("probe accepted a response with a mismatched transaction ID")
 	}
 	if err := <-done; err != nil {
@@ -177,7 +318,7 @@ func TestProbeSmartDNSDNSTCPAt(t *testing.T) {
 				}
 				done <- err
 			}()
-			got := probeSmartDNSDNSTCPAt(listener.Addr().String())
+			got := probeSmartDNSDNSTCPAtType(listener.Addr().String(), 1)
 			if got != (answerCount > 0) {
 				t.Fatalf("probe = %v, want %v", got, answerCount > 0)
 			}
@@ -266,7 +407,7 @@ func TestRestoreSmartDNSConfigVerifiedRejectsUnrestoredContent(t *testing.T) {
 }
 
 func TestValidateSmartDNSConfigRestrictsPersistentCachePathsAndOptions(t *testing.T) {
-	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	valid := base + "cache-persist yes\ncache-file /data/smartdns.cache\ncache-checkpoint-time 3600\n"
 	if err := validateSmartDNSConfig([]byte(valid)); err != nil {
 		t.Fatalf("valid persistent cache config rejected: %v", err)
@@ -288,7 +429,7 @@ func TestValidateSmartDNSConfigRestrictsPersistentCachePathsAndOptions(t *testin
 }
 
 func TestValidateSmartDNSConfigRequiresEncryptedUpstream(t *testing.T) {
-	secure := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	secure := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n")
 	if err := validateSmartDNSConfig(secure); err != nil {
 		t.Fatalf("valid encrypted upstream rejected: %v", err)
 	}
@@ -307,14 +448,13 @@ func TestValidateSmartDNSConfigAcceptsDomesticDoTGroupAndRejectsUnapprovedResolv
 bind-tcp 127.0.0.1:6053
 bind 127.0.0.1:6054 -group china-dot
 bind-tcp 127.0.0.1:6054 -group china-dot
-server-tls 1.1.1.1:853 -host-name cloudflare-dns.com
-server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
-server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
+server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
 `)
 	if err := validateSmartDNSConfig(valid); err != nil {
 		t.Fatalf("valid domestic DoT group rejected: %v", err)
 	}
-	invalid := strings.Replace(string(valid), "223.5.5.5:853 -host-name dns.alidns.com", "9.9.9.9:853 -host-name dns.alidns.com", 1)
+	invalid := strings.Replace(string(valid), "[2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", "[2001:db8::53]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com", 1)
 	if err := validateSmartDNSConfig([]byte(invalid)); err == nil {
 		t.Fatal("unapproved resolver must not enter china-dot group")
 	}
@@ -329,10 +469,10 @@ func TestValidateSmartDNSConfigRejectsBootstrapDependentEncryptedUpstreams(t *te
 		name string
 		line string
 	}{
-		{"hostname endpoint", "server-tls dns.cloudflare.com:853 -host-name cloudflare-dns.com"},
+		{"hostname endpoint", "server-tls dns.cloudflare.com:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 		{"missing TLS name", "server-tls 1.1.1.1:853"},
-		{"invalid endpoint", "server-tls 1.1.1.1 -host-name cloudflare-dns.com"},
-		{"hostname DoH URL", "server-https https://dns.google/dns-query -host-name dns.google"},
+		{"invalid endpoint", "server-tls 1.1.1.1 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{"hostname DoH URL", "server-https https://dns.google/dns-query -host-name dns.google -tls-host-verify dns.google"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -346,9 +486,13 @@ func TestValidateSmartDNSConfigRejectsBootstrapDependentEncryptedUpstreams(t *te
 
 func TestValidateSmartDNSConfigAcceptsLiteralIPEncryptedUpstreams(t *testing.T) {
 	cases := []string{
-		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
-		"server-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com",
-		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google",
+		"server-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 	}
 	for _, upstream := range cases {
 		t.Run(upstream, func(t *testing.T) {
@@ -372,12 +516,12 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 	for _, want := range []string{
 		"bind 127.0.0.1:6053",
 		"bind-tcp 127.0.0.1:6053",
-		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
-		"server-tls 8.8.8.8:853 -host-name dns.google",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google",
 		"bind 127.0.0.1:6054 -group china-dot",
 		"bind-tcp 127.0.0.1:6054 -group china-dot",
-		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
-		"server-tls 1.12.12.12:853 -host-name dot.pub -tls-host-verify dot.pub -group china-dot -exclude-default-group",
+		"server-tls [2400:3200::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
+		"server-tls [2400:3200:baba::1]:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
 		"cache-persist yes",
 		"cache-file /data/smartdns.cache",
 		"cache-checkpoint-time 3600",
@@ -385,6 +529,9 @@ func TestBundledSmartDNSConfigUsesEncryptedUpstreams(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("bundled SmartDNS config missing %q", want)
 		}
+	}
+	for _, required := range []string{"server-tls 1.1.1.1:853", "server-tls 8.8.8.8:853", "server-tls 223.5.5.5:853", "server-tls 223.6.6.6:853", "server-tls 1.12.12.12:853", "server-tls 120.53.53.53:853"} {
+		if !strings.Contains(text, required) { t.Fatalf("dual-stack profile missing IPv4 DoT endpoint: %s", required) }
 	}
 	if strings.Contains(text, "server 223.5.5.5") || strings.Contains(text, "server 119.29.29.29") {
 		t.Fatal("bundled SmartDNS config must not contain plaintext DNS upstreams")
@@ -552,7 +699,7 @@ func TestProbeSmartDNSDNSTCPAtRejectsInvalidDNSResponses(t *testing.T) {
 				if _, err = conn.Write(size[:]); err == nil { _, err = conn.Write(query) }
 				done <- err
 			}()
-			if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
+			if probeSmartDNSDNSTCPAtType(listener.Addr().String(), 1) {
 				t.Fatal("probe accepted an invalid DNS response")
 			}
 			if err := <-done; err != nil { t.Fatal(err) }
@@ -596,7 +743,7 @@ func TestProbeSmartDNSDNSTCPAtRejectsMismatchedTransactionID(t *testing.T) {
 		done <- err
 	}()
 
-	if probeSmartDNSDNSTCPAt(listener.Addr().String()) {
+	if probeSmartDNSDNSTCPAtType(listener.Addr().String(), 1) {
 		t.Fatal("probe accepted a response with a mismatched transaction ID")
 	}
 	if err := <-done; err != nil {
@@ -667,7 +814,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n")
 	configHash := sha256.Sum256(bytes.TrimSpace(config))
 	good := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
@@ -689,6 +836,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		assert(t, status, "smartdns_available", true)
 		assert(t, status, "smartdns_running", true)
 		assert(t, status, "smartdns_dns_healthy", true)
+		assert(t, status, "smartdns_domestic_listener", false)
 		assert(t, status, "smartdns_version", "SmartDNS 1.2026")
 		assert(t, status, "smartdns_config_sha256", hex.EncodeToString(configHash[:]))
 		assert(t, status, "smartdns_last_error", "")
@@ -775,7 +923,7 @@ func TestCollectSmartDNSStatusWithDependencies(t *testing.T) {
 		collectSmartDNSStatusWithDependencies(status, deps)
 		assert(t, status, "smartdns_running", true)
 		assert(t, status, "smartdns_dns_healthy", false)
-		assert(t, status, "smartdns_last_error", "SmartDNS UDP/TCP DNS 查询探测失败")
+		assert(t, status, "smartdns_last_error", "SmartDNS A/AAAA UDP/TCP DNS 查询探测失败")
 	})
 
 	t.Run("stopped process is restarted by s6 before controller fallback", func(t *testing.T) {
@@ -898,7 +1046,7 @@ func TestSafeSmartDNSDiagnosticTruncatesAtUTF8Boundary(t *testing.T) {
 
 func TestReadSmartDNSConfigAtRejectsSymlinksAndInvalidFiles(t *testing.T) {
 	dir := t.TempDir()
-	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n")
+	valid := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n")
 	target := filepath.Join(dir, "target.conf")
 	if err := os.WriteFile(target, valid, 0600); err != nil {
 		t.Fatal(err)
@@ -1081,7 +1229,7 @@ func TestCollectSmartDNSStatusReportsFallbackDuringRestartCooldown(t *testing.T)
 	restartCalls := 0
 	deps := smartDNSStatusDependencies{
 		binaryInfo: func() (os.FileInfo, error) { return info, nil },
-		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"), nil },
+		readConfig: func(string) ([]byte, error) { return []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"), nil },
 		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
 		process: func() ([]byte, error) { return []byte("1234"), nil },
 		probe: func() bool { return false },
@@ -1108,17 +1256,21 @@ func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) 
 		name string
 		line string
 	}{
-		{name: "zero DoT port", line: "server-tls 1.1.1.1:0 -host-name cloudflare-dns.com"},
-		{name: "out of range DoT port", line: "server-tls 1.1.1.1:65536 -host-name cloudflare-dns.com"},
-		{name: "nonnumeric DoT port", line: "server-tls 1.1.1.1:https -host-name cloudflare-dns.com"},
+		{name: "zero DoT port", line: "server-tls 1.1.1.1:0 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "out of range DoT port", line: "server-tls 1.1.1.1:65536 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "nonnumeric DoT port", line: "server-tls 1.1.1.1:https -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 		{name: "missing TLS name value", line: "server-tls 1.1.1.1:853 -host-name"},
 		{name: "TLS name parsed as option", line: "server-tls 1.1.1.1:853 -host-name -group"},
-		{name: "invalid TLS name", line: "server-tls 1.1.1.1:853 -host-name bad_name.example"},
-		{name: "duplicate TLS name", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -host-name dns.google"},
-		{name: "DoH userinfo", line: "server-https https://user:pass@1.1.1.1/dns-query -host-name cloudflare-dns.com"},
-		{name: "DoH query string", line: "server-https https://1.1.1.1/dns-query?token=secret -host-name cloudflare-dns.com"},
-		{name: "DoH fragment", line: "server-https https://1.1.1.1/dns-query#fragment -host-name cloudflare-dns.com"},
-		{name: "invalid DoH port", line: "server-https https://1.1.1.1:70000/dns-query -host-name cloudflare-dns.com"},
+		{name: "invalid TLS name", line: "server-tls 1.1.1.1:853 -host-name bad -tls-host-verify bad_name.example"},
+		{name: "duplicate TLS name", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -host-name dns.google -tls-host-verify dns.google"},
+		{name: "missing certificate hostname verification", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com"},
+		{name: "certificate hostname mismatch", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify dns.google"},
+		{name: "duplicate certificate hostname verification", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -tls-host-verify dns.google"},
+		{name: "missing certificate hostname value", line: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify"},
+		{name: "DoH userinfo", line: "server-https https://user:pass@1.1.1.1/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "DoH query string", line: "server-https https://1.1.1.1/dns-query?token=secret -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "DoH fragment", line: "server-https https://1.1.1.1/dns-query#fragment -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
+		{name: "invalid DoH port", line: "server-https https://1.1.1.1:70000/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1132,9 +1284,9 @@ func TestValidateSmartDNSUpstreamRejectsMalformedPortsAndTLSNames(t *testing.T) 
 
 func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
 	cases := []string{
-		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com",
-		"server-https https://1.1.1.1:443/dns-query -host-name dns.google",
-		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
+		"server-https https://1.1.1.1:443/dns-query -host-name dns.google -tls-host-verify dns.google",
+		"server-quic [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com",
 	}
 	for _, line := range cases {
 		t.Run(line, func(t *testing.T) {
@@ -1147,7 +1299,7 @@ func TestValidateSmartDNSUpstreamAcceptsValidTLSNamesAndPorts(t *testing.T) {
 }
 
 func TestValidateSmartDNSConfigFailsClosedForPerClientRoutingDirectives(t *testing.T) {
-	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com\n"
+	base := "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
 	cases := []struct {
 		name string
 		line string
@@ -1230,5 +1382,158 @@ func TestBackupSmartDNSConfigRemovesNewSidecarAfterPostRenameSyncFailure(t *test
 	}
 	if _, statErr := os.Lstat(backupPath); !os.IsNotExist(statErr) {
 		t.Fatalf("failed first-install snapshot left sidecar behind, stat error=%v", statErr)
+	}
+}
+
+
+func TestPersistSmartDNSDisabledMarkerIsDurableAndReversible(t *testing.T) {
+	oldPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldPath })
+	if !smartDNSRuntimeEnabled() { t.Fatal("SmartDNS should default to enabled when no disable marker exists") }
+	if err := persistSmartDNSDisabled(true); err != nil { t.Fatalf("persist disabled state: %v", err) }
+	if smartDNSRuntimeEnabled() { t.Fatal("disable marker did not disable SmartDNS runtime state") }
+	if err := persistSmartDNSDisabled(false); err != nil { t.Fatalf("clear disabled state: %v", err) }
+	if !smartDNSRuntimeEnabled() { t.Fatal("clearing disable marker did not restore enabled state") }
+}
+
+func TestCollectSmartDNSStatusDoesNotRestartExplicitlyDisabledService(t *testing.T) {
+	config := []byte(`bind 127.0.0.1:6053
+bind-tcp 127.0.0.1:6053
+bind 127.0.0.1:6054 -group china-dot
+bind-tcp 127.0.0.1:6054 -group china-dot
+server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com
+server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google
+server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group
+dualstack-ip-selection no
+dualstack-ip-selection-threshold 10
+dualstack-ip-allow-force-AAAA yes
+`)
+	bin := filepath.Join(t.TempDir(), "smartdns")
+	if err := os.WriteFile(bin, []byte("test"), 0700); err != nil { t.Fatal(err) }
+	binaryInfo, err := os.Stat(bin)
+	if err != nil { t.Fatal(err) }
+	restarts := 0
+	status := map[string]any{}
+	collectSmartDNSStatusWithDependencies(status, smartDNSStatusDependencies{
+		enabled: func() bool { return false },
+		binaryInfo: func() (os.FileInfo, error) { return binaryInfo, nil },
+		readConfig: func(string) ([]byte, error) { return config, nil },
+		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
+		process: func() ([]byte, error) { return []byte("1234"), nil },
+		probe: func() bool { t.Fatal("disabled SmartDNS must not be probed"); return false },
+		restart: func() error { restarts++; return nil },
+		waitHealthy: func(time.Duration) bool { return false },
+	})
+	if status["smartdns_available"] != true || status["smartdns_control_supported"] != true || status["smartdns_enabled"] != false {
+		t.Fatalf("unexpected disabled capability state: %#v", status)
+	}
+	if status["smartdns_running"] != true || status["smartdns_dns_healthy"] != false {
+		t.Fatalf("running-but-disabled service should not be reported healthy: %#v", status)
+	}
+	if restarts != 0 { t.Fatalf("disabled SmartDNS was auto-restarted %d times", restarts) }
+}
+
+
+func TestProbeMihomoDNSFallbackUsesLocalListenerAndAddressFamilies(t *testing.T) {
+	dir := t.TempDir()
+	dig := filepath.Join(dir, "dig")
+	script := `#!/bin/sh
+case "$*" in
+  *" AAAA") echo "2001:db8::1" ;;
+  *" A") echo "192.0.2.10" ;;
+  *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(dig, []byte(script), 0700); err != nil { t.Fatal(err) }
+	t.Setenv("PATH", dir)
+	config := []byte("dns:\n  listen: 127.0.0.1:5353\n  ipv6: true\n")
+	if !probeMihomoDNSFallback(config) { t.Fatal("valid local A/AAAA fallback probes should pass") }
+	if probeMihomoDNSFallback([]byte("dns:\n  listen: 8.8.8.8:53\n  ipv6: true\n")) {
+		t.Fatal("remote DNS listener must not be treated as a local fallback resolver")
+	}
+	if probeMihomoDNSFallback([]byte("dns:\n  ipv6: true\n")) {
+		t.Fatal("missing local DNS listener must fail closed")
+	}
+}
+
+
+func TestValidateAgentSmartDNSDNSModeRequiresSafeListenerReferences(t *testing.T) {
+	enabled := []byte(`dns:
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    geosite:cn: 127.0.0.1:6054
+`)
+	if err := validateAgentSmartDNSDNSMode(enabled, true); err != nil {
+		t.Fatalf("valid enabled DNS config rejected: %v", err)
+	}
+	fallback := []byte(`dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`)
+	if err := validateAgentSmartDNSDNSMode(fallback, false); err != nil {
+		t.Fatalf("valid fallback DNS config rejected: %v", err)
+	}
+	if err := validateAgentSmartDNSDNSMode(enabled, false); err == nil {
+		t.Fatal("disabled mode must reject any remaining SmartDNS loopback references")
+	}
+	ipv6Domestic := []byte(`dns:
+  nameserver:
+    - https://dns.cloudflare.com/dns-query
+  nameserver-policy:
+    geosite:cn:
+      - "[::1]:6054"
+`)
+	if err := validateAgentSmartDNSDNSMode(ipv6Domestic, false); err == nil {
+		t.Fatal("disabled mode must reject the IPv6 domestic SmartDNS listener too")
+	}
+	missingDomestic := []byte(`dns:
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    geosite:cn:
+      - https://dns.alidns.com/dns-query
+`)
+	if err := validateAgentSmartDNSDNSMode(missingDomestic, true); err == nil {
+		t.Fatal("enabled mode must require the domestic SmartDNS listener")
+	}
+}
+
+
+func TestProbeMihomoDNSFallbackRequiresUDPAndTCPForAllEnabledFamilies(t *testing.T) {
+	config := []byte(`dns:
+  listen: 127.0.0.1:1053
+  ipv6: true
+`)
+	calls := make([]string, 0, 6)
+	run := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		if strings.Contains(joined, " AAAA") { return []byte("2001:db8::10\n"), nil }
+		return []byte("203.0.113.10\n"), nil
+	}
+	if !probeMihomoDNSFallbackWithDig(config, run) {
+		t.Fatal("valid UDP/TCP A and AAAA fallback probes should pass")
+	}
+	if len(calls) != 6 { t.Fatalf("probe count = %d, want 6: %#v", len(calls), calls) }
+	udp, tcp := 0, 0
+	for _, call := range calls {
+		if strings.Contains(call, "+tcp") { tcp++ } else { udp++ }
+	}
+	if udp != 3 || tcp != 3 { t.Fatalf("transport probe counts UDP=%d TCP=%d, want 3 each", udp, tcp) }
+
+	failedTCP := func(args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "+tcp") { return nil, errors.New("TCP unavailable") }
+		return []byte("203.0.113.10\n"), nil
+	}
+	if probeMihomoDNSFallbackWithDig([]byte(`dns:
+  listen: 127.0.0.1:1053
+  ipv6: false
+`), failedTCP) {
+		t.Fatal("fallback must not pass when TCP DNS is unavailable")
 	}
 }

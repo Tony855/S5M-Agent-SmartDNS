@@ -73,8 +73,13 @@ func OpenStore(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("连接 SQLite 数据库失败: %w", err)
+	}
 	if err := s.migrate(); err != nil {
-		return nil, err
+		_ = db.Close()
+		return nil, fmt.Errorf("数据库迁移失败: %w", err)
 	}
 	return s, nil
 }
@@ -135,9 +140,13 @@ CREATE INDEX IF NOT EXISTS idx_cv_version ON config_versions(version DESC);
 	}
 	// 安全补全旧表字段
 	var count int
-	s.db.QueryRow("SELECT count(*) FROM pragma_table_info('proxies') WHERE name='machine_code'").Scan(&count)
+	if err := s.db.QueryRow("SELECT count(*) FROM pragma_table_info('proxies') WHERE name='machine_code'").Scan(&count); err != nil {
+		return fmt.Errorf("检查 proxies.machine_code 字段失败: %w", err)
+	}
 	if count == 0 {
-		s.db.Exec("ALTER TABLE proxies ADD COLUMN machine_code TEXT NOT NULL DEFAULT ''")
+		if _, err := s.db.Exec("ALTER TABLE proxies ADD COLUMN machine_code TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("补全 proxies.machine_code 字段失败: %w", err)
+		}
 	}
 
 	// Routing policy belongs to a machine, never to an individual proxy record.
@@ -163,12 +172,27 @@ CREATE INDEX IF NOT EXISTS idx_cv_version ON config_versions(version DESC);
 	if _, err := s.db.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('tun_enable', 'true')`); err != nil { return fmt.Errorf("初始化 TUN 默认设置失败: %w", err) }
 	// 首次启动时自动生成随机 Agent 注册密钥（不再硬编码默认值）
 	var atCount int
-	s.db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='agent_token' AND value != ''`).Scan(&atCount)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='agent_token' AND trim(value) != ''`).Scan(&atCount); err != nil {
+		return fmt.Errorf("检查 Agent 注册密钥失败: %w", err)
+	}
 	if atCount == 0 {
 		buf := make([]byte, 16)
-		if _, err := rand.Read(buf); err == nil {
-			token := fmt.Sprintf("s5m-%x", buf)
-			s.db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('agent_token', ?)`, token)
+		if _, err := rand.Read(buf); err != nil {
+			return fmt.Errorf("生成 Agent 注册密钥失败: %w", err)
+		}
+		token := fmt.Sprintf("s5m-%x", buf)
+		if _, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES ('agent_token', ?)
+			ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE trim(settings.value) = ''`, token); err != nil {
+			return fmt.Errorf("保存 Agent 注册密钥失败: %w", err)
+		}
+		// Another initializer may have populated the key first. Never overwrite
+		// a non-empty operator-managed token; verify that a usable value exists.
+		var savedToken string
+		if err := s.db.QueryRow(`SELECT value FROM settings WHERE key='agent_token'`).Scan(&savedToken); err != nil {
+			return fmt.Errorf("验证 Agent 注册密钥失败: %w", err)
+		}
+		if strings.TrimSpace(savedToken) == "" {
+			return fmt.Errorf("Agent 注册密钥初始化后仍为空")
 		}
 	}
 	return nil
@@ -290,6 +314,11 @@ func (s *Store) AckAgentCommand(machineCode, commandID, status, message string, 
 	return s.AckAgentCommandWithConfig(machineCode, commandID, status, message, "", updatedAt)
 }
 
+func pendingString(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
+}
+
 func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, message, config string, updatedAt int64) (duplicate bool, matched bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -307,21 +336,32 @@ func (s *Store) AckAgentCommandWithConfig(machineCode, commandID, status, messag
 	} else if err != nil {
 		return false, false, err
 	}
-	var pending map[string]string
-	if raw != "" && json.Unmarshal([]byte(raw), &pending) == nil && pending["id"] == commandID {
-		result, marshalErr := json.Marshal(map[string]any{
-			"id": commandID, "type": pending["type"], "status": status,
+	var pending map[string]any
+	if raw != "" && json.Unmarshal([]byte(raw), &pending) == nil && pendingString(pending, "id") == commandID {
+		pendingType := pendingString(pending, "type")
+		resultFields := map[string]any{
+			"id": commandID, "type": pendingType, "status": status,
 			"message": message, "updated_at": updatedAt,
-		})
-		if marshalErr != nil {
-			return false, false, marshalErr
 		}
-		if (pending["type"] == "read_smartdns_config" || pending["type"] == "configure_smartdns") && status == "success" {
+		if pendingType == "set_smartdns_enabled" && status == "success" {
+			enabled, ok := pending["enabled"].(bool)
+			if !ok { return false, false, fmt.Errorf("invalid SmartDNS enabled command state") }
+			resultFields["enabled"] = enabled
+			value := "false"
+			if enabled { value = "true" }
+			if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "smartdns_enabled_"+machineCode, value); err != nil {
+				return false, false, err
+			}
+		}
+		result, marshalErr := json.Marshal(resultFields)
+		if marshalErr != nil { return false, false, marshalErr }
+
+		if (pendingType == "read_smartdns_config" || pendingType == "configure_smartdns") && status == "success" {
 			// Read commands return the on-disk config; configure commands carry
 			// the exact candidate in the pending record. Persist only after success.
 			savedConfig := config
-			if pending["type"] == "configure_smartdns" {
-				savedConfig = pending["config"]
+			if pendingType == "configure_smartdns" {
+				savedConfig = pendingString(pending, "config")
 			}
 			if len(savedConfig) == 0 || len(savedConfig) > 8<<10 {
 				return false, false, fmt.Errorf("invalid SmartDNS config payload")
@@ -385,8 +425,18 @@ func (s *Store) UserByUsername(name string) (*User, error) {
 }
 
 func (s *Store) UpdatePassword(id int64, hash string) error {
-	_, err := s.db.Exec(`UPDATE users SET password_hash=? WHERE id=?`, hash, id)
-	return err
+	result, err := s.db.Exec(`UPDATE users SET password_hash=? WHERE id=?`, hash, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ListInstances() ([]Instance, error) {
@@ -403,6 +453,9 @@ func (s *Store) ListInstances() ([]Instance, error) {
 		}
 		out = append(out, i)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历实例记录失败: %w", err)
+	}
 	return out, nil
 }
 
@@ -411,13 +464,27 @@ func (s *Store) CreateInstance(i *Instance) error {
 	if err != nil {
 		return err
 	}
-	i.ID, _ = res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("读取新建实例 ID 失败: %w", err)
+	}
+	i.ID = id
 	return nil
 }
 
 func (s *Store) DeleteInstance(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM instances WHERE id=?`, id)
-	return err
+	result, err := s.db.Exec(`DELETE FROM instances WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // GetMachineProxyMode returns the persisted routing policy for one machine.
@@ -466,8 +533,16 @@ func (s *Store) ListProxies() ([]Proxy, error) {
 		}
 		p.Enabled = en == 1
 		p.Extra = map[string]any{}
-		_ = json.Unmarshal([]byte(extra), &p.Extra)
+		if err := json.Unmarshal([]byte(extra), &p.Extra); err != nil {
+			return nil, fmt.Errorf("解析代理 %d 的扩展配置失败: %w", p.ID, err)
+		}
+		if p.Extra == nil {
+			p.Extra = map[string]any{}
+		}
 		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历代理记录失败: %w", err)
 	}
 	return out, nil
 }
@@ -483,19 +558,31 @@ func (s *Store) GetProxy(id int64) (*Proxy, error) {
 	}
 	p.Enabled = en == 1
 	p.Extra = map[string]any{}
-	_ = json.Unmarshal([]byte(extra), &p.Extra)
+	if err := json.Unmarshal([]byte(extra), &p.Extra); err != nil {
+		return nil, fmt.Errorf("解析代理 %d 的扩展配置失败: %w", p.ID, err)
+	}
+	if p.Extra == nil {
+		p.Extra = map[string]any{}
+	}
 	return &p, nil
 }
 
 func (s *Store) CreateProxy(p *Proxy) error {
 	// Legacy mode is retained in the DB only for one-time migration compatibility.
 	p.Mode = "rule"
-	extra, _ := json.Marshal(p.Extra)
+	extra, err := json.Marshal(p.Extra)
+	if err != nil {
+		return fmt.Errorf("序列化代理扩展配置失败: %w", err)
+	}
 	res, err := s.db.Exec(`INSERT INTO proxies(name,mode,type,server,port,source_cidr,machine_code,config_json,enabled) VALUES(?,?,?,?,?,?,?,?,?)`, p.Name, p.Mode, p.Type, p.Server, p.Port, p.SourceCIDR, p.MachineCode, string(extra), b2i(p.Enabled))
 	if err != nil {
 		return err
 	}
-	p.ID, _ = res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("读取新建代理 ID 失败: %w", err)
+	}
+	p.ID = id
 	return nil
 }
 
@@ -630,12 +717,19 @@ func (s *Store) InsertVersion(v int, sha, yml, status string) error {
 }
 
 func (s *Store) UpdateVersionStatus(version int, status string) error {
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		`UPDATE config_versions SET status=? WHERE version=?`,
 		status, version,
 	)
 	if err != nil {
 		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
 	}
 	return nil
 }
@@ -653,6 +747,9 @@ func (s *Store) ListVersions(limit int) ([]ConfigVersion, error) {
 			return nil, err
 		}
 		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历配置版本记录失败: %w", err)
 	}
 	return out, nil
 }
@@ -685,7 +782,20 @@ func (s *Store) DeleteAgentBinding(machineCode string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, key := range []string{"agent_machine_" + machineCode, "agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "smartdns_config_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
+	// The credential row is the authoritative binding. Do not report a
+	// successful revocation for an unknown machine code.
+	credentialResult, err := tx.Exec(`DELETE FROM settings WHERE key=?`, "agent_machine_"+machineCode)
+	if err != nil {
+		return err
+	}
+	credentialRows, err := credentialResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if credentialRows == 0 {
+		return sql.ErrNoRows
+	}
+	for _, key := range []string{"agent_lastseen_" + machineCode, "agent_status_" + machineCode, "agent_command_" + machineCode, "agent_command_result_" + machineCode, "smartdns_config_" + machineCode, "smartdns_enabled_" + machineCode, "agent_secret_" + machineCode, "agent_mihomo_secret_" + machineCode} {
 		if _, err := tx.Exec(`DELETE FROM settings WHERE key=?`, key); err != nil {
 			return err
 		}

@@ -1,0 +1,50 @@
+# CI-only fixture. It permits only SmartDNS DoT sockets to use DIRECT so
+# resolver integration can be tested without real proxy credentials. Production
+# defaults and generated configs remain fail-closed (MATCH,REJECT) and route
+# SmartDNS through an explicitly selected proxy when one is configured.
+allow-lan: true
+mode: rule
+log-level: debug
+find-process-mode: strict
+ipv6: true
+external-controller: 127.0.0.1:8088
+secret: "ci-only-not-a-production-secret"
+dns:
+  enable: true
+  ipv6: true
+  listen: 127.0.0.1:5353
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-range6: fdfe:dcba:9876::1/64
+  nameserver:
+    - 127.0.0.1:6053
+  nameserver-policy:
+    "geosite:cn": 127.0.0.1:6054
+# Synthetic proxy endpoints exercise route-exclusion behavior without
+# requiring real credentials or making outbound proxy connections.
+proxies:
+  - name: route-exclusion-v4
+    type: socks5
+    server: 203.0.113.10
+    port: 1080
+  - name: route-exclusion-v6
+    type: socks5
+    server: "fd42:534d:5:1::20"
+    port: 1080
+proxy-groups: []
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - PROCESS-NAME,smartdns,DIRECT
+  - MATCH,REJECT
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - "any:53"
+    - "tcp://any:53"
+  # Proxy ingress endpoints must bypass TUN to prevent recursive routing.
+  route-exclude-address:
+    - 203.0.113.10/32
+    - fd42:534d:5:1::20/128

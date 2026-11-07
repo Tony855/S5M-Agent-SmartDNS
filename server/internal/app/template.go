@@ -26,7 +26,7 @@ const defaultMihomoTemplate = `# 透明代理：不开放 HTTP/SOCKS 显式代�
 allow-lan: false
 mode: rule
 log-level: info
-ipv6: false
+ipv6: true
 
 # 控制接口
 external-controller: 127.0.0.1:8088
@@ -40,9 +40,11 @@ profile:
 # DNS 设置
 dns:
   enable: true
+  ipv6: true
   listen: 127.0.0.1:5353
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
+  fake-ip-range6: fdfe:dcba:9876::1/64
   fake-ip-filter:
     - "*.lan"
     - "+.v2net.cc"
@@ -137,10 +139,25 @@ func hashConfig(yml string) string {
 }
 
 func (a *App) handleGetMihomoTemplate(w http.ResponseWriter, r *http.Request) {
-	draft, _ := a.store.GetSetting("mihomo_template_draft")
-	currentRaw, _ := a.store.GetSetting("mihomo_template_current_version")
+	draft, err := a.store.GetSetting("mihomo_template_draft")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取模板草稿失败")
+		return
+	}
+	currentRaw, err := a.store.GetSetting("mihomo_template_current_version")
+	if err != nil && err != sql.ErrNoRows {
+		writeErr(w, http.StatusInternalServerError, "读取当前模板版本失败")
+		return
+	}
 	current := 0
-	fmt.Sscanf(currentRaw, "%d", &current)
+	if strings.TrimSpace(currentRaw) != "" {
+		parsed, parseErr := strconv.Atoi(strings.TrimSpace(currentRaw))
+		if parseErr != nil || parsed < 0 {
+			writeErr(w, http.StatusInternalServerError, "当前模板版本记录无效")
+			return
+		}
+		current = parsed
+	}
 	rows, err := a.store.db.Query("SELECT version, sha256, note, created_at FROM mihomo_template_versions ORDER BY version DESC")
 	if err != nil {
 		writeErr(w, 500, "读取模板版本失败")
@@ -187,11 +204,17 @@ func (a *App) handleSaveMihomoTemplateDraft(w http.ResponseWriter, r *http.Reque
 }
 
 func (a *App) handlePublishMihomoTemplate(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	var in struct {
 		Note string `json:"note"`
 	}
 	if r.Body != nil {
-		_ = decodeLimited(r, 16<<10, "16 KiB", &in)
+		if err := decodeLimited(r, 16<<10, "16 KiB", &in); err != nil {
+			writeErr(w, http.StatusBadRequest, "发布请求 JSON 无效或超过 16 KiB")
+			return
+		}
 	}
 	draft, err := a.store.GetSetting("mihomo_template_draft")
 	if err != nil || strings.TrimSpace(draft) == "" {
@@ -209,7 +232,10 @@ func (a *App) handlePublishMihomoTemplate(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback()
 	var current int
-	_ = tx.QueryRow("SELECT COALESCE(MAX(version),0) FROM mihomo_template_versions").Scan(&current)
+	if err := tx.QueryRow("SELECT COALESCE(MAX(version),0) FROM mihomo_template_versions").Scan(&current); err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取当前模板版本失败")
+		return
+	}
 	next := current + 1
 	created := time.Now().UTC().Format(time.RFC3339)
 	if _, err = tx.Exec("INSERT INTO mihomo_template_versions(version,yaml_text,sha256,note,created_at) VALUES(?,?,?,?,?)", next, draft, hashConfig(draft), strings.TrimSpace(in.Note), created); err != nil {
@@ -229,6 +255,9 @@ func (a *App) handlePublishMihomoTemplate(w http.ResponseWriter, r *http.Request
 
 // handleDeleteMihomoTemplateVersion removes only an unused historical template version.
 func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	version, err := strconv.Atoi(strings.TrimSpace(r.PathValue("version")))
 	if err != nil || version < 1 {
 		writeErr(w, http.StatusBadRequest, "模板版本号无效")
@@ -288,6 +317,8 @@ func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.R
 		return
 	}
 	boundNodes := make([]string, 0)
+	orphanBindings := make([]string, 0)
+	globalToken := strings.TrimSpace(settings["agent_token"])
 	for rows.Next() {
 		var machineCode string
 		if err := rows.Scan(&machineCode); err != nil {
@@ -299,19 +330,12 @@ func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.R
 		// dedicated Agent credential. Deleted/revoked machines may leave legacy
 		// rows behind from older versions; remove those orphan bindings safely.
 		token := strings.TrimSpace(settings["agent_machine_"+machineCode])
-		globalToken := strings.TrimSpace(settings["agent_token"])
 		// Only infer a deleted/revoked machine when the server has a configured
 		// global Agent token. In minimal test/legacy databases without that
 		// setting, missing per-machine credentials are not enough to prove that
 		// a binding is orphaned, so retain the safe blocking behavior.
 		if globalToken != "" && (token == "" || token == globalToken) {
-			if _, err := tx.ExecContext(r.Context(),
-				"DELETE FROM node_template_bindings WHERE machine_code=? AND source='template' AND template_version=?",
-				machineCode, version); err != nil {
-				rows.Close()
-				writeErr(w, http.StatusInternalServerError, "清理已删除节点的遗留模板绑定失败")
-				return
-			}
+			orphanBindings = append(orphanBindings, machineCode)
 			continue
 		}
 		boundNodes = append(boundNodes, machineCode)
@@ -321,7 +345,21 @@ func (a *App) handleDeleteMihomoTemplateVersion(w http.ResponseWriter, r *http.R
 		writeErr(w, http.StatusInternalServerError, "读取节点模板绑定失败")
 		return
 	}
-	rows.Close()
+	if err := rows.Close(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "关闭节点模板绑定游标失败")
+		return
+	}
+	// Finish reading and close the cursor before modifying the table it queried.
+	// This avoids depending on SQLite behavior for writes while a read cursor on
+	// the same table is still active inside the transaction.
+	for _, machineCode := range orphanBindings {
+		if _, err := tx.ExecContext(r.Context(),
+			"DELETE FROM node_template_bindings WHERE machine_code=? AND source='template' AND template_version=?",
+			machineCode, version); err != nil {
+			writeErr(w, http.StatusInternalServerError, "清理已删除节点的遗留模板绑定失败")
+			return
+		}
+	}
 	if len(boundNodes) > 0 {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":       fmt.Sprintf("模板 v%d 仍被 %d 个节点绑定，不能删除", version, len(boundNodes)),
@@ -360,7 +398,14 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	current := 0
-	fmt.Sscanf(settings["mihomo_template_current_version"], "%d", &current)
+	if raw := strings.TrimSpace(settings["mihomo_template_current_version"]); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 0 {
+			writeErr(w, http.StatusInternalServerError, "当前模板版本记录无效")
+			return
+		}
+		current = parsed
+	}
 	rows, err := a.store.db.Query("SELECT machine_code, template_version, config_sha256, source, updated_at FROM node_template_bindings")
 	if err != nil {
 		writeErr(w, 500, "读取节点模板状态失败")
@@ -393,6 +438,10 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 		}
 		bindings[s.MachineCode] = s
 	}
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取节点模板状态失败")
+		return
+	}
 	codes := make([]string, 0)
 	for key, value := range settings {
 		if strings.HasPrefix(key, "agent_machine_") && value != "" && value != settings["agent_token"] {
@@ -408,7 +457,12 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 		}
 		// Compare the stored configuration hash to identify manual edits after template application.
 		if s.Source != "untracked" && s.Source != "independent" {
-			if cfg, e := a.store.GetNodeConfig(code); e == nil && cfg != nil && hashConfig(cfg.YAML) != s.ConfigSHA256 {
+			cfg, configErr := a.store.GetNodeConfig(code)
+			if configErr != nil {
+				writeErr(w, http.StatusInternalServerError, "读取节点配置以检查模板偏差失败")
+				return
+			}
+			if cfg == nil || hashConfig(cfg.YAML) != s.ConfigSHA256 {
 				s.Status = "drifted"
 			}
 		}
@@ -418,6 +472,9 @@ func (a *App) handleGetNodeTemplateStatus(w http.ResponseWriter, r *http.Request
 }
 
 func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	var in struct {
 		MachineCode string `json:"machine_code"`
 		Version     int    `json:"version"`
@@ -446,54 +503,61 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 404, "节点未授权")
 		return
 	}
-	var template string
-	if err := a.store.db.QueryRow("SELECT yaml_text FROM mihomo_template_versions WHERE version=?", in.Version).Scan(&template); err != nil {
-		if err == sql.ErrNoRows {
-			writeErr(w, 404, "模板版本不存在")
-		} else {
-			writeErr(w, 500, "读取模板版本失败")
-		}
-		return
-	}
-	// Normalize every applied node template to transparent-only listeners before saving.
-	normalizedTemplate, normalizeErr := normalizeAgentProxyConfig(template)
-	if normalizeErr != nil {
-		writeErr(w, 400, "模板不能应用: "+normalizeErr.Error())
-		return
-	}
-	template = normalizedTemplate
-	if err := validateMihomoTemplate(template); err != nil {
-		writeErr(w, 400, "模板不能应用: "+err.Error())
-		return
-	}
-	var cfg map[string]any
-	if err := yaml.Unmarshal([]byte(template), &cfg); err != nil {
-		writeErr(w, 400, "模板 YAML 无效")
-		return
-	}
-	if secret, ok := cfg["secret"].(string); !ok || strings.TrimSpace(secret) == "" {
-		writeErr(w, 400, "应用到节点的完整配置必须包含非空 secret")
-		return
-	}
-	if _, ok := cfg["tun"]; !ok {
-		writeErr(w, 400, "应用到节点的完整配置必须包含 tun 配置块")
-		return
-	}
-	if _, ok := cfg["dns"]; !ok {
-		writeErr(w, 400, "应用到节点的完整配置必须包含 dns 配置块")
-		return
-	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		writeErr(w, 500, "开始应用模板事务失败")
 		return
 	}
 	defer tx.Rollback()
+	// Read the version inside the same transaction as the node write. This
+	// prevents a concurrent version deletion from racing a successful apply.
+	var template string
+	if err := tx.QueryRow("SELECT yaml_text FROM mihomo_template_versions WHERE version=?", in.Version).Scan(&template); err != nil {
+		if err == sql.ErrNoRows {
+			writeErr(w, http.StatusNotFound, "模板版本不存在")
+		} else {
+			writeErr(w, http.StatusInternalServerError, "读取模板版本失败")
+		}
+		return
+	}
+	normalizedTemplate, normalizeErr := normalizeAgentProxyConfig(template)
+	if normalizeErr != nil {
+		writeErr(w, http.StatusBadRequest, "模板不能应用: "+normalizeErr.Error())
+		return
+	}
+	template = normalizedTemplate
+	if err := validateMihomoTemplate(template); err != nil {
+		writeErr(w, http.StatusBadRequest, "模板不能应用: "+err.Error())
+		return
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(template), &cfg); err != nil {
+		writeErr(w, http.StatusBadRequest, "模板 YAML 无效")
+		return
+	}
+	if secret, ok := cfg["secret"].(string); !ok || strings.TrimSpace(secret) == "" {
+		writeErr(w, http.StatusBadRequest, "应用到节点的完整配置必须包含非空 secret")
+		return
+	}
+	if _, ok := cfg["tun"]; !ok {
+		writeErr(w, http.StatusBadRequest, "应用到节点的完整配置必须包含 tun 配置块")
+		return
+	}
+	if _, ok := cfg["dns"]; !ok {
+		writeErr(w, http.StatusBadRequest, "应用到节点的完整配置必须包含 dns 配置块")
+		return
+	}
 	var oldYAML string
-	_ = tx.QueryRow("SELECT yaml_text FROM node_configs WHERE machine_code=?", code).Scan(&oldYAML)
+	if err := tx.QueryRow("SELECT yaml_text FROM node_configs WHERE machine_code=?", code).Scan(&oldYAML); err != nil && err != sql.ErrNoRows {
+		writeErr(w, http.StatusInternalServerError, "读取原节点配置失败")
+		return
+	}
 	var oldVersion int
 	var oldSource string
-	_ = tx.QueryRow("SELECT template_version,source FROM node_template_bindings WHERE machine_code=?", code).Scan(&oldVersion, &oldSource)
+	if err := tx.QueryRow("SELECT template_version,source FROM node_template_bindings WHERE machine_code=?", code).Scan(&oldVersion, &oldSource); err != nil && err != sql.ErrNoRows {
+		writeErr(w, http.StatusInternalServerError, "读取原节点模板版本信息失败")
+		return
+	}
 	if oldSource == "" {
 		oldSource = "independent"
 	}
@@ -527,6 +591,9 @@ func (a *App) handleApplyMihomoTemplate(w http.ResponseWriter, r *http.Request) 
 var _ = json.Valid
 
 func (a *App) handleRollbackNodeTemplate(w http.ResponseWriter, r *http.Request) {
+	// Serialize template lifecycle mutations to prevent publish/delete/apply/rollback races.
+	a.configPublishMu.Lock()
+	defer a.configPublishMu.Unlock()
 	var in struct {
 		MachineCode string `json:"machine_code"`
 		Confirm     bool   `json:"confirm"`
@@ -570,10 +637,21 @@ func (a *App) handleRollbackNodeTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var currentYAML string
-	_ = tx.QueryRow("SELECT yaml_text FROM node_configs WHERE machine_code=?", code).Scan(&currentYAML)
+	if err := tx.QueryRow("SELECT yaml_text FROM node_configs WHERE machine_code=?", code).Scan(&currentYAML); err != nil {
+		if err == sql.ErrNoRows {
+			writeErr(w, 404, "节点当前配置不存在，无法安全恢复")
+		} else {
+			writeErr(w, 500, "读取节点当前配置失败")
+		}
+		return
+	}
 	var currentVersion int
 	var currentSource string
-	_ = tx.QueryRow("SELECT template_version, source FROM node_template_bindings WHERE machine_code=?", code).Scan(&currentVersion, &currentSource)
+	err = tx.QueryRow("SELECT template_version, source FROM node_template_bindings WHERE machine_code=?", code).Scan(&currentVersion, &currentSource)
+	if err != nil && err != sql.ErrNoRows {
+		writeErr(w, 500, "读取节点模板版本信息失败")
+		return
+	}
 	if strings.TrimSpace(currentSource) == "" {
 		currentSource = "independent"
 	}
@@ -588,8 +666,18 @@ func (a *App) handleRollbackNodeTemplate(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if _, err := tx.Exec("UPDATE node_configs SET yaml_text=?, updated_at=? WHERE machine_code=?", previousYAML, now, code); err != nil {
+	result, err := tx.Exec("UPDATE node_configs SET yaml_text=?, updated_at=? WHERE machine_code=?", previousYAML, now, code)
+	if err != nil {
 		writeErr(w, 500, "恢复节点配置失败")
+		return
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		writeErr(w, 500, "确认节点配置恢复结果失败")
+		return
+	}
+	if updated != 1 {
+		writeErr(w, 409, "节点当前配置已变化，无法安全恢复")
 		return
 	}
 	if _, err := tx.Exec("INSERT INTO node_template_bindings(machine_code,template_version,config_sha256,source,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(machine_code) DO UPDATE SET template_version=excluded.template_version,config_sha256=excluded.config_sha256,source=excluded.source,updated_at=excluded.updated_at", code, previousVersion, hashConfig(previousYAML), previousSource, now); err != nil {

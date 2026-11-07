@@ -2,11 +2,11 @@
 
 This is an **optional, standalone image variant** that runs the existing S5M Agent, Mihomo and SmartDNS in one container under s6-overlay supervision. This repository's `main` branch is the source of truth for this variant; it remains a separate image and does not replace the standard `s5m-agent` or RouterOS images.
 
-- Image published by a successful push to the isolated `s5m-agent-smartdns` branch: `ghcr.io/tony855/s5m-agent-smartdns:dev` plus a commit-SHA tag.
+- Image published after all required checks pass on a push to this repository's `main` branch: `ghcr.io/tony855/s5m-agent-smartdns:dev` plus a commit-SHA tag.
 - Architectures: `linux/amd64` and `linux/arm64`.
 - SmartDNS source: official `pymumu/smartdns`, pinned by the `Release48.4` tag; GPL-3.0-or-later license is included in the image.
 - SmartDNS listens on container port `6053` (UDP and TCP). The combined Compose example does **not** publish this port to the host.
-- The bundled SmartDNS configuration keeps the default encrypted upstream pool separate from a dedicated `china-dot` group. The domestic group is exposed only on loopback `127.0.0.1:6054` and contains AliDNS DoT (`223.5.5.5:853`, `223.6.6.6:853`, SNI `dns.alidns.com`) and Tencent DNSPod DoT (`1.12.12.12:853`, `120.53.53.53:853`, SNI `dot.pub`). Every domestic upstream uses a literal IP, TLS hostname validation, and `-exclude-default-group`; the primary listener remains `127.0.0.1:6053`.
+- The bundled SmartDNS configuration is dual-stack: IPv4 and IPv6 literal-IP DoT endpoints are retained in the default pool and dedicated `china-dot` group. IPv4-only egress can use IPv4 endpoints, IPv6-only egress can use IPv6 endpoints, and dual-stack egress can use both. The domestic group is exposed only on loopback `127.0.0.1:6054`; it includes AliDNS IPv4/IPv6 DoT and DNSPod IPv4 DoT, with TLS hostname validation and `-exclude-default-group`. The primary listener remains `127.0.0.1:6053`.
 - Fresh Mihomo configs set `dns.nameserver-policy.geosite:cn` to `127.0.0.1:6054`, so mainland China domains use only the domestic DoT pool. Other domains continue through the existing `127.0.0.1:6053` resolver path. Bootstrap and proxy-server hostname lookups remain on literal-IP encrypted resolvers to avoid DNS recursion.
 - The generated Mihomo `PROCESS-NAME,smartdns,<proxy>` rule routes SmartDNS upstream sockets through the selected proxy. Plaintext `server`/`server-tcp` upstream directives are rejected by Agent validation.
 - Mihomo's fresh-install default config sends ordinary DNS queries to `127.0.0.1:6053`; bootstrap and proxy-server hostname lookups use literal-IP DNS servers to avoid a DNS loop.

@@ -4,7 +4,7 @@ allow-lan: true
 mode: rule
 log-level: info
 find-process-mode: strict
-ipv6: false
+ipv6: true
 
 # 控制接口
 external-controller: 127.0.0.1:8088
@@ -18,10 +18,11 @@ profile:
 # DNS 设置
 dns:
   enable: true
-  ipv6: false
+  ipv6: true
   listen: 127.0.0.1:5353
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
+  fake-ip-range6: fdfe:dcba:9876::1/64
   fake-ip-filter:
     - "*.lan"
     - "*.local"

@@ -228,19 +228,51 @@ do_recreate() {
   local remove_image="${1:-false}"
   local wipe_data="${2:-false}"
 
-  # 0. 宿主机 TUN 预检（仅当启用 TUN 映射时）
+  # 0. 先确认破坏性操作，避免误选“完整重建”清空节点身份和配置。
+  if [[ "${wipe_data}" == "true" && "${ALLOW_DATA_WIPE:-false}" != "true" ]]; then
+    local answer=""
+    if [[ ! -t 0 ]]; then
+      err "拒绝在非交互模式清空数据。需要显式设置 ALLOW_DATA_WIPE=true，并确保已有备份。"
+      return 1
+    fi
+    echo "警告：将删除持久化目录 ${DATA_DIR}，其中可能包含 Agent 身份、注册凭据和节点配置。"
+    read -r -p "如已确认并允许先备份再清空，请输入 DELETE： " answer
+    [[ "${answer}" == "DELETE" ]] || { warn "已取消，数据未更改"; return 1; }
+  fi
+
+  # 1. 宿主机 TUN 预检（仅当启用 TUN 映射时）
   if [[ ${#DEVICE_MAP[@]} -gt 0 ]]; then
     check_host_tun || warn "宿主机 TUN 不可用，Mihomo 的 TUN 模式可能无法启动（其余功能不受影响）"
   fi
 
-  # 1. 删除旧容器
+  # 2. 停止旧容器，但在备份完成前不删除容器。
+  local had_container="false"
   if container_exists; then
     log "停止旧容器 ${CONTAINER_NAME}"
     docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-    log "删除旧容器 ${CONTAINER_NAME}"
-    docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    had_container="true"
   else
     warn "容器 ${CONTAINER_NAME} 不存在，跳过"
+  fi
+
+  # 3. 破坏性清理前先创建可验证的时间戳备份；备份失败则中止。
+  if [[ "${wipe_data}" == "true" && -d "${DATA_DIR}" ]]; then
+    local backup_path="${DATA_DIR}.backup.$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+    command -v tar >/dev/null 2>&1 || { err "找不到 tar，拒绝删除数据"; return 1; }
+    log "备份持久化数据到 ${backup_path}"
+    if ! tar -C "$(dirname "${DATA_DIR}")" -czf "${backup_path}" "$(basename "${DATA_DIR}")"; then
+      err "数据备份失败，拒绝删除数据"
+      rm -f "${backup_path}"
+      return 1
+    fi
+    tar -tzf "${backup_path}" >/dev/null || { err "备份校验失败，拒绝删除数据"; return 1; }
+    log "数据备份及完整性检查通过"
+  fi
+
+  # 4. 备份成功后才删除旧容器。
+  if [[ "${had_container}" == "true" ]]; then
+    log "删除旧容器 ${CONTAINER_NAME}"
+    docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   fi
 
   # 2. 删除本地镜像

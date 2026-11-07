@@ -112,6 +112,8 @@ createApp({
     const applyingSmartDNS = ref(false);
     const smartdnsResult = ref('');
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
+    const smartdnsRoutingStrategy = ref('legacy');
+    const savingSmartDNSRouting = ref(false);
     let smartdnsLoadGeneration = 0;
     let smartdnsApplyGeneration = 0;
     watch(selectedConfigNode, (code) => {
@@ -150,6 +152,7 @@ createApp({
     const savingProxy = ref(false);
     const machineProxyModes = reactive({});
     const savingMachineProxyMode = reactive({});
+    const savingMachineSmartDNS = reactive({});
 
     const showImport = ref(false);
     const importTab = ref('text');
@@ -1302,6 +1305,16 @@ createApp({
             mihomoRunning: online && (status.mihomo_process_running === true || (status.mihomo_process_running === undefined && status.mihomo_healthy === true)),
             mihomoApiHealthy: online && (status.mihomo_api_healthy === true || status.mihomo_healthy === true),
             mihomoVersion,
+            smartdnsBinaryAvailable: status.smartdns_available === true,
+            smartdnsAvailable: status.smartdns_available === true && status.smartdns_control_supported === true,
+            smartdnsEnabled: typeof item.smartdns_enabled === 'boolean'
+              ? item.smartdns_enabled
+              : (status.smartdns_enabled === true || (status.smartdns_enabled === undefined && status.smartdns_running === true)),
+            smartdnsRunning: status.smartdns_running === true,
+            smartdnsDomesticListener: status.smartdns_domestic_listener === true,
+            smartdnsDomesticReported: typeof status.smartdns_domestic_listener === 'boolean',
+            smartdnsDNSHealthy: status.smartdns_dns_healthy === true,
+            smartdnsLastError: String(status.smartdns_last_error || ''),
             runtimeReported,
             runtimeMessage,
             lastError,
@@ -1365,6 +1378,28 @@ createApp({
         showMsg(data.message || '机器代理模式已保存', 'success');
       } catch (e) { showMsg(e.message || '保存机器代理模式失败', 'error'); await loadMachineProxyModes([{ code: machineCode }]); }
       finally { savingMachineProxyMode[machineCode] = false; }
+    };
+
+    const setMachineSmartDNS = async (code, enabled) => {
+      const machineCode = String(code || '').trim();
+      if (!machineCode || savingMachineSmartDNS[machineCode]) return;
+      savingMachineSmartDNS[machineCode] = true;
+      try {
+        const res = await api('/api/v1/nodes/' + encodeURIComponent(machineCode) + '/smartdns', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: enabled === true })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.message || 'SmartDNS 启停命令提交失败');
+        showMsg(data.message || 'SmartDNS 命令已排队，等待 Agent 执行', 'success');
+        await loadAgentsData();
+      } catch (e) {
+        showMsg(e.message || 'SmartDNS 启停失败', 'error');
+        await loadAgentsData();
+      } finally {
+        savingMachineSmartDNS[machineCode] = false;
+      }
     };
 
     const generateAgentToken = async () => {
@@ -1754,6 +1789,51 @@ createApp({
       } catch (e) {
         subUrl.value = fallback;
       }
+      try {
+        const res = await api('/api/v1/settings');
+        const settings = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(settings.error || '读取 SmartDNS 出口策略失败');
+        const hasRoutingSetting = Object.prototype.hasOwnProperty.call(settings, 'smartdns_routing_config');
+        const raw = String(settings.smartdns_routing_config || '').trim();
+        if (!hasRoutingSetting) {
+          smartdnsRoutingStrategy.value = 'legacy';
+        } else if (!raw) {
+          smartdnsRoutingStrategy.value = 'legacy';
+        } else {
+          const routing = JSON.parse(raw);
+          smartdnsRoutingStrategy.value = ['url-test', 'select', 'fallback'].includes(routing.strategy)
+            ? routing.strategy : 'url-test';
+        }
+      } catch (e) {
+        console.warn('读取 SmartDNS 上游出口策略失败', e);
+      }
+    };
+
+    const saveSmartDNSRoutingStrategy = async () => {
+      if (savingSmartDNSRouting.value) return;
+      const strategy = String(smartdnsRoutingStrategy.value || 'url-test');
+      if (!['url-test', 'select', 'fallback', 'legacy'].includes(strategy)) {
+        showMsg('SmartDNS 出口策略无效', 'error');
+        return;
+      }
+      savingSmartDNSRouting.value = true;
+      try {
+        const routing = strategy === 'legacy' ? '' : JSON.stringify({ mode: 'shared', strategy });
+        const res = await api('/api/v1/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ smartdns_routing_config: routing })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.message || '保存 SmartDNS 出口策略失败');
+        showMsg(data.message || 'SmartDNS 出口策略已保存，节点配置已同步', 'success');
+        await loadSettings();
+      } catch (e) {
+        showMsg(e.message || '保存 SmartDNS 出口策略失败', 'error');
+        await loadSettings();
+      } finally {
+        savingSmartDNSRouting.value = false;
+      }
     };
 
     onMounted(() => {
@@ -1785,12 +1865,14 @@ createApp({
       configYaml, configTunEnabled, configDnsEnabled, configDnsNameservers, syncConfigQuickSettingsFromYaml, applyConfigQuickSettings,
       selectedConfigNode, savingConfig, publishing, updatingKernel,
       smartdnsYaml, loadingSmartDNS, applyingSmartDNS, smartdnsResult, smartdnsStatus, loadSmartDNSConfig, applySmartDNSConfig,
+      smartdnsRoutingStrategy, savingSmartDNSRouting, saveSmartDNSRoutingStrategy,
       kernelUpdateDialog, kernelUpdateMachineCode, kernelUpdateVersion, kernelUpdateSHA256, queueingKernelUpdate, kernelUpdateInfo, kernelUpdateInfoLoading,
       openAgentKernelUpdate, loadAgentKernelUpdateInfo, queueAgentKernelUpdate,
       systemLogs, loadingSystemLogs, restoringBackup, loadSystemLogs, downloadBackup, restoreBackup,
       mainMihomoStatus, loadMainMihomoStatus,
       proxyDialog, proxyForm, savingProxy,
       machineProxyModes, savingMachineProxyMode, saveMachineProxyMode,
+      savingMachineSmartDNS, setMachineSmartDNS,
       showImport, importTab, importText, importing, importMachineCode, selectedProxyIds, proxyTableRef, allFilteredProxiesSelected, toggleSelectAllFilteredProxies, bulkMachineCode, bulkProxyBusy, onProxySelectionChange, toggleMobileProxySelection, bulkDeleteProxies, bulkBindProxies,
       switchPage, doLogin, logout, loadOverview,
       updateKernel, recoverMihomoUpdateTask, loadProxies, openCreateProxy, openEditProxy, saveProxy, deleteProxy, importProxies, handleFileUpload,
