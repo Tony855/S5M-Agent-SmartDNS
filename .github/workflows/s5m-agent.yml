@@ -77,7 +77,7 @@ jobs:
           set -euo pipefail
           name="s5m-no-smartdns-${{ matrix.runner_arch }}"
           data="$(mktemp -d)"
-          cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; sudo rm -rf "$data"; }
+          cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; if [[ -n "${legacy_name:-}" ]]; then docker rm -f "$legacy_name" >/dev/null 2>&1 || true; fi; sudo rm -rf "$data" "${legacy_data:-}"; }
           trap cleanup EXIT
           sudo modprobe tun || true
           if [[ ! -c /dev/net/tun ]]; then sudo mkdir -p /dev/net; sudo mknod /dev/net/tun c 10 200; sudo chmod 600 /dev/net/tun; fi
