@@ -15,7 +15,7 @@ COPY s5m-agent/go.mod s5m-agent/go.sum ./
 RUN go mod download
 # The Agent is a multi-file Go package; copy all source files, not only main.go.
 COPY s5m-agent/*.go ./
-RUN mkdir -p /out && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/s5m-agent .
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.agentSupportsSmartDNS=false" -o /out/s5m-agent .
 
 FROM alpine:${ALPINE_VERSION} AS mihomo-fetch
 ARG TARGETARCH
