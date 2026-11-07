@@ -564,6 +564,10 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	status["smartdns_config_sha256"] = ""
 	status["smartdns_last_error"] = ""
 
+	if !smartDNSFeatureSupported() {
+		appendSmartDNSStatusError(status, "当前 Agent 镜像不包含 SmartDNS，控制功能不可用")
+		return
+	}
 	info, statErr := deps.binaryInfo()
 	if statErr != nil || !smartDNSBinaryInfoAvailable(info) {
 		appendSmartDNSStatusError(status, "SmartDNS 二进制不存在、不可执行或文件类型无效")
