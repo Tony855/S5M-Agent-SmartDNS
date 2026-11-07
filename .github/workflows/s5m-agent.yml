@@ -89,7 +89,7 @@ jobs:
             [[ "$health" == healthy ]] && break
             sleep 2
           done
-          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$name")" == healthy ]]
+          if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$name")" != healthy ]]; then docker inspect --format '{{json .State.Health}}' "$name"; docker logs "$name"; docker exec "$name" /healthcheck.sh || true; exit 1; fi
           docker exec "$name" pidof mihomo
           docker exec "$name" /healthcheck.sh
           docker exec "$name" sh -ec 'test ! -e /usr/sbin/smartdns; ! pidof smartdns; ! grep -Eq "6053|6054|smartdns" /app/default-config.yaml; grep -q "127.0.0.1:5353" /app/default-config.yaml'
@@ -136,7 +136,7 @@ jobs:
             [[ "$health" == healthy ]] && break
             sleep 2
           done
-          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$legacy_name")" == healthy ]] || { docker logs "$legacy_name"; exit 1; }
+          if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$legacy_name")" != healthy ]]; then docker inspect --format '{{json .State.Health}}' "$legacy_name"; docker logs "$legacy_name"; docker exec "$legacy_name" /healthcheck.sh || true; exit 1; fi
           test -s "$legacy_data/config.yaml.pre-no-smartdns"
           grep -q 'keep-existing-agent-secret' "$legacy_data/config.yaml"
           grep -q 'preserved-node' "$legacy_data/config.yaml"
