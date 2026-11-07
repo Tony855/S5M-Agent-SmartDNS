@@ -13,8 +13,21 @@ run_dns_probe() {
   if ! output="$("$@" 2>&1)"; then
     fail "$label command failed: $output"
   fi
-  if ! printf '%s\n' "$output" | grep -Eq "$pattern"; then
+  if ! printf '%s\\n' "$output" | grep -Eq "$pattern"; then
     fail "$label returned no valid address: $output"
+  fi
+}
+
+# AAAA lookups may validly return NOERROR with an empty answer section.
+# Verify DNS protocol health rather than requiring a public AAAA record.
+run_dns_response_probe() {
+  label="$1"
+  shift
+  if ! output="$("$@" 2>&1)"; then
+    fail "$label command failed: $output"
+  fi
+  if ! printf '%s\\n' "$output" | grep -Eq 'status: (NOERROR|NXDOMAIN)'; then
+    fail "$label returned no valid DNS response: $output"
   fi
 }
 
@@ -55,6 +68,6 @@ if awk '
   in_dns && /^[[:space:]]+ipv6:[[:space:]]*true([[:space:]]*(#.*)?)$/ { found=1 }
   END { exit !found }
 ' "$CONFIG_FILE"; then
-  run_dns_probe "UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
-  run_dns_probe "TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
+  run_dns_response_probe "UDP AAAA" dig +time=4 +tries=1 +noall +comments @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
+  run_dns_response_probe "TCP AAAA" dig +tcp +time=4 +tries=1 +noall +comments @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
 fi
