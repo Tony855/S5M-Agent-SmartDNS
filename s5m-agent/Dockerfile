@@ -70,7 +70,7 @@ COPY s5m-agent/healthcheck-no-smartdns.sh /healthcheck.sh
 COPY s5m-agent/default-config-no-smartdns.yaml /app/default-config.yaml
 COPY s5m-agent/cont-init.d/ /etc/cont-init.d/
 COPY s5m-agent/services/ /etc/s6-overlay/s6-rc.d/
-RUN chmod 0755 /healthcheck.sh /etc/cont-init.d/10-mihomo-config \
+RUN chmod 0755 /healthcheck.sh /etc/cont-init.d/10-mihomo-config /etc/cont-init.d/15-no-smartdns-migrate \
     /etc/s6-overlay/s6-rc.d/mihomo/run \
     /etc/s6-overlay/s6-rc.d/agent/run \
     && chmod 0644 /etc/s6-overlay/s6-rc.d/mihomo/type \
