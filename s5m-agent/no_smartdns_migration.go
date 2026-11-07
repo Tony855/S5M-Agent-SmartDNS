@@ -37,8 +37,19 @@ func noSmartDNSStaleResolver(n *yaml.Node) bool {
 	if n == nil { return false }
 	if n.Kind == yaml.ScalarNode {
 		v := strings.TrimSpace(strings.Trim(n.Value, "\"'"))
+		// Mihomo accepts explicit transport schemes for DNS resolvers. Strip
+		// the scheme and optional DoH path before matching retired listeners.
+		if schemeEnd := strings.Index(v, "://"); schemeEnd >= 0 {
+			scheme := strings.ToLower(v[:schemeEnd])
+			switch scheme {
+			case "udp", "tcp", "tls", "quic", "http", "https":
+				v = v[schemeEnd+3:]
+				if pathStart := strings.IndexAny(v, "/?#"); pathStart >= 0 { v = v[:pathStart] }
+			}
+		}
+		v = strings.TrimSpace(v)
 		for _, endpoint := range []string{"127.0.0.1:6053", "127.0.0.1:6054", "[::1]:6053", "[::1]:6054", "localhost:6053", "localhost:6054"} {
-			if v == endpoint { return true }
+			if strings.EqualFold(v, endpoint) { return true }
 		}
 		return false
 	}
