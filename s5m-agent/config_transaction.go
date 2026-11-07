@@ -120,6 +120,14 @@ var (
 // lock. Both rollback points and managed-route state remain available until
 // Mihomo runtime rules and SmartDNS DNS probes have passed.
 func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string) error {
+	if !smartDNSFeatureSupported() {
+		if updateSmartDNS {
+			return fmt.Errorf("当前 Agent 镜像不包含 SmartDNS，拒绝应用 SmartDNS 配置")
+		}
+		var err error
+		mihomoYAML, err = normalizeNoSmartDNSYAML(mihomoYAML)
+		if err != nil { return fmt.Errorf("清理主控下发配置中的 SmartDNS DNS 引用失败: %w", err) }
+	}
 	return applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false)
 }
 
