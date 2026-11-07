@@ -13,7 +13,7 @@ run_dns_probe() {
   if ! output="$("$@" 2>&1)"; then
     fail "$label command failed: $output"
   fi
-  if ! printf '%s\\n' "$output" | grep -Eq "$pattern"; then
+  if ! printf '%s\n' "$output" | grep -Eq "$pattern"; then
     fail "$label returned no valid address: $output"
   fi
 }
@@ -26,7 +26,7 @@ run_dns_response_probe() {
   if ! output="$("$@" 2>&1)"; then
     fail "$label command failed: $output"
   fi
-  if ! printf '%s\\n' "$output" | grep -Eq 'status: (NOERROR|NXDOMAIN)'; then
+  if ! printf '%s\n' "$output" | grep -Eq 'status: (NOERROR|NXDOMAIN)'; then
     fail "$label returned no valid DNS response: $output"
   fi
 }
