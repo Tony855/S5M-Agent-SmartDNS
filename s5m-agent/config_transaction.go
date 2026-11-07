@@ -211,7 +211,7 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 		restored, restoreErr := restoreSmartDNSConfigVerified(smartPath, oldSmartDNS, hadSmartDNS)
 		if !restored {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", restoreErr))
-		} else if (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
+		} else if smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
 			if err := transactionRestartSmartDNS(); err != nil {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
 			} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
@@ -242,7 +242,7 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 			return rollback(fmt.Errorf("应用 SmartDNS 配置失败: %w", err))
 		}
 	}
-	if (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
+	if smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
 		if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 			return rollback(fmt.Errorf("SmartDNS 联合事务 UDP/TCP DNS 健康检查失败"))
 		}
