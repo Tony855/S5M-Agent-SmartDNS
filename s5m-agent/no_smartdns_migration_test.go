@@ -56,6 +56,26 @@ rules:
 	if string(backup2) != string(original) { t.Fatal("second migration overwrote original backup") }
 }
 
+func TestMigrateNoSmartDNSConfigRemovesTransportQualifiedListeners(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte(`dns:
+  enable: true
+  nameserver:
+    - udp://127.0.0.1:6053
+    - tcp://[::1]:6054
+    - https://localhost:6053/dns-query
+    - 9.9.9.9
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil { t.Fatal(err) }
+	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
+	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
+	text := string(got)
+	for _, stale := range []string{"6053", "6054", "localhost"} {
+		if strings.Contains(text, stale) { t.Fatalf("transport-qualified stale resolver remains (%s): %s", stale, text) }
+	}
+	if !strings.Contains(text, "9.9.9.9") { t.Fatalf("migration removed valid resolver: %s", text) }
+}
+
 func TestMigrateNoSmartDNSConfigRejectsMalformedConfigWithoutMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	original := []byte("dns: [broken\n")
