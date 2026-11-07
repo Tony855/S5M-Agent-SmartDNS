@@ -28,7 +28,8 @@ dns:
     - 127.0.0.1:6053
   nameserver-policy:
     "geosite:cn": 127.0.0.1:6054
-    "+.internal.example": 192.0.2.53\n    "+.mixed.example": [127.0.0.1:6054, 192.0.2.54]
+    "+.internal.example": 192.0.2.53
+    "+.mixed.example": [127.0.0.1:6054, 192.0.2.54]
   fallback:
     - https://dns.cloudflare.com/dns-query
 rules:
