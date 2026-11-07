@@ -89,3 +89,14 @@ rules:
 		if !strings.Contains(string(got), keep) { t.Fatalf("controller config lost %s: %s", keep, got) }
 	}
 }
+
+func TestNoSmartDNSBuildReportsControlUnsupported(t *testing.T) {
+	previous := agentSupportsSmartDNS
+	agentSupportsSmartDNS = "false"
+	defer func() { agentSupportsSmartDNS = previous }()
+	status := map[string]any{}
+	collectSmartDNSStatus(status)
+	if status["smartdns_available"] != false { t.Fatalf("SmartDNS should be unavailable: %#v", status) }
+	if status["smartdns_control_supported"] != false { t.Fatalf("SmartDNS controls should be unsupported: %#v", status) }
+	if status["smartdns_enabled"] != false { t.Fatalf("SmartDNS should report disabled: %#v", status) }
+}
