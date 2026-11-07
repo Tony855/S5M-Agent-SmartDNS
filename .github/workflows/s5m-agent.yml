@@ -94,6 +94,58 @@ jobs:
           docker exec "$name" /healthcheck.sh
           docker exec "$name" sh -ec 'test ! -e /usr/sbin/smartdns; ! pidof smartdns; ! grep -Eq "6053|6054|smartdns" /app/default-config.yaml; grep -q "127.0.0.1:5353" /app/default-config.yaml'
           if docker port "$name" 8088/tcp 2>/dev/null | grep -q .; then echo "Mihomo controller API 8088 must not be published" >&2; exit 1; fi
+          # Upgrade-path smoke: seed an old SmartDNS config and prove startup
+          # migrates DNS only while preserving identity, proxy and custom rules.
+          legacy_name="${name}-legacy"
+          legacy_data="$(mktemp -d)"
+          cat > "$legacy_data/config.yaml" <<'YAML'
+          secret: keep-existing-agent-secret
+          allow-lan: true
+          mode: rule
+          ipv6: false
+          external-controller: 127.0.0.1:8088
+          dns:
+            enable: true
+            ipv6: false
+            listen: 127.0.0.1:5353
+            nameserver:
+              - 127.0.0.1:6053
+            nameserver-policy:
+              "geosite:cn": 127.0.0.1:6054
+              "+.internal.example": 192.0.2.53
+            fallback:
+              - https://dns.cloudflare.com/dns-query
+          proxies:
+            - name: preserved-node
+              type: socks5
+              server: 192.0.2.10
+              port: 1080
+          proxy-groups: []
+          rules:
+            - DOMAIN-SUFFIX,v2net.cc,DIRECT
+            - DOMAIN-SUFFIX,custom.example,DIRECT
+            - MATCH,DIRECT
+          tun:
+            enable: false
+          YAML
+          docker run -d --name "$legacy_name" --platform "${{ matrix.platform }}" --restart no --cap-add=NET_ADMIN --device=/dev/net/tun:/dev/net/tun -p 127.0.0.1::80/tcp -v "$legacy_data:/data" "${{ matrix.tag }}" >/dev/null
+          for attempt in $(seq 1 60); do
+            state="$(docker inspect --format '{{.State.Status}}' "$legacy_name")"
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$legacy_name")"
+            [[ "$state" == running ]] || { docker logs "$legacy_name"; exit 1; }
+            [[ "$health" == healthy ]] && break
+            sleep 2
+          done
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$legacy_name")" == healthy ]] || { docker logs "$legacy_name"; exit 1; }
+          test -s "$legacy_data/config.yaml.pre-no-smartdns"
+          grep -q 'keep-existing-agent-secret' "$legacy_data/config.yaml"
+          grep -q 'preserved-node' "$legacy_data/config.yaml"
+          grep -q 'custom.example' "$legacy_data/config.yaml"
+          grep -q '192.0.2.53' "$legacy_data/config.yaml"
+          ! grep -Eq '127.0.0.1:6053|127.0.0.1:6054' "$legacy_data/config.yaml"
+          docker rm -f "$legacy_name" >/dev/null
+          sudo rm -rf "$legacy_data"
+
 
   publish:
     name: Publish multi-architecture no-SmartDNS image (manual opt-in)
