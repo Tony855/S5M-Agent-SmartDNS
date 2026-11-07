@@ -106,12 +106,10 @@ func migrateNoSmartDNSConfig(path string) error {
 		key := dns.Content[i].Value
 		if !noSmartDNSResolverKeys[key] { continue }
 		value := dns.Content[i+1]
-		if key == "nameserver" && noSmartDNSStaleResolver(value) {
+		if key == "nameserver" && value.Kind != yaml.SequenceNode && noSmartDNSStaleResolver(value) {
 			dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "1.1.1.1"},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "8.8.8.8"},
 			}}
 			changed = true
 			continue
