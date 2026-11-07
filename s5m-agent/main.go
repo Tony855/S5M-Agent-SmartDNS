@@ -1395,18 +1395,24 @@ func processAgentCommandWebSocket(cfg Config) error {
 	case "update_mihomo":
 		message, runErr = updateMihomoKernel(cmd)
 	case "read_smartdns_config":
-		data, runErr = readSmartDNSConfig()
-		if runErr == nil {
-			message = "已读取 Agent 当前 SmartDNS 配置"
+		if !smartDNSFeatureSupported() {
+			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+		} else {
+			data, runErr = readSmartDNSConfig()
+			if runErr == nil { message = "已读取 Agent 当前 SmartDNS 配置" }
 		}
 	case "configure_smartdns":
-		var configHash string
-		configHash, runErr = writeSmartDNSConfig([]byte(cmd.Config))
-		if runErr == nil {
-			message = "SmartDNS 配置已校验并应用，SHA-256: " + configHash
+		if !smartDNSFeatureSupported() {
+			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+		} else {
+			var configHash string
+			configHash, runErr = writeSmartDNSConfig([]byte(cmd.Config))
+			if runErr == nil { message = "SmartDNS 配置已校验并应用，SHA-256: " + configHash }
 		}
 	case "set_smartdns_enabled":
-		if cmd.Enabled == nil {
+		if !smartDNSFeatureSupported() {
+			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+		} else if cmd.Enabled == nil {
 			runErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
 		} else {
 			runErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
@@ -2288,13 +2294,21 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				case "update_mihomo":
 					message, commandErr = updateMihomoKernel(cmd)
 				case "read_smartdns_config":
-					var smartDNSConfig []byte
-					smartDNSConfig, commandErr = readSmartDNSConfig()
-					if commandErr == nil {
-						commandConfig = string(smartDNSConfig)
-						message = "已读取 Agent 当前 SmartDNS 配置"
+					if !smartDNSFeatureSupported() {
+						commandErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+					} else {
+						var smartDNSConfig []byte
+						smartDNSConfig, commandErr = readSmartDNSConfig()
+						if commandErr == nil {
+							commandConfig = string(smartDNSConfig)
+							message = "已读取 Agent 当前 SmartDNS 配置"
+						}
 					}
 				case "configure_smartdns":
+					if !smartDNSFeatureSupported() {
+						commandErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+						break
+					}
 					var mihomoConfig []byte
 					mihomoConfig, commandErr = configHashSource()
 					if commandErr == nil {
@@ -2305,7 +2319,9 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 						message = "SmartDNS/Mihomo 联合配置已应用并通过健康检查，SmartDNS SHA-256: " + hex.EncodeToString(sum[:])
 					}
 				case "set_smartdns_enabled":
-					if cmd.Enabled == nil {
+					if !smartDNSFeatureSupported() {
+						commandErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+					} else if cmd.Enabled == nil {
 						commandErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
 					} else {
 						commandErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
@@ -2495,6 +2511,13 @@ func serveAgentRegistrationPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "--migrate-no-smartdns-dns" {
+		if err := migrateNoSmartDNSConfig(os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "No-SmartDNS DNS migration failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// 启动 80 端口提供 Web 注册界面
 	go func() {
 		http.HandleFunc("/", serveAgentRegistrationPage)

@@ -13,9 +13,9 @@ RUN apk add --no-cache go git
 WORKDIR /src
 COPY s5m-agent/go.mod s5m-agent/go.sum ./
 RUN go mod download
-COPY s5m-agent/main.go ./main.go
-COPY s5m-agent/smartdns_runtime.go ./smartdns_runtime.go
-RUN mkdir -p /out && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/s5m-agent .
+# The Agent is a multi-file Go package; copy all source files, not only main.go.
+COPY s5m-agent/*.go ./
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.agentSupportsSmartDNS=false" -o /out/s5m-agent .
 
 FROM alpine:${ALPINE_VERSION} AS mihomo-fetch
 ARG TARGETARCH
@@ -66,11 +66,11 @@ WORKDIR /app
 COPY --from=agent-builder /out/s5m-agent /app/s5m-agent
 COPY --from=mihomo-fetch /usr/local/bin/mihomo /usr/local/bin/mihomo
 COPY s5m-agent/index.html /app/index.html
-COPY s5m-agent/smartdns/healthcheck.sh /healthcheck.sh
-COPY s5m-agent/default-config.yaml /app/default-config.yaml
+COPY s5m-agent/healthcheck-no-smartdns.sh /healthcheck.sh
+COPY s5m-agent/default-config-no-smartdns.yaml /app/default-config.yaml
 COPY s5m-agent/cont-init.d/ /etc/cont-init.d/
 COPY s5m-agent/services/ /etc/s6-overlay/s6-rc.d/
-RUN chmod 0755 /healthcheck.sh /etc/cont-init.d/10-mihomo-config \
+RUN chmod 0755 /healthcheck.sh /etc/cont-init.d/10-mihomo-config /etc/cont-init.d/15-no-smartdns-migrate \
     /etc/s6-overlay/s6-rc.d/mihomo/run \
     /etc/s6-overlay/s6-rc.d/agent/run \
     && chmod 0644 /etc/s6-overlay/s6-rc.d/mihomo/type \

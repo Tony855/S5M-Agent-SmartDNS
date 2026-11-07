@@ -1,0 +1,6 @@
+#!/command/with-contenv sh
+set -eu
+MIHOMO_HOME="${MIHOMO_HOME:-/data}"
+CONFIG_PATH="${MIHOMO_HOME}/config.yaml"
+[ -s "$CONFIG_PATH" ] || exit 0
+/app/s5m-agent --migrate-no-smartdns-dns "$CONFIG_PATH"
