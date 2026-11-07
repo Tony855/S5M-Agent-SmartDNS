@@ -7,6 +7,8 @@ on:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
       - "scripts/deploy-agent.sh"
+      - "scripts/deploy-s5m-agent.sh"
+      - "scripts/tests/deploy-s5m-agent-image-selection.sh"
       - "scripts/s5m-deploy.sh"
       - "server/**"
       - "scripts/tests/proxy-import-parser.test.js"
@@ -16,6 +18,8 @@ on:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
       - "scripts/deploy-agent.sh"
+      - "scripts/deploy-s5m-agent.sh"
+      - "scripts/tests/deploy-s5m-agent-image-selection.sh"
       - "server/**"
       - "scripts/tests/proxy-import-parser.test.js"
       - ".github/workflows/installer-validation.yml"
@@ -37,6 +41,7 @@ jobs:
           bash -n scripts/install.sh
           bash -n scripts/install-server.sh
           bash -n scripts/deploy-agent.sh
+          bash -n scripts/deploy-s5m-agent.sh
           bash -n scripts/s5m-deploy.sh
           bash -n scripts/tests/deploy-agent-rollback.sh
 
@@ -128,10 +133,13 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck errors
-        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/deploy-s5m-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh
 
       - name: Test Agent deployment rollback fault paths
         run: bash scripts/tests/deploy-agent-rollback.sh
+
+      - name: Test no-SmartDNS image selection and pull failure paths
+        run: bash scripts/tests/deploy-s5m-agent-image-selection.sh
 
       - name: Check embedded web JavaScript syntax
         run: |

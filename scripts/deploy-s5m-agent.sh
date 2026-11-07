@@ -11,6 +11,7 @@ CONFIG_FILE="${CONFIG_FILE:-/root/.s5m-agent.conf}"
 # ================= 默认配置 =================
 CONTAINER_NAME="s5m-agent"
 IMAGE="ghcr.io/tony855/s5m-agent-smartdns:dev"
+NO_SMARTDNS_IMAGE="ghcr.io/tony855/s5m-agent:dev"
 DATA_DIR="/opt/s5m-agent/data"
 TZ_VAL="Asia/Shanghai"
 RESTART_POLICY="unless-stopped"
@@ -221,6 +222,26 @@ do_pull() {
   docker pull "${IMAGE}"
   docker image inspect "${IMAGE}" \
     --format '  当前镜像: {{.Id}}  {{index .RepoDigests 0}}' 2>/dev/null || true
+}
+
+# 拉取并切换到独立无 SmartDNS 镜像；不触碰现有容器和数据卷
+do_pull_no_smartdns() {
+  log "拉取无 SmartDNS 镜像 ${NO_SMARTDNS_IMAGE}"
+  if ! docker pull "${NO_SMARTDNS_IMAGE}"; then
+    err "无 SmartDNS 镜像拉取失败，当前镜像选择保持不变"
+    return 1
+  fi
+
+  if ! docker image inspect "${NO_SMARTDNS_IMAGE}" >/dev/null 2>&1; then
+    err "镜像拉取后本地检查失败"
+    return 1
+  fi
+
+  IMAGE="${NO_SMARTDNS_IMAGE}"
+  log "已切换当前部署镜像为：${IMAGE}"
+  save_config
+  warn "当前运行中的容器不会被更改；如需使用无 SmartDNS 镜像，请执行“2) 重新部署”"
+  warn "重新部署会保留 ${DATA_DIR} 中的数据"
 }
 
 # ---------- 重建 / 部署 ----------
@@ -503,6 +524,7 @@ show_menu() {
   echo "  18) 修改重启策略"
   echo "  19) 保存配置到文件（${CONFIG_FILE}）"
   echo "  20) 切换 TUN 映射（--device /dev/net/tun + NET_ADMIN/NET_RAW）"
+  echo "  21) 拉取并选择无 SmartDNS 镜像（ghcr.io/tony855/s5m-agent:dev）"
   echo "  0)  退出"
   echo "════════════════════════════════════════════════════"
 }
@@ -533,6 +555,7 @@ main_menu() {
       18) change_restart_policy ;;
       19) save_config ;;
       20) toggle_tun ;;
+      21) do_pull_no_smartdns || warn "无 SmartDNS 镜像拉取/切换失败" ;;
       0|q|Q|exit) log "退出"; break ;;
       *) warn "无效选项，请重新选择" ;;
     esac
