@@ -2266,10 +2266,19 @@ func TestRegistrationPageAllowsAllSafeControllerDiagnostics(t *testing.T) {
 	// Keep all controller-originated diagnostics visible instead of rewriting
 	// machine-code, initialization, or missing-endpoint errors as network timeouts.
 	for _, want := range []string{
-		"专属注册密钥|机器码格式|主控端|HTTP 403|HTTP 400|HTTP 404|HTTP 500|HTTPS|TLS|连接主控端",
+		"专属注册密钥|机器码格式|主控端|HTTP [1-5][0-9]{2}|HTTPS|TLS|连接主控端",
 	} {
 		if !strings.Contains(string(page), want) {
 			t.Fatalf("registration page diagnostic allowlist is missing %q", want)
 		}
 	}
+}
+
+func TestRegistrationPageDisablesCaching(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	serveAgentRegistrationPage(rec, req)
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, no-cache, must-revalidate, max-age=0" { t.Fatalf("Cache-Control = %q", got) }
+	if got := rec.Header().Get("Pragma"); got != "no-cache" { t.Fatalf("Pragma = %q", got) }
+	if got := rec.Header().Get("Expires"); got != "0" { t.Fatalf("Expires = %q", got) }
 }

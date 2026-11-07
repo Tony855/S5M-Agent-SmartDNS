@@ -2485,12 +2485,19 @@ func readAgentWSJSON(conn *websocket.Conn, target any, timeout time.Duration) er
 	return conn.ReadJSON(target)
 }
 
+// serveAgentRegistrationPage prevents browsers and intermediary proxies from
+// retaining an obsolete registration UI after an Agent image upgrade.
+func serveAgentRegistrationPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	http.ServeFile(w, r, "/app/index.html")
+}
+
 func main() {
 	// 启动 80 端口提供 Web 注册界面
 	go func() {
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, "/app/index.html")
-		})
+		http.HandleFunc("/", serveAgentRegistrationPage)
 
 		// ====== 提供前端页面的 API ======
 		http.HandleFunc("/api/machine-id", machineIDHandler)
