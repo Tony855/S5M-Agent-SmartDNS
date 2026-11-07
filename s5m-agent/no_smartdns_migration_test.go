@@ -28,7 +28,7 @@ dns:
     - 127.0.0.1:6053
   nameserver-policy:
     "geosite:cn": 127.0.0.1:6054
-    "+.internal.example": 192.0.2.53
+    "+.internal.example": 192.0.2.53\n    "+.mixed.example": [127.0.0.1:6054, 192.0.2.54]
   fallback:
     - https://dns.cloudflare.com/dns-query
 rules:
@@ -39,7 +39,7 @@ rules:
 	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
 	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
 	text := string(got)
-	for _, want := range []string{"keep-this-secret", "node-one", "192.0.2.10", "v2net.cc,DIRECT", "MATCH,DIRECT", "+.internal.example", "192.0.2.53", "223.5.5.5"} {
+	for _, want := range []string{"keep-this-secret", "node-one", "192.0.2.10", "v2net.cc,DIRECT", "MATCH,DIRECT", "+.internal.example", "192.0.2.53", "192.0.2.54", "223.5.5.5"} {
 		if !strings.Contains(text, want) { t.Fatalf("migration lost %q: %s", want, text) }
 	}
 	for _, stale := range []string{"127.0.0.1:6053", "127.0.0.1:6054"} {
