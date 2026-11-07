@@ -20,7 +20,11 @@ run_dns_probe "UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=4 +tries=1 +shor
 run_dns_probe "TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" example.com A
 run_dns_probe "domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" www.baidu.com A
 run_dns_probe "domestic TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" www.baidu.com A
-if grep -Eq '^  ipv6:[[:space:]]*true$' /data/config.yaml; then
+if grep -Eq '^(  )?ipv6:[[:space:]]*true; then
+  run_dns_probe "UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
+  run_dns_probe "TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
+fi
+ /data/config.yaml; then
   run_dns_probe "UDP AAAA" '^[0-9a-fA-F:]+$' dig +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
   run_dns_probe "TCP AAAA" '^[0-9a-fA-F:]+$' dig +tcp +time=4 +tries=1 +short @127.0.0.1 -p "$dns_port" cloudflare.com AAAA
 fi
