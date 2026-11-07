@@ -10,6 +10,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var agentSupportsSmartDNS = "true"
+
+func smartDNSFeatureSupported() bool { return agentSupportsSmartDNS != "false" }
+
+func normalizeNoSmartDNSYAML(data []byte) ([]byte, error) {
+	if smartDNSFeatureSupported() { return data, nil }
+	tmp, err := os.CreateTemp("", "s5m-no-smartdns-config-*.yaml")
+	if err != nil { return nil, err }
+	path := tmp.Name()
+	if err := tmp.Chmod(0600); err != nil { tmp.Close(); os.Remove(path); return nil, err }
+	if _, err := tmp.Write(data); err != nil { tmp.Close(); os.Remove(path); return nil, err }
+	if err := tmp.Close(); err != nil { os.Remove(path); return nil, err }
+	defer os.Remove(path)
+	defer os.Remove(path + ".pre-no-smartdns")
+	if err := migrateNoSmartDNSConfig(path); err != nil { return nil, err }
+	return os.ReadFile(path)
+}
+
 var noSmartDNSResolverKeys = map[string]bool{
 	"nameserver": true, "nameserver-policy": true, "fallback": true,
 	"default-nameserver": true, "proxy-server-nameserver": true,
