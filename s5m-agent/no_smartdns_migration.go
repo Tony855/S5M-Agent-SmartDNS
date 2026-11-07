@@ -71,7 +71,7 @@ func migrateNoSmartDNSConfig(path string) error {
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode { return fmt.Errorf("existing Mihomo config is not a YAML mapping") }
 	root := doc.Content[0]
 	dns := noSmartDNSMapValue(root, "dns")
-	if dns == nil || dns.Kind != yaml.MappingNode { return fmt.Errorf("existing Mihomo config has no dns mapping; refusing destructive migration") }
+	if dns == nil { return nil }; if dns.Kind != yaml.MappingNode { return fmt.Errorf("existing Mihomo dns config is not a mapping") }
 	changed := false
 	for i := 0; i+1 < len(dns.Content); i += 2 {
 		key := dns.Content[i].Value
