@@ -120,6 +120,7 @@ var (
 // lock. Both rollback points and managed-route state remain available until
 // Mihomo runtime rules and SmartDNS DNS probes have passed.
 func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string) error {
+	controllerPayload := mihomoYAML
 	if !smartDNSFeatureSupported() {
 		if updateSmartDNS {
 			return fmt.Errorf("当前 Agent 镜像不包含 SmartDNS，拒绝应用 SmartDNS 配置")
@@ -128,10 +129,16 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 		mihomoYAML, err = normalizeNoSmartDNSYAML(mihomoYAML)
 		if err != nil { return fmt.Errorf("清理主控下发配置中的 SmartDNS DNS 引用失败: %w", err) }
 	}
-	return applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false)
+	return applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, controllerPayload)
 }
 
 func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool) error {
+	return applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, mihomoYAML)
+}
+
+// Runtime YAML may be sanitized for an image capability while the exact
+// controller payload is retained separately for WebSocket SHA-256 consistency.
+func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte) error {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
 	mihomoConfigApplyMu.Lock()
@@ -240,7 +247,7 @@ func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []b
 			return rollback(fmt.Errorf("SmartDNS 联合事务 UDP/TCP DNS 健康检查失败"))
 		}
 	}
-	if err := transactionWriteControllerConfig(mihomoYAML); err != nil {
+	if err := transactionWriteControllerConfig(controllerPayload); err != nil {
 		return rollback(fmt.Errorf("提交主控配置哈希失败: %w", err))
 	}
 
