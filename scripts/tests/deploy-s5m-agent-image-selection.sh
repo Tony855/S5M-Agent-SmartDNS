@@ -30,7 +30,7 @@ chmod +x "$TMP/bin/docker"
 run_menu() {
   local config="$1"
   shift
-  printf '21\n0\n' | env PATH="$TMP/bin:$PATH" \
+  printf '21\n0\n' | sudo env PATH="$TMP/bin:$PATH" \
     CONFIG_FILE="$config" DOCKER_CALL_LOG="$TMP/docker.log" "$@" \
     bash "$SCRIPT" menu >"$TMP/output.log" 2>&1
 }
