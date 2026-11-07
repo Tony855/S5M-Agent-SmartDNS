@@ -42,8 +42,19 @@ func filterNoSmartDNSResolvers(n *yaml.Node) bool {
 	}
 	if n.Kind == yaml.MappingNode {
 		for i := 1; i < len(n.Content); i += 2 {
-			if noSmartDNSStaleResolver(n.Content[i]) {
-				// Keep mapping keys but replace stale policy values with safe resolvers.
+			value := n.Content[i]
+			if value.Kind == yaml.SequenceNode {
+				if filterNoSmartDNSResolvers(value) {
+					if len(value.Content) == 0 {
+						value.Content = []*yaml.Node{
+							{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
+							{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"},
+						}
+					}
+					changed = true
+				}
+			} else if noSmartDNSStaleResolver(value) {
+				// Replace only the stale policy value; unrelated policy entries survive.
 				n.Content[i] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
 					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
 					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"},
