@@ -17,6 +17,7 @@ on:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
       - "scripts/deploy-agent.sh"
+      - "scripts/deploy-s5m-agent.sh"
       - "server/**"
       - "scripts/tests/proxy-import-parser.test.js"
       - ".github/workflows/installer-validation.yml"
