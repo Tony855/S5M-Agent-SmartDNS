@@ -295,7 +295,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 	smartDNSRuntimeTransitionMu.Lock()
 	defer smartDNSRuntimeTransitionMu.Unlock()
 
-	if !smartDNSBinaryAvailable() {
+	if !smartDNSFeatureSupported() || !smartDNSBinaryAvailable() {
 		return fmt.Errorf("当前 Agent 镜像未安装 SmartDNS，不能切换启停状态")
 	}
 	if len(mihomoYAML) == 0 {
