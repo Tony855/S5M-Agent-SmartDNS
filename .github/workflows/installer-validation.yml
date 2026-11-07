@@ -136,6 +136,9 @@ jobs:
       - name: Test Agent deployment rollback fault paths
         run: bash scripts/tests/deploy-agent-rollback.sh
 
+      - name: Test no-SmartDNS image selection and pull failure paths
+        run: bash scripts/tests/deploy-s5m-agent-image-selection.sh
+
       - name: Check embedded web JavaScript syntax
         run: |
           node --check server/web/app.js
