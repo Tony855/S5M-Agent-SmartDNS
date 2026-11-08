@@ -61,8 +61,11 @@ proxies:
 			t.Errorf("additional proxy listener %q must be removed: %s", key, got)
 		}
 	}
-	if config["allow-lan"] != true {
-		t.Fatalf("allow-lan = %#v, want true", config["allow-lan"])
+	if config["allow-lan"] != false {
+		t.Fatalf("allow-lan = %#v, want false", config["allow-lan"])
+	}
+	if config["bind-address"] != "127.0.0.1" {
+		t.Fatalf("bind-address = %#v, want 127.0.0.1", config["bind-address"])
 	}
 	if _, exists := config["authentication"]; exists {
 		t.Fatalf("proxy authentication must be opt-in, got %#v", config["authentication"])
@@ -258,12 +261,12 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != true {
 		t.Errorf("new Agent config must enable TUN by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
 	}
-	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: false"} {
+	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
 		if strings.Contains(agentYAML, forbidden) {
 			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
 	}
-	for _, want := range []string{"allow-lan: true", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
+	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
 		if !strings.Contains(agentYAML, want) {
 			t.Errorf("Agent initial config missing %q:\\n%s", want, agentYAML)
 		}
@@ -417,7 +420,7 @@ rules:
 		}
 		for _, want := range []string{
 			"mode: rule",
-			"allow-lan: true",
+			"allow-lan: false",
 			"secret: keep-this-secret",
 			"enable: false",
 			"listen: 127.0.0.1:5353",
@@ -1269,7 +1272,7 @@ func TestSyncAuthorizedNodeConfigsExpandsSharedProxyAnchors(t *testing.T) {
 		t.Fatalf("saved per-node YAML should contain expanded proxy fields, not merge aliases:\n%s", got.YAML)
 	}
 	for _, want := range []string{
-		"allow-lan: true",
+		"allow-lan: false",
 		"secret: keep-this-secret",
 		"same-vless-443",
 		"same-vless-8443",
