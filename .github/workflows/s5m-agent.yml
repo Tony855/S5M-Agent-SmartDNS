@@ -187,3 +187,29 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           provenance: true
           sbom: true
+      # A successful authenticated push does not prove that Docker hosts can
+      # pull the package anonymously. Use an isolated empty Docker config so
+      # cached runner credentials cannot hide a private-package regression.
+      - name: Verify anonymous GHCR pull and multi-architecture manifest
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          anonymous_config="$(mktemp -d)"
+          cleanup() { rm -rf "$anonymous_config"; }
+          trap cleanup EXIT
+          export DOCKER_CONFIG="$anonymous_config"
+
+          docker buildx imagetools inspect --raw "$IMAGE_NAME:dev" |
+            jq -e '
+              [.manifests[]?.platform
+                | select(.os == "linux")
+                | .architecture] as $architectures
+              | ($architectures | index("amd64") != null)
+                and ($architectures | index("arm64") != null)
+            ' >/dev/null
+
+          docker pull "$IMAGE_NAME:dev"
+          docker pull "$IMAGE_NAME:$IMAGE_TAG"
