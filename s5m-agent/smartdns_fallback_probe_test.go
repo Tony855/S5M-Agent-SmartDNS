@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"net"
 	"strings"
 	"testing"
 )
@@ -137,8 +136,3 @@ func TestProbeMihomoDNSFallbackRejectsNilRunnerAndInvalidYAML(t *testing.T) {
 	}
 }
 
-func TestProbeMihomoDNSFallbackValidatesAddressFamily(t *testing.T) {
-	if net.ParseIP("2001:db8::1") == nil {
-		t.Fatal("test fixture must be a valid IPv6 address")
-	}
-}
