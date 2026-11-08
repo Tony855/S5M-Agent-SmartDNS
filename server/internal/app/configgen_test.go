@@ -140,7 +140,8 @@ authentication:
 	if err := yaml.Unmarshal([]byte(got), &config); err != nil { t.Fatalf("decode YAML: %v", err) }
 	auth, ok := config["authentication"].([]any)
 	if !ok || len(auth) != 1 || auth[0] != "operator:custom-password" { t.Fatalf("explicit operator authentication was not preserved: %#v", config["authentication"]) }
-	if config["allow-lan"] != true { t.Fatalf("allow-lan = %#v, want true", config["allow-lan"]) }
+	if config["allow-lan"] != false { t.Fatalf("allow-lan = %#v, want false", config["allow-lan"]) }
+	if config["bind-address"] != "127.0.0.1" { t.Fatalf("bind-address = %#v, want 127.0.0.1", config["bind-address"]) }
 }
 
 func TestNormalizeAgentProxyConfigKeepsBootstrapIndependentFromSmartDNSAndTUN(t *testing.T) {
