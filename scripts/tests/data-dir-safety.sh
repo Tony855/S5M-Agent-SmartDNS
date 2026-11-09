@@ -34,6 +34,37 @@ for script in \
       exit 1
     fi
   done
+
 done
 
-echo "Agent data-directory symlink and traversal safety tests passed."
+# The explicit wipe path must refuse a mount point anywhere below DATA_DIR.
+awk '
+  /^ensure_no_data_dir_mounts\(\) \{$/ { inside=1 }
+  inside { print }
+  inside && /^}$/ { exit }
+' "$ROOT/scripts/deploy-s5m-agent.sh" > "$TMP/mount-helper.sh"
+test -s "$TMP/mount-helper.sh"
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/findmnt" <<'SH'
+#!/usr/bin/env sh
+[ "\${FINDMNT_FAIL:-0}" = "1" ] && exit 2
+printf '%s\n' "$FINDMNT_TARGETS"
+SH
+chmod 0755 "$TMP/bin/findmnt"
+run_mount_check() {
+  DATA_DIR="$1" FINDMNT_TARGETS="$2" FINDMNT_FAIL="\${3:-0}" PATH="$TMP/bin:/usr/bin:/bin" \
+    bash -c 'err() { return 1; }; source "$1"; ensure_no_data_dir_mounts' _ "$TMP/mount-helper.sh"
+}
+run_mount_check "$TMP/good/data" "/\n/tmp\n$TMP/outside"
+for mounted in "$TMP/good/data" "$TMP/good/data/cache"; do
+  if run_mount_check "$TMP/good/data" "/\n$mounted"; then
+    echo "nested data mount unexpectedly accepted: $mounted" >&2
+    exit 1
+  fi
+done
+if run_mount_check "$TMP/good/data" "/" 1; then
+  echo "mount table failure unexpectedly accepted for destructive wipe" >&2
+  exit 1
+fi
+
+echo "Agent data-directory symlink, traversal, and nested-mount safety tests passed."
