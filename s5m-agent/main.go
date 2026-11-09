@@ -2414,6 +2414,27 @@ func lockAgentBind() func() {
 	return agentBindMu.Unlock
 }
 
+// tryLockAgentBind rejects overlapping public registration attempts instead of
+// queuing unbounded handler goroutines behind a slow upstream registration.
+func tryLockAgentBind() (func(), bool) {
+	if !agentBindMu.TryLock() {
+		return nil, false
+	}
+	return agentBindMu.Unlock, true
+}
+
+func newAgentHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              ":80",
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      20 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+}
+
 // Track the single active control-plane socket so a successful rebind can
 // terminate the old authenticated session immediately. The reconnect loop then
 // rereads agent.json and authenticates with the newly committed token.
@@ -2562,7 +2583,12 @@ func main() {
 			// Hold the lock through remote registration and the atomic local commit:
 			// otherwise overlapping requests can leave the controller and agent.json
 			// referring to different registration tokens.
-			unlockBind := lockAgentBind()
+			unlockBind, acquired := tryLockAgentBind()
+			if !acquired {
+				w.Header().Set("Retry-After", "2")
+				http.Error(w, "已有绑定请求正在处理，请稍后重试", http.StatusTooManyRequests)
+				return
+			}
 			defer unlockBind()
 			r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 			var in struct {
@@ -2638,7 +2664,8 @@ func main() {
 			_ = json.NewEncoder(w).Encode(map[string]string{"message": "绑定成功"})
 		})
 		fmt.Println("Agent Web 服务已启动: :80")
-		if err := http.ListenAndServe(":80", nil); err != nil {
+		server := newAgentHTTPServer(http.DefaultServeMux)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Println("Agent Web 服务启动失败:", err)
 		}
 	}()
