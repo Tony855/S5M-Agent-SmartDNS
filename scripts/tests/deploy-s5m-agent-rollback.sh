@@ -130,7 +130,14 @@ if run_deploy VERIFY_HEALTH=unhealthy; then
   echo "deploy unexpectedly succeeded with an unhealthy replacement" >&2
   exit 1
 fi
-if ! grep -q '^rename s5m-agent-rollback-.* s5m-agent
+if ! grep -q '^rename s5m-agent-rollback-.* s5m-agent$' "$TMP/docker.log"; then
+  echo "rollback command log:" >&2
+  cat "$TMP/docker.log" >&2
+  echo "remaining state:" >&2
+  cat "$TMP/state" >&2
+  exit 1
+fi
+[[ "$(cat "$TMP/state")" == "s5m-agent|running" ]]
 
 echo "Legacy Agent deployment pull/start/health rollback paths verified."
  "$TMP/docker.log"; then
