@@ -156,7 +156,7 @@ jobs:
           ! grep -Eq '127\.0\.0\.1:605[34]' s5m-agent/default-config.yaml
           grep -q 'MATCH,REJECT' s5m-agent/default-config.yaml
           grep -q '1.1.1.1' s5m-agent/default-config.yaml
-          grep -q 'COPY s5m-agent/default-config.yaml /app/default-config.yaml' s5m-agent/Dockerfile.routeros
+          grep -q 'COPY s5m-agent/default-config-routeros.yaml /app/default-config.yaml' s5m-agent/Dockerfile.routeros
           ! grep -q 'smartdns-builder' s5m-agent/Dockerfile.routeros
           grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'bind 127.0.0.1:6054 -group china-dot' s5m-agent/smartdns/smartdns.conf
