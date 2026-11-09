@@ -236,6 +236,9 @@ jobs:
       - name: Test RouterOS persistent-volume initialization security
         run: sh s5m-agent/routeros/tests/persistent-volume-init.sh
 
+      - name: Test Mihomo persistent-volume initialization safety
+        run: sh s5m-agent/tests/mihomo-init-safety.sh
+
       - name: Build and inspect RouterOS image
         run: |
           docker build --platform linux/amd64 -f s5m-agent/Dockerfile.routeros -t s5m-agent-routeros:test .
