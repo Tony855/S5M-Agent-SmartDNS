@@ -58,9 +58,40 @@ jobs:
       - name: Test UDP and TCP DNS
         run: sh docker/smartdns/tests/smoke-test.sh smartdns:test
 
+  test-arm64:
+    name: Build and smoke-test (linux/arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install DNS test client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dnsutils
+
+      - name: Build ARM64 test image
+        env:
+          SMARTDNS_REF: ${{ inputs.smartdns_ref || 'Release48.4' }}
+        run: |
+          docker buildx build --platform linux/arm64 --load \
+            --build-arg "SMARTDNS_REF=$SMARTDNS_REF" \
+            -f docker/smartdns/Dockerfile \
+            -t smartdns:arm64 docker/smartdns
+
+      - name: Test UDP and TCP DNS on ARM64
+        run: sh docker/smartdns/tests/smoke-test.sh smartdns:arm64
+
   publish:
     name: Publish linux/amd64 and linux/arm64 to GHCR
-    needs: test
+    needs: [test, test-arm64]
     if: github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
