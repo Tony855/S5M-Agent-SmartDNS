@@ -1,0 +1,49 @@
+name: Validate S5M-Server source archive
+
+on:
+  pull_request:
+    paths:
+      - "source.zip"
+      - "scripts/validate-source-archive.py"
+      - "scripts/tests/test-source-archive-validation.py"
+      - ".github/workflows/import-server-source.yml"
+      - ".github/workflows/source-archive-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "source.zip"
+      - "scripts/validate-source-archive.py"
+      - "scripts/tests/test-source-archive-validation.py"
+      - ".github/workflows/import-server-source.yml"
+      - ".github/workflows/source-archive-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test archive path, type, duplicate, and extraction limits
+        run: python3 scripts/tests/test-source-archive-validation.py
+      - name: Set up Go
+        if: hashFiles('source.zip') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: false
+      - name: Validate and build bundled server archive when present
+        if: hashFiles('source.zip') != ''
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/s5m-server-import
+          python3 scripts/validate-source-archive.py source.zip /tmp/s5m-server-import
+          test -f /tmp/s5m-server-import/source/main.go
+          test -f /tmp/s5m-server-import/source/go.mod
+          test -d /tmp/s5m-server-import/source/internal
+          test -d /tmp/s5m-server-import/source/web
+          cd /tmp/s5m-server-import/source
+          go mod download
+          go test ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/S5M-Server .
