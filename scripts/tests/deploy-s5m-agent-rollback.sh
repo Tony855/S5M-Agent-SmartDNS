@@ -21,11 +21,13 @@ write_state() {
   awk -F'|' -v n="$name" '$1 != n { print }' "$STATE_FILE" > "$tmp" || true
   printf '%s|%s\n' "$name" "$status" >> "$tmp"
   mv "$tmp" "$STATE_FILE"
+  chmod 666 "$STATE_FILE"
 }
 delete_state() {
   local name="$1" tmp="${STATE_FILE}.tmp"
   awk -F'|' -v n="$name" '$1 != n { print }' "$STATE_FILE" > "$tmp" || true
   mv "$tmp" "$STATE_FILE"
+  chmod 666 "$STATE_FILE"
 }
 case "$cmd" in
   info) exit 0 ;;
