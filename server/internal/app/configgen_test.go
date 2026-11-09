@@ -2567,3 +2567,28 @@ func TestApplyAgentRuntimeDNSFallsBackDomesticWhenListenerExplicitlyUnavailable(
 	if strings.Contains(got, "127.0.0.1:6054") { t.Fatalf("missing domestic listener must not remain referenced: %s", got) }
 	if !strings.Contains(got, "dns.alidns.com/dns-query") { t.Fatalf("domestic fallback resolver was not restored: %s", got) }
 }
+
+
+func TestGlobalModeWithoutEligibleProxyRejectsInsteadOfDirect(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-a", "test-secret", "global", "")
+	if err != nil { t.Fatalf("build global config: %v", err) }
+	if !strings.Contains(got, "MATCH,REJECT") || strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("global mode without an eligible proxy must fail closed, not bypass direct:\\n%s", got)
+	}
+}
+
+func TestGameModeWithoutEligibleProxyRejectsGameDestinations(t *testing.T) {
+	got, err := buildConfigFromProxiesWithMode(nil, "node-a", "test-secret", "game", "")
+	if err != nil { t.Fatalf("build game config: %v", err) }
+	for _, want := range []string{
+		"DOMAIN-SUFFIX,steampowered.com,REJECT",
+		"DOMAIN-SUFFIX,epicgames.com,REJECT",
+		"DOMAIN-SUFFIX,valorant.com,REJECT",
+		"MATCH,DIRECT",
+	} {
+		if !strings.Contains(got, want) { t.Errorf("game mode without proxy missing %q:\\n%s", want, got) }
+	}
+	if strings.Contains(got, "DOMAIN-SUFFIX,steampowered.com,DIRECT") {
+		t.Fatal("game traffic must never fall back to DIRECT when no proxy exists")
+	}
+}
