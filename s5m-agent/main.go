@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -360,21 +361,56 @@ func managedRouteCIDRsPath() string {
 	return filepath.Join(mihomoHome(), "controller-route-cidrs.json")
 }
 
+const managedRouteCIDRsMaxBytes = 8 << 10
+const managedRouteCIDRsMaxEntries = 64
+
+// readManagedRouteCIDRs treats the persistent route journal as untrusted
+// volume data. It must never follow symlinks, read unbounded input, or accept
+// arbitrary CIDRs that could cause operator-owned route exclusions to be
+// removed during a DNS refresh. Invalid state is ignored conservatively:
+// stale exclusions may remain, but unrelated routes are never deleted.
 func readManagedRouteCIDRs() map[string]bool {
-	data, err := os.ReadFile(managedRouteCIDRsPath())
+	path := managedRouteCIDRsPath()
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return map[string]bool{}
 	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 ||
+		info.Size() <= 0 || info.Size() > managedRouteCIDRsMaxBytes {
+		return map[string]bool{}
+	}
+	data, err := io.ReadAll(io.LimitReader(file, managedRouteCIDRsMaxBytes+1))
+	if err != nil || len(data) == 0 || len(data) > managedRouteCIDRsMaxBytes {
+		return map[string]bool{}
+	}
 	var values []string
-	if json.Unmarshal(data, &values) != nil {
+	if err := json.Unmarshal(data, &values); err != nil || len(values) > managedRouteCIDRsMaxEntries {
 		return map[string]bool{}
 	}
 	result := make(map[string]bool, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value != "" {
-			result[value] = true
+		ip, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return map[string]bool{}
 		}
+		ones, bits := network.Mask.Size()
+		if bits == 32 {
+			if ones != 32 || ip.To4() == nil || value != ip.To4().String()+"/32" {
+				return map[string]bool{}
+			}
+		} else if bits == 128 {
+			if ones != 128 || ip.To4() != nil || value != ip.String()+"/128" {
+				return map[string]bool{}
+			}
+		} else {
+			return map[string]bool{}
+		}
+		result[value] = true
 	}
 	return result
 }
