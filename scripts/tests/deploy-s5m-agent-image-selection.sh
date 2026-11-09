@@ -73,3 +73,27 @@ run_menu "$TMP/inspect-failure.conf" MOCK_INSPECT_FAIL=1
 cmp -s "$TMP/inspect-failure.expected" "$TMP/inspect-failure.conf"
 
 echo "No-SmartDNS image pull selection and failure-path tests passed."
+
+
+# The legacy automatic deploy entry point must preserve data by default.
+grep -Fqx 'FULL_RESET="${FULL_RESET:-false}"' "$SCRIPT"
+grep -Fqx 'WIPE_DATA="${WIPE_DATA:-false}"' "$SCRIPT"
+grep -Fq 'if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then' "$SCRIPT"
+
+# A non-interactive full reset without an explicit path confirmation must stop
+# before touching any container, image, or data directory.
+: > "$TMP/docker.log"
+if sudo env PATH="$TMP/bin:$PATH" CONFIG_FILE="$TMP/empty.conf" \
+  DOCKER_CALL_LOG="$TMP/docker.log" FULL_RESET=true \
+  bash "$SCRIPT" deploy >"$TMP/auto-reset.log" 2>&1; then
+  echo "Automatic full reset unexpectedly proceeded without data-wipe consent" >&2
+  cat "$TMP/auto-reset.log" >&2
+  exit 1
+fi
+if grep -Eq '^(stop|rm|run|pull|rmi|image prune) ' "$TMP/docker.log"; then
+  echo "Unconfirmed full reset touched Docker resources" >&2
+  cat "$TMP/docker.log" >&2
+  exit 1
+fi
+grep -Fq 'ALLOW_DATA_WIPE=true' "$TMP/auto-reset.log"
+

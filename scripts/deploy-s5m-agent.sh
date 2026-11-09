@@ -47,14 +47,41 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 
 # 自动部署行为（仅 deploy 模式生效）
-FULL_RESET="${FULL_RESET:-true}"
-WIPE_DATA="${WIPE_DATA:-true}"
+FULL_RESET="${FULL_RESET:-false}"
+WIPE_DATA="${WIPE_DATA:-false}"
 CLEAN_LEGACY_IMAGES="${CLEAN_LEGACY_IMAGES:-false}"
 # ============================================
 
 log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
+
+# Destructive data removal is never the default. Interactive users must type
+# the exact target path; automation must opt in and provide the same phrase.
+confirm_data_wipe() {
+  if [[ -z "${DATA_DIR}" || "${DATA_DIR}" != /* || "${DATA_DIR}" == "/" ||
+        "${DATA_DIR}" == *"/../"* || "${DATA_DIR}" == *"/.." ||
+        "${DATA_DIR}" == *"/./"* ]]; then
+    err "拒绝清理不安全的数据目录路径：${DATA_DIR@Q}"
+    return 1
+  fi
+
+  local expected="DELETE:${DATA_DIR}" confirmation=""
+  if [[ -t 0 ]]; then
+    read -r -p "警告：将永久删除数据目录 ${DATA_DIR}。输入 ${expected} 确认：" confirmation || return 1
+  else
+    if [[ "${ALLOW_DATA_WIPE:-false}" != "true" ]]; then
+      err "非交互模式禁止删除数据；如确需清除，必须设置 ALLOW_DATA_WIPE=true"
+      return 1
+    fi
+    confirmation="${CONFIRM_DATA_WIPE:-}"
+  fi
+  if [[ "${confirmation}" != "${expected}" ]]; then
+    warn "数据清理确认不匹配，已取消"
+    return 1
+  fi
+  return 0
+}
 
 # ---------- 环境检查 ----------
 require_root() {
@@ -249,6 +276,11 @@ do_recreate() {
   local remove_image="${1:-false}"
   local wipe_data="${2:-false}"
 
+  # Confirm destructive intent before stopping/removing any existing container.
+  if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then
+    return 1
+  fi
+
   # 0. 宿主机 TUN 预检（仅当启用 TUN 映射时）
   if [[ ${#DEVICE_MAP[@]} -gt 0 ]]; then
     check_host_tun || warn "宿主机 TUN 不可用，Mihomo 的 TUN 模式可能无法启动（其余功能不受影响）"
@@ -280,7 +312,7 @@ do_recreate() {
   if [[ "${wipe_data}" == "true" ]]; then
     if [[ -d "${DATA_DIR}" ]]; then
       log "删除旧数据目录 ${DATA_DIR}"
-      rm -rf "${DATA_DIR}"
+      rm -rf -- "${DATA_DIR}"
     fi
   else
     warn "保留现有数据目录 ${DATA_DIR}"
