@@ -211,36 +211,47 @@ save_config() {
 
 # ---------- 验证 ----------
 verify_container() {
-  log "等待容器启动..."
-  sleep 5
+  log "等待容器进入健康状态（最多 120 秒）..."
+  local deadline=$((SECONDS + 120)) state="unknown" health="unknown"
+  while (( SECONDS < deadline )); do
+    state="$(docker inspect "${CONTAINER_NAME}" --format '{{.State.Status}}' 2>/dev/null || echo missing)"
+    health="$(docker inspect "${CONTAINER_NAME}" \
+      --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' 2>/dev/null || echo unknown)"
+    if [[ "${state}" != "running" ]]; then
+      err "新容器未处于 running 状态：${state}"
+      break
+    fi
+    case "${health}" in
+      healthy|n/a) break ;;
+      unhealthy) err "新容器健康检查失败"; break ;;
+      starting) sleep 2 ;;
+      *) err "无法读取容器健康状态：${health}"; break ;;
+    esac
+  done
+  if [[ "${state}" != "running" || ( "${health}" != "healthy" && "${health}" != "n/a" ) ]]; then
+    err "容器启动/健康验证失败（state=${state}, health=${health}）"
+    docker logs --tail=80 "${CONTAINER_NAME}" 2>&1 || true
+    return 1
+  fi
 
   log "当前状态："
   docker ps --filter "name=^/${CONTAINER_NAME}$" || true
-
-  local health
-  health="$(docker inspect "${CONTAINER_NAME}" \
-    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' 2>/dev/null || echo n/a)"
   log "Health: ${health}"
-
   log "容器设备与权限："
   docker inspect "${CONTAINER_NAME}" --format \
     '  Devices: {{json .HostConfig.Devices}}
   CapAdd : {{json .HostConfig.CapAdd}}' 2>/dev/null || true
-
   log "镜像 digest（确认是刚拉下来的最新版）："
   docker image inspect "${IMAGE}" \
     --format '  {{.Id}}  {{index .RepoDigests 0}}' 2>/dev/null || true
-
   log "最近 50 行日志："
   docker logs --tail=50 "${CONTAINER_NAME}" 2>&1 || true
-
   log "TUN 相关日志（若有）："
   docker logs "${CONTAINER_NAME}" 2>&1 | grep -iE 'tun|error|fatal' | tail -10 || true
-
   log "监听端口："
   ss -lntup 2>/dev/null | grep -E ':(80|7890|6053)\b' || echo "  （无匹配，稍后再查看）"
-
   log "完成。数据目录：${DATA_DIR}"
+  return 0
 }
 
 # ---------- 拉取镜像 ----------
@@ -272,89 +283,115 @@ do_pull_no_smartdns() {
 }
 
 # ---------- 重建 / 部署 ----------
+restore_previous_container() {
+  local backup_container="$1"
+  [[ -n "${backup_container}" ]] || return 0
+  if ! docker inspect "${backup_container}" >/dev/null 2>&1; then
+    return 0
+  fi
+  warn "新容器部署失败，正在恢复旧容器 ${backup_container}"
+  docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  if ! docker rename "${backup_container}" "${CONTAINER_NAME}"; then
+    err "旧容器重命名恢复失败，请手动恢复：${backup_container}"
+    return 1
+  fi
+  if ! docker start "${CONTAINER_NAME}" >/dev/null; then
+    err "旧容器恢复启动失败，请检查容器日志"
+    return 1
+  fi
+  log "旧容器已恢复并启动"
+  return 0
+}
+
 do_recreate() {
   local remove_image="${1:-false}"
   local wipe_data="${2:-false}"
+  local backup_container=""
 
-  # Confirm destructive intent before stopping/removing any existing container.
+  # Confirm destructive intent before touching the current container or data.
   if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then
     return 1
   fi
-
-  # 0. 宿主机 TUN 预检（仅当启用 TUN 映射时）
   if [[ ${#DEVICE_MAP[@]} -gt 0 ]]; then
     check_host_tun || warn "宿主机 TUN 不可用，Mihomo 的 TUN 模式可能无法启动（其余功能不受影响）"
   fi
 
-  # 1. 删除旧容器
-  if container_exists; then
-    log "停止旧容器 ${CONTAINER_NAME}"
-    docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-    log "删除旧容器 ${CONTAINER_NAME}"
-    docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-  else
-    warn "容器 ${CONTAINER_NAME} 不存在，跳过"
-  fi
-
-  # 2. 删除本地镜像
-  if [[ "${remove_image}" == "true" ]]; then
-    log "删除本地镜像 ${IMAGE}（强制重新拉取）"
-    if docker rmi -f "${IMAGE}" >/dev/null 2>&1; then
-      log "已删除本地镜像"
-    else
-      warn "删除镜像失败（可能被其他容器引用），继续尝试拉取"
-    fi
-  fi
-  log "清理 dangling 镜像（<none>）"
-  docker image prune -f >/dev/null 2>&1 || true
-
-  # 3. 数据目录
-  if [[ "${wipe_data}" == "true" ]]; then
-    if [[ -d "${DATA_DIR}" ]]; then
-      log "删除旧数据目录 ${DATA_DIR}"
-      rm -rf -- "${DATA_DIR}"
-    fi
-  else
-    warn "保留现有数据目录 ${DATA_DIR}"
-  fi
-  mkdir -p "${DATA_DIR}"
-
-  # 3.5 端口冲突预检（在拉镜像之前，避免白拉）
+  # Validate ports and pull the candidate image while the current service is
+  # still running. Registry/network failure must never take the old Agent offline.
   if ! check_port_conflict; then
     err "端口预检失败，已中止"
     return 1
   fi
-
-  # 4. 拉取镜像
   log "拉取镜像 ${IMAGE}"
   if ! docker pull "${IMAGE}"; then
-    err "拉取镜像失败"
+    err "拉取镜像失败，现有容器保持不变"
     return 1
   fi
 
-  # 5. 启动新容器
-  log "启动容器 ${CONTAINER_NAME}"
+  if [[ "${wipe_data}" == "true" ]]; then
+    if container_exists; then
+      log "停止并删除旧容器（已明确确认数据清除）"
+      docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+      docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    fi
+    if [[ -d "${DATA_DIR}" || -L "${DATA_DIR}" ]]; then
+      log "删除旧数据目录 ${DATA_DIR}"
+      rm -rf -- "${DATA_DIR}"
+    fi
+    mkdir -p "${DATA_DIR}"
+  else
+    warn "保留现有数据目录 ${DATA_DIR}"
+    if ! mkdir -p "${DATA_DIR}"; then
+      err "无法创建数据目录，现有容器保持不变"
+      return 1
+    fi
+    if container_exists; then
+      backup_container="${CONTAINER_NAME}-rollback-$(date +%s)-$$"
+      log "停止旧容器并保留回滚副本：${backup_container}"
+      docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+      if ! docker rename "${CONTAINER_NAME}" "${backup_container}"; then
+        docker start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+        err "无法保留旧容器回滚副本，已取消部署"
+        return 1
+      fi
+    fi
+  fi
+
+  log "启动新容器 ${CONTAINER_NAME}"
   if ! docker run -d \
       --name "${CONTAINER_NAME}" \
       --restart "${RESTART_POLICY}" \
-      "${PORT_MAP[@]+"${PORT_MAP[@]}"}" \
-      "${DEVICE_MAP[@]+"${DEVICE_MAP[@]}"}" \
-      "${CAP_ADD[@]+"${CAP_ADD[@]}"}" \
+      "${PORT_MAP[@]+" ${PORT_MAP[@]}"}" \
+      "${DEVICE_MAP[@]+" ${DEVICE_MAP[@]}"}" \
+      "${CAP_ADD[@]+" ${CAP_ADD[@]}"}" \
       -v "${DATA_DIR}:/data" \
       -e TZ="${TZ_VAL}" \
-      ${EXTRA_ENVS[@]+"${EXTRA_ENVS[@]}"} \
+      ${EXTRA_ENVS[@]+" ${EXTRA_ENVS[@]}"} \
       "${IMAGE}" >/dev/null; then
-    err "启动容器失败"
-    # 清理半成品（created 状态）容器，避免下次撞名
+    err "启动新容器失败"
     if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
-      warn "清理残留的半成品容器 ${CONTAINER_NAME}"
       docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
     fi
+    restore_previous_container "${backup_container}" || true
     return 1
   fi
 
-  # 6. 验证
-  verify_container
+  if ! verify_container; then
+    err "新容器健康检查未通过"
+    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    restore_previous_container "${backup_container}" || true
+    return 1
+  fi
+
+  if [[ -n "${backup_container}" ]]; then
+    log "新容器健康，删除回滚副本 ${backup_container}"
+    docker rm "${backup_container}" >/dev/null 2>&1 || warn "回滚副本未能清理，可手动删除"
+  fi
+  if [[ "${remove_image}" == "true" ]]; then
+    log "清理旧的 dangling 镜像"
+    docker image prune -f >/dev/null 2>&1 || true
+  fi
+  return 0
 }
 
 # ---------- 生命周期控制 ----------
