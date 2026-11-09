@@ -127,7 +127,7 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 		}
 		return nil
 	}
-	deleteKeys := map[string]bool{"mixed-port": true, "port": true, "socks-port": true, "redir-port": true, "tproxy-port": true, "listeners": true, "allow-lan": true, "external-controller": true}
+	deleteKeys := map[string]bool{"mixed-port": true, "port": true, "socks-port": true, "redir-port": true, "tproxy-port": true, "listeners": true, "allow-lan": true, "bind-address": true, "external-controller": true}
 	filtered := make([]*yaml.Node, 0, len(root.Content))
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if !deleteKeys[root.Content[i].Value] {
@@ -135,10 +135,12 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 		}
 	}
 	root.Content = filtered
-	// Expose the mixed proxy listener to the LAN. Proxy authentication is
-	// intentionally opt-in; the Mihomo API secret remains independently enabled.
+	// Keep the Agent proxy listener private to the container itself. Publishing
+	// port 7890 on the host is a separate, explicit deployment decision.
+	// Never expose an unauthenticated mixed proxy to the LAN by default.
 	setScalar(root, "mixed-port", "7890", "!!int")
-	setScalar(root, "allow-lan", "true", "!!bool")
+	setScalar(root, "allow-lan", "false", "!!bool")
+	setScalar(root, "bind-address", "127.0.0.1", "!!str")
 	setScalar(root, "external-controller", "127.0.0.1:8088", "!!str")
 	// PROCESS-NAME rules route SmartDNS DoT sockets through the selected proxy.
 	setScalar(root, "find-process-mode", "strict", "!!str")
