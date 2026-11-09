@@ -361,12 +361,12 @@ do_recreate() {
   if ! docker run -d \
       --name "${CONTAINER_NAME}" \
       --restart "${RESTART_POLICY}" \
-      "${PORT_MAP[@]+" ${PORT_MAP[@]}"}" \
-      "${DEVICE_MAP[@]+" ${DEVICE_MAP[@]}"}" \
-      "${CAP_ADD[@]+" ${CAP_ADD[@]}"}" \
+      "${PORT_MAP[@]}" \
+      "${DEVICE_MAP[@]}" \
+      "${CAP_ADD[@]}" \
       -v "${DATA_DIR}:/data" \
       -e TZ="${TZ_VAL}" \
-      ${EXTRA_ENVS[@]+" ${EXTRA_ENVS[@]}"} \
+      "${EXTRA_ENVS[@]}" \
       "${IMAGE}" >/dev/null; then
     err "启动新容器失败"
     if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
