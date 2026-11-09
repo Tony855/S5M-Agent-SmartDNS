@@ -229,7 +229,7 @@ jobs:
             command -v dig
             test -x /usr/local/bin/mihomo.initial
             ! test -e /usr/sbin/smartdns
-            ! grep -Eq "127\\.0\\.0\\.1:605[34]" /app/default-config.yaml
+            ! grep -Eq "127\.0\\.0\\.1:605[34]" /app/default-config.yaml
             grep -q "MATCH,REJECT" /app/default-config.yaml
           '
 
