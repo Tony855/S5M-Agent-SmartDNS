@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Check Bash syntax
         run: |
@@ -155,7 +155,7 @@ jobs:
           node scripts/tests/proxy-import-parser.test.js
 
       - name: Test and build bundled S5M-Server source
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.23.x"
           cache-dependency-path: server/go.sum
