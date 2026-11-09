@@ -147,11 +147,11 @@ jobs:
           done
           if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$legacy_name")" != healthy ]]; then docker inspect --format '{{json .State.Health}}' "$legacy_name"; docker logs "$legacy_name"; docker exec "$legacy_name" /healthcheck.sh || true; exit 1; fi
           test -s "$legacy_data/config.yaml.pre-no-smartdns"
-          grep -q 'keep-existing-agent-secret' "$legacy_data/config.yaml"
-          grep -q 'preserved-node' "$legacy_data/config.yaml"
-          grep -q 'custom.example' "$legacy_data/config.yaml"
-          grep -q '192.0.2.53' "$legacy_data/config.yaml"
-          ! grep -Eq '127.0.0.1:6053|127.0.0.1:6054' "$legacy_data/config.yaml"
+          sudo grep -q 'keep-existing-agent-secret' "$legacy_data/config.yaml"
+          sudo grep -q 'preserved-node' "$legacy_data/config.yaml"
+          sudo grep -q 'custom.example' "$legacy_data/config.yaml"
+          sudo grep -q '192.0.2.53' "$legacy_data/config.yaml"
+          ! sudo grep -Eq '127.0.0.1:6053|127.0.0.1:6054' "$legacy_data/config.yaml"
           docker rm -f "$legacy_name" >/dev/null
           sudo rm -rf "$legacy_data"
 
