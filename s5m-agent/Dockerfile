@@ -2,6 +2,10 @@
 ARG ALPINE_VERSION=3.24
 ARG MIHOMO_VERSION=v1.19.31
 ARG S6_OVERLAY_VERSION=3.2.3.2
+# SHA-256 asset digests from the official s6-overlay v3.2.3.2 GitHub release API.
+ARG S6_OVERLAY_NOARCH_SHA256=5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2eda12
+ARG S6_OVERLAY_AMD64_SHA256=e6befcc96a437a3831386ecfc51808c5d3e939dc5fe3c02ae9284599e8aa2408
+ARG S6_OVERLAY_ARM64_SHA256=b17f17a82e7a515c682a91edaf2ffdabb73f891981b6c1fd712115693a2f8b4c
 # SHA-256 digests published by the official MetaCubeX/mihomo v1.19.31 release.
 ARG MIHOMO_AMD64_SHA256=04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc
 ARG MIHOMO_ARM64_SHA256=9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4
@@ -39,20 +43,22 @@ RUN set -eux; \
 FROM alpine:${ALPINE_VERSION} AS s6-overlay-fetch
 ARG TARGETARCH
 ARG S6_OVERLAY_VERSION
+ARG S6_OVERLAY_NOARCH_SHA256
+ARG S6_OVERLAY_AMD64_SHA256
+ARG S6_OVERLAY_ARM64_SHA256
 RUN apk add --no-cache ca-certificates curl xz
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) s6_arch="x86_64" ;; \
-      arm64) s6_arch="aarch64" ;; \
+      amd64) s6_arch="x86_64"; expected_s6_sha256="${S6_OVERLAY_AMD64_SHA256}" ;; \
+      arm64) s6_arch="aarch64"; expected_s6_sha256="${S6_OVERLAY_ARM64_SHA256}" ;; \
       *) echo "Unsupported architecture for s6-overlay: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     mkdir -p /out; \
     base="https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}"; \
     curl --fail --show-error --silent --location --retry 3 --retry-all-errors "${base}/s6-overlay-noarch.tar.xz" -o /tmp/s6-overlay-noarch.tar.xz; \
-    curl --fail --show-error --silent --location --retry 3 --retry-all-errors "${base}/s6-overlay-noarch.tar.xz.sha256" -o /tmp/s6-overlay-noarch.tar.xz.sha256; \
     curl --fail --show-error --silent --location --retry 3 --retry-all-errors "${base}/s6-overlay-${s6_arch}.tar.xz" -o /tmp/s6-overlay-${s6_arch}.tar.xz; \
-    curl --fail --show-error --silent --location --retry 3 --retry-all-errors "${base}/s6-overlay-${s6_arch}.tar.xz.sha256" -o /tmp/s6-overlay-${s6_arch}.tar.xz.sha256; \
-    (cd /tmp && sha256sum -c s6-overlay-noarch.tar.xz.sha256 && sha256sum -c s6-overlay-${s6_arch}.tar.xz.sha256); \
+    echo "${S6_OVERLAY_NOARCH_SHA256}  /tmp/s6-overlay-noarch.tar.xz" | sha256sum -c -; \
+    echo "${expected_s6_sha256}  /tmp/s6-overlay-${s6_arch}.tar.xz" | sha256sum -c -; \
     tar -Jxpf /tmp/s6-overlay-noarch.tar.xz -C /out; \
     tar -Jxpf /tmp/s6-overlay-${s6_arch}.tar.xz -C /out
 
