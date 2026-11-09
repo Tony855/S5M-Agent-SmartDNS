@@ -1,6 +1,7 @@
 package app
 
 import (
+	"math"
 	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
@@ -100,19 +101,37 @@ func (a *App) handleCreateBrowserEventsTicket(w http.ResponseWriter, r *http.Req
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
+	clientKey := loginClientKey(r)
+	if allowed, retryAfter := a.loginLimiter.allow(clientKey, time.Now()); !allowed {
+		seconds := int(math.Ceil(retryAfter.Seconds()))
+		if seconds < 1 {
+			seconds = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeErr(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后重试")
+		return
+	}
 	var in struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := decode(r, &in); err != nil {
-		writeErr(w, 400, "参数错误")
+	if err := decodeLimited(r, 8<<10, "8 KiB", &in); err != nil {
+		writeErr(w, decodeErrorStatus(err), "参数错误")
 		return
 	}
 	u, err := a.store.UserByUsername(in.Username)
-	if err != nil || !u.Enabled || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil {
-		writeErr(w, 401, "账号或密码错误")
+	if err != nil || u == nil || !u.Enabled {
+		// Perform the same bcrypt work for unknown/disabled accounts to reduce
+		// username-enumeration timing differences.
+		_ = bcrypt.CompareHashAndPassword(dummyLoginPasswordHash, []byte(in.Password))
+		writeErr(w, http.StatusUnauthorized, "账号或密码错误")
 		return
 	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil {
+		writeErr(w, http.StatusUnauthorized, "账号或密码错误")
+		return
+	}
+	a.loginLimiter.reset(clientKey)
 	tok, err := a.signToken(u)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "生成登录凭证失败")
