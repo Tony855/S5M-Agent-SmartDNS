@@ -1,5 +1,5 @@
 # Standalone S5M Agent + Mihomo image: no SmartDNS dependency.
-allow-lan: true
+allow-lan: false
 mode: rule
 log-level: info
 find-process-mode: strict
