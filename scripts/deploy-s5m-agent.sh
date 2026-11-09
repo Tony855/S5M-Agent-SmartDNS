@@ -56,16 +56,45 @@ log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 
+validate_data_dir_path() {
+  local path="\${DATA_DIR}" current="" component
+  local -a components=()
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" ||
+        "$path" == *"//"* || "$path" == *"/./"* || "$path" == *"/." ||
+        "$path" == *"/../"* || "$path" == *"/.." ]]; then
+    err "拒绝不安全的数据目录路径：\${path@Q}"
+    return 1
+  fi
+  IFS='/' read -r -a components <<< "\${path#/}"
+  if (("\${#components[@]}" < 2)); then
+    err "数据目录必须是独立子目录，拒绝使用系统根目录"
+    return 1
+  fi
+  for component in "\${components[@]}"; do
+    if [[ -z "$component" || "$component" == "." || "$component" == ".." ]]; then
+      err "数据目录包含不安全路径组件：\${path@Q}"
+      return 1
+    fi
+    current+="/$component"
+    if [[ -L "$current" ]]; then
+      err "数据目录路径包含符号链接，拒绝继续：$current"
+      return 1
+    fi
+    if [[ -e "$current" && ! -d "$current" ]]; then
+      err "数据目录路径组件不是目录：$current"
+      return 1
+    fi
+  done
+}
+
 # Destructive data removal is never the default. Interactive users must type
 # the exact target path; automation must opt in and provide the same phrase.
 confirm_data_wipe() {
-  if [[ -z "${DATA_DIR}" || "${DATA_DIR}" != /* || "${DATA_DIR}" == "/" ||
-        "${DATA_DIR}" == *"/../"* || "${DATA_DIR}" == *"/.." ||
-        "${DATA_DIR}" == *"/./"* ]]; then
-    err "拒绝清理不安全的数据目录路径：${DATA_DIR@Q}"
+  validate_data_dir_path || return 1
+  if ! command -v mountpoint >/dev/null 2>&1 || mountpoint -q -- "${DATA_DIR}"; then
+    err "数据目录是挂载点或无法确认挂载状态，拒绝递归清理"
     return 1
   fi
-
   local expected="DELETE:${DATA_DIR}" confirmation=""
   if [[ -t 0 ]]; then
     read -r -p "警告：将永久删除数据目录 ${DATA_DIR}。输入 ${expected} 确认：" confirmation || return 1
@@ -308,6 +337,9 @@ do_recreate() {
   local wipe_data="${2:-false}"
   local backup_container=""
 
+  # Validate every existing path component before mkdir, bind-mount, or deletion.
+  validate_data_dir_path || return 1
+
   # Confirm destructive intent before touching the current container or data.
   if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then
     return 1
@@ -338,10 +370,10 @@ do_recreate() {
       log "删除旧数据目录 ${DATA_DIR}"
       rm -rf -- "${DATA_DIR}"
     fi
-    mkdir -p "${DATA_DIR}"
+    install -d -m 0700 -- "${DATA_DIR}"
   else
     warn "保留现有数据目录 ${DATA_DIR}"
-    if ! mkdir -p "${DATA_DIR}"; then
+    if ! install -d -m 0700 -- "${DATA_DIR}"; then
       err "无法创建数据目录，现有容器保持不变"
       return 1
     fi
