@@ -62,6 +62,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate no-SmartDNS healthcheck shell syntax
         run: sh -n s5m-agent/healthcheck-no-smartdns.sh
+
+      - name: Test Mihomo persistent-volume initialization safety
+        run: sh s5m-agent/tests/mihomo-init-safety.sh
       - name: Run Agent unit tests
         run: |
           cd s5m-agent
