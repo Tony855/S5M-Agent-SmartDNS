@@ -24,7 +24,7 @@ test "$(stat -c '%a' "$DATA/bin/mihomo")" = 700
 test "$(stat -c '%a' "$DATA/config.yaml")" = 600
 test "$(cat "$TMP/sentinel")" = "attacker-controlled sentinel"
 test -L "$DATA/bin/mihomo.tmp.$"
-if find "$DATA/bin" -maxdepth 1 -name 'mihomo.tmp.*' | grep -q .; then
+if find "$DATA/bin" -maxdepth 1 -type f -name 'mihomo.tmp.*' | grep -q .; then
   echo "kernel temporary file was not cleaned up" >&2
   exit 1
 fi
@@ -56,5 +56,15 @@ if run_init "$BAD_BACKUP"; then
   echo "symlinked rollback binary unexpectedly accepted" >&2
   exit 1
 fi
+
+
+BAD_DIR="$TMP/bad-dir"
+mkdir -p "$BAD_DIR"
+ln -s "$TMP/outside" "$BAD_DIR/bin"
+if run_init "$BAD_DIR"; then
+  echo "symlinked bin directory unexpectedly accepted" >&2
+  exit 1
+fi
+test ! -e "$TMP/outside"
 
 echo "RouterOS persistent-volume initialization security tests passed."
