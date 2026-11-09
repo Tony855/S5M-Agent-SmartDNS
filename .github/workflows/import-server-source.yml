@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   extract-and-commit:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && hashFiles('source.zip') != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
