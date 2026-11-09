@@ -15,7 +15,7 @@ run_init() {
 }
 
 DATA="$TMP/data"
-mkdir -p "$DATA"
+mkdir -p "$DATA/bin"
 printf 'attacker-controlled sentinel\n' > "$TMP/sentinel"
 ln -s "$TMP/sentinel" "$DATA/bin/mihomo.tmp.$"
 run_init "$DATA"
