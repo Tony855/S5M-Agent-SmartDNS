@@ -2364,3 +2364,28 @@ func TestWriteManagedRouteCIDRsRejectsUnboundedOrBroadRoutes(t *testing.T) {
 		t.Fatal("writer must reject more than the bounded number of host routes")
 	}
 }
+
+
+func TestAgentHTTPServerHasBoundedTimeoutsAndHeaders(t *testing.T) {
+	server := newAgentHTTPServer(http.NewServeMux())
+	if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 ||
+		server.WriteTimeout <= 0 || server.IdleTimeout <= 0 || server.MaxHeaderBytes <= 0 {
+		t.Fatalf("Agent HTTP server limits are not configured: %#v", server)
+	}
+	if server.ReadHeaderTimeout != 5*time.Second || server.ReadTimeout != 15*time.Second ||
+		server.WriteTimeout != 20*time.Second || server.IdleTimeout != 60*time.Second ||
+		server.MaxHeaderBytes != 16<<10 {
+		t.Fatalf("Agent HTTP server limits changed unexpectedly: %#v", server)
+	}
+}
+
+func TestTryLockAgentBindRejectsConcurrentRequests(t *testing.T) {
+	unlock, ok := tryLockAgentBind()
+	if !ok {
+		t.Fatal("first bind lock acquisition failed")
+	}
+	defer unlock()
+	if _, ok := tryLockAgentBind(); ok {
+		t.Fatal("concurrent bind lock acquisition should be rejected")
+	}
+}
