@@ -61,10 +61,7 @@ jobs:
   publish:
     name: Publish linux/amd64 and linux/arm64 to GHCR
     needs: test
-    if: >-
-      (github.event_name == 'push' &&
-        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/smartdns-v'))) ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -95,7 +92,7 @@ jobs:
             type=ref,event=branch
             type=match,pattern=smartdns-v(.*),group=1
             type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/smartdns-v') }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish == true }}
 
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
