@@ -57,22 +57,22 @@ warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 
 validate_data_dir_path() {
-  local path="\${DATA_DIR}" current="" component
+  local path="${DATA_DIR}" current="" component
   local -a components=()
   if [[ -z "$path" || "$path" != /* || "$path" == "/" ||
         "$path" == *"//"* || "$path" == *"/./"* || "$path" == *"/." ||
         "$path" == *"/../"* || "$path" == *"/.." ]]; then
-    err "拒绝不安全的数据目录路径：\${path@Q}"
+    err "拒绝不安全的数据目录路径：${path@Q}"
     return 1
   fi
-  IFS='/' read -r -a components <<< "\${path#/}"
-  if (("\${#components[@]}" < 2)); then
+  IFS='/' read -r -a components <<< "${path#/}"
+  if (("${#components[@]}" < 2)); then
     err "数据目录必须是独立子目录，拒绝使用系统根目录"
     return 1
   fi
-  for component in "\${components[@]}"; do
+  for component in "${components[@]}"; do
     if [[ -z "$component" || "$component" == "." || "$component" == ".." ]]; then
-      err "数据目录包含不安全路径组件：\${path@Q}"
+      err "数据目录包含不安全路径组件：${path@Q}"
       return 1
     fi
     current+="/$component"
