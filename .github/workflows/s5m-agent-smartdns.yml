@@ -202,6 +202,7 @@ jobs:
           check "TUN overlay adds NET_ADMIN" grep -q NET_ADMIN <<<"$tun_compose"
           check "TUN overlay mounts tun device" grep -q 'target: /dev/net/tun' <<<"$tun_compose"
           check "default Mihomo config enables TUN" grep -q 'enable: true' s5m-agent/default-config.yaml
+          check "RouterOS image copies complete Agent Go package" grep -Fq 'COPY s5m-agent/*.go ./' s5m-agent/Dockerfile.routeros
           check "default SmartDNS config enables TUN" grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           check "s5m-deploy shell syntax" bash -n scripts/s5m-deploy.sh
           check "s5m-deploy defaults TUN on" grep -q 'ENABLE_TUN=.*:-1' scripts/s5m-deploy.sh
