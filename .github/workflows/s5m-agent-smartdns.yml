@@ -176,6 +176,12 @@ jobs:
           grep -q "tun_enable', 'true'" server/internal/app/store.go
           grep -A1 '^tun:' server/internal/app/configgen.go | grep -q 'enable: true'
           ! grep -q '回国模式（大陆直连' server/web/index.html
+          # Release image publishing must be an explicit manual opt-in.
+          ! grep -Eq '^  push:' .github/workflows/release.yml
+          grep -q 'default: false' .github/workflows/release.yml
+          grep -Fq "if: github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main'" .github/workflows/release.yml
+          grep -q 'packages: write' .github/workflows/release.yml
+
 
       - name: Validate default and opt-in TUN deployment permissions
         shell: bash

@@ -1,9 +1,6 @@
 name: S5M Agent SmartDNS Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       version:
@@ -15,10 +12,14 @@ on:
         required: false
         default: false
         type: boolean
+      publish:
+        description: "明确授权将正式多架构镜像发布到 GHCR"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: s5m-agent-smartdns-release-${{ github.ref }}
@@ -267,9 +268,13 @@ jobs:
           '
 
   publish:
-    name: Publish versioned multi-arch image
+    name: Publish versioned multi-arch image (manual opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main'
     needs: [prepare, test-amd64, test-arm64]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -300,8 +305,17 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [prepare, publish]
+    needs: [prepare, test-amd64, test-arm64, publish]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.test-amd64.result == 'success' &&
+      needs.test-arm64.result == 'success' &&
+      (needs.publish.result == 'success' ||
+       (needs.publish.result == 'skipped' && inputs.publish != true))
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
