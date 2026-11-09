@@ -43,7 +43,8 @@ jobs:
           bash -n scripts/deploy-agent.sh
           bash -n scripts/deploy-s5m-agent.sh
           bash -n scripts/s5m-deploy.sh
-          bash -n scripts/tests/deploy-agent-rollback.sh
+          bash -n scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh
+          bash -n scripts/tests/deploy-s5m-agent-rollback.sh
 
       - name: Verify self-contained server installer contract
         run: |
@@ -140,6 +141,9 @@ jobs:
 
       - name: Test no-SmartDNS image selection and pull failure paths
         run: bash scripts/tests/deploy-s5m-agent-image-selection.sh
+
+      - name: Test legacy Agent redeploy rollback paths
+        run: bash scripts/tests/deploy-s5m-agent-rollback.sh
 
       - name: Check embedded web JavaScript syntax
         run: |
