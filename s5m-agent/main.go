@@ -349,6 +349,9 @@ func resolvedCentralRouteCIDRs(centralURL string) ([]string, error) {
 		if cidr != "" && !seen[cidr] {
 			seen[cidr] = true
 			result = append(result, cidr)
+			if len(result) > managedRouteCIDRsMaxEntries {
+				return nil, fmt.Errorf("主控域名 %s 返回的 A/AAAA 地址超过 %d 条，拒绝写入路由记录", host, managedRouteCIDRsMaxEntries)
+			}
 		}
 	}
 	if len(result) == 0 {
@@ -369,6 +372,21 @@ const managedRouteCIDRsMaxEntries = 64
 // arbitrary CIDRs that could cause operator-owned route exclusions to be
 // removed during a DNS refresh. Invalid state is ignored conservatively:
 // stale exclusions may remain, but unrelated routes are never deleted.
+func isManagedRouteHostCIDR(value string) bool {
+	ip, network, err := net.ParseCIDR(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	ones, bits := network.Mask.Size()
+	if bits == 32 {
+		return ones == 32 && ip.To4() != nil && value == ip.To4().String()+"/32"
+	}
+	if bits == 128 {
+		return ones == 128 && ip.To4() == nil && value == ip.String()+"/128"
+	}
+	return false
+}
+
 func readManagedRouteCIDRs() map[string]bool {
 	path := managedRouteCIDRsPath()
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
@@ -394,20 +412,7 @@ func readManagedRouteCIDRs() map[string]bool {
 	result := make(map[string]bool, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		ip, network, err := net.ParseCIDR(value)
-		if err != nil {
-			return map[string]bool{}
-		}
-		ones, bits := network.Mask.Size()
-		if bits == 32 {
-			if ones != 32 || ip.To4() == nil || value != ip.To4().String()+"/32" {
-				return map[string]bool{}
-			}
-		} else if bits == 128 {
-			if ones != 128 || ip.To4() != nil || value != ip.String()+"/128" {
-				return map[string]bool{}
-			}
-		} else {
+		if !isManagedRouteHostCIDR(value) {
 			return map[string]bool{}
 		}
 		result[value] = true
@@ -416,6 +421,14 @@ func readManagedRouteCIDRs() map[string]bool {
 }
 
 func writeManagedRouteCIDRs(values []string) error {
+	if len(values) > managedRouteCIDRsMaxEntries {
+		return fmt.Errorf("主控路由记录超过 %d 条，拒绝写入", managedRouteCIDRsMaxEntries)
+	}
+	for _, value := range values {
+		if !isManagedRouteHostCIDR(value) {
+			return fmt.Errorf("主控路由记录包含非主机路由 CIDR，拒绝写入")
+		}
+	}
 	data, err := json.Marshal(values)
 	if err != nil {
 		return err
