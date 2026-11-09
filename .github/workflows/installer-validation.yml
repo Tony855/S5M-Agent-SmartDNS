@@ -21,6 +21,7 @@ on:
       - "scripts/deploy-agent.sh"
       - "scripts/deploy-s5m-agent.sh"
       - "scripts/tests/deploy-s5m-agent-image-selection.sh"
+      - "scripts/tests/deploy-s5m-agent-rollback.sh"
       - "server/**"
       - "scripts/tests/proxy-import-parser.test.js"
       - ".github/workflows/installer-validation.yml"
