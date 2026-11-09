@@ -59,7 +59,7 @@ err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 validate_data_dir_path() {
   local path="${DATA_DIR}" current="" component
   local -a components=()
-  if [[ -z "$path" || "$path" != /* || "$path" == "/" ||
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" || "$path" == */ ||
         "$path" == *"//"* || "$path" == *"/./"* || "$path" == *"/." ||
         "$path" == *"/../"* || "$path" == *"/.." ]]; then
     err "拒绝不安全的数据目录路径：${path@Q}"
