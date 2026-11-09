@@ -10,8 +10,18 @@ DEFAULT_CONFIG_PATH="${DEFAULT_CONFIG_PATH:-/app/default-config.yaml}"
 
 umask 077
 [ ! -L "${MIHOMO_HOME}" ] || { echo "Mihomo 数据目录不能是符号链接" >&2; exit 1; }
+if [ -e "${MIHOMO_HOME}" ] && [ ! -d "${MIHOMO_HOME}" ]; then
+  echo "Mihomo 数据路径不是目录" >&2
+  exit 1
+fi
+mkdir -p "${MIHOMO_HOME}"
+[ -d "${MIHOMO_HOME}" ] && [ ! -L "${MIHOMO_HOME}" ] || { echo "Mihomo 数据目录无效" >&2; exit 1; }
+[ ! -L "${MIHOMO_HOME}/bin" ] || { echo "Mihomo 内核目录不能是符号链接" >&2; exit 1; }
+[ ! -L "${MIHOMO_HOME}/etc" ] || { echo "Mihomo 配置目录不能是符号链接" >&2; exit 1; }
 mkdir -p "${MIHOMO_HOME}/bin" "${MIHOMO_HOME}/etc"
 [ -d "${MIHOMO_HOME}/bin" ] && [ ! -L "${MIHOMO_HOME}/bin" ] || { echo "Mihomo 内核目录无效" >&2; exit 1; }
+[ -d "${MIHOMO_HOME}/etc" ] && [ ! -L "${MIHOMO_HOME}/etc" ] || { echo "Mihomo 配置目录无效" >&2; exit 1; }
+chmod 0700 "${MIHOMO_HOME}" "${MIHOMO_HOME}/bin" "${MIHOMO_HOME}/etc"
 
 # Persistent volumes are untrusted input: never follow symlinks for executable,
 # rollback, or configuration paths.
