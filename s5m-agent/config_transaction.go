@@ -3,17 +3,51 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"syscall"
 	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
 )
 
+const transactionSnapshotMaxBytes = 4 << 20
+
+// readTransactionFileNoFollow reads only a bounded regular file and refuses
+// symlinks. Transaction snapshots must never follow a replaced config/sidecar
+// path outside the Agent data directory.
+func readTransactionFileNoFollow(path string, maxBytes int64) ([]byte, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("事务快照路径不是普通文件")
+	}
+	if info.Size() < 0 || info.Size() > maxBytes {
+		return nil, fmt.Errorf("事务快照文件超过 %d 字节", maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("事务快照文件超过 %d 字节", maxBytes)
+	}
+	return data, nil
+}
+
 // snapshotFileForTransaction preserves the exact previous bytes and whether
 // the live file existed. The sidecar is durable before any live file changes.
 func snapshotFileForTransaction(path string) ([]byte, bool, error) {
-	data, err := os.ReadFile(path)
+	data, err := readTransactionFileNoFollow(path, transactionSnapshotMaxBytes)
 	if os.IsNotExist(err) {
 		backupPath := path + ".previous"
 		if removeErr := os.Remove(backupPath); removeErr == nil {
@@ -38,7 +72,7 @@ func snapshotFileForTransaction(path string) ([]byte, bool, error) {
 // intact if writing its replacement fails at any point, including after rename
 // but before the containing-directory fsync completes.
 func writeTransactionBackupPreservingPrior(path string, data []byte, write func(string, []byte, os.FileMode) error) error {
-	previous, readErr := os.ReadFile(path)
+	previous, readErr := readTransactionFileNoFollow(path, transactionSnapshotMaxBytes)
 	previousExists := readErr == nil
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return fmt.Errorf("读取已有事务备份失败: %w", readErr)

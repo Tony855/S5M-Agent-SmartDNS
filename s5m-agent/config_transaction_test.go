@@ -574,3 +574,34 @@ func TestEnsureSmartDNSServiceStartedRollsBackFailedFirstEnable(t *testing.T) {
 		t.Fatalf("failed first enable must restore persistent disabled marker, lstat err=%v", statErr)
 	}
 }
+
+
+func TestSnapshotFileForTransactionRejectsLiveSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "outside.json")
+	if err := os.WriteFile(target, []byte("outside secret"), 0600); err != nil { t.Fatal(err) }
+	path := filepath.Join(dir, "state.json")
+	if err := os.Symlink(target, path); err != nil { t.Fatal(err) }
+	if _, _, err := snapshotFileForTransaction(path); err == nil {
+		t.Fatal("snapshot must reject a symlink instead of following it")
+	}
+	if _, err := os.Lstat(path + ".previous"); !os.IsNotExist(err) {
+		t.Fatalf("rejected symlink must not create a snapshot, lstat err=%v", err)
+	}
+}
+
+func TestWriteTransactionBackupPreservingPriorRejectsSymlinkSidecar(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "outside.backup")
+	if err := os.WriteFile(target, []byte("outside secret"), 0600); err != nil { t.Fatal(err) }
+	path := filepath.Join(dir, "state.json.previous")
+	if err := os.Symlink(target, path); err != nil { t.Fatal(err) }
+	if err := writeTransactionBackupPreservingPrior(path, []byte("new snapshot"), atomicWriteFile); err == nil {
+		t.Fatal("snapshot writer must reject an existing symlink sidecar")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil { t.Fatal(err) }
+	if string(got) != "outside secret" {
+		t.Fatalf("symlink target must remain untouched, got %q", got)
+	}
+}
