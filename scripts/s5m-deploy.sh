@@ -17,6 +17,37 @@ DEPLOY_OK=0
 log()  { echo -e "\033[32m[+]\033[0m $*"; }
 warn() { echo -e "\033[33m[!]\033[0m $*"; }
 die()  { echo -e "\033[31m[x]\033[0m $*"; exit 1; }
+validate_data_dir_path() {
+  local path="$DATA_DIR" current="" component
+  local -a components=()
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" ||
+        "$path" == *"//"* || "$path" == *"/./"* || "$path" == *"/." ||
+        "$path" == *"/../"* || "$path" == *"/.." ]]; then
+    printf '拒绝不安全的数据目录路径：%q\n' "$path" >&2
+    return 1
+  fi
+  IFS='/' read -r -a components <<< "\${path#/}"
+  if (("\${#components[@]}" < 2)); then
+    printf '数据目录必须是独立子目录\n' >&2
+    return 1
+  fi
+  for component in "\${components[@]}"; do
+    if [[ -z "$component" || "$component" == "." || "$component" == ".." ]]; then
+      printf '数据目录包含不安全路径组件：%q\n' "$path" >&2
+      return 1
+    fi
+    current+="/$component"
+    if [[ -L "$current" ]]; then
+      printf '数据目录路径包含符号链接：%s\n' "$current" >&2
+      return 1
+    fi
+    if [[ -e "$current" && ! -d "$current" ]]; then
+      printf '数据目录路径组件不是目录：%s\n' "$current" >&2
+      return 1
+    fi
+  done
+}
+
 
 restore_previous() {
   if (( NEW_STARTED )); then
@@ -140,8 +171,9 @@ docker tag "$IMAGE_SRC" "$IMAGE_LOCAL" 2>/dev/null || {
   [ -n "$src" ] && docker tag "$src" "$IMAGE_LOCAL" || die "找不到 s5m-agent 镜像"
 }
 
+validate_data_dir_path || die "数据目录路径不安全，拒绝挂载。"
 log "保留持久化数据目录：$DATA_DIR"
-install -d -m 0700 "$DATA_DIR"
+install -d -m 0700 -- "$DATA_DIR"
 
 config_uses_tun() {
   awk '
