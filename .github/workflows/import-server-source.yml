@@ -46,7 +46,7 @@ jobs:
           for info in infos:
               name = info.filename
               path = pathlib.PurePosixPath(name)
-              if "\\\\" in name or path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+  if "\\" in name or path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
                   raise SystemExit(f"unsafe archive path: {name!r}")
               if path.parts[0] != "source":
                   raise SystemExit(f"unexpected archive root: {name!r}")
