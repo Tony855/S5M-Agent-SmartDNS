@@ -5,15 +5,27 @@ MIHOMO_HOME="${MIHOMO_HOME:-/data}"
 CONFIG_PATH="${MIHOMO_HOME}/config.yaml"
 MIHOMO_BIN="${MIHOMO_HOME}/bin/mihomo"
 MIHOMO_BACKUP="${MIHOMO_BIN}.previous"
+MIHOMO_INITIAL_BIN="${MIHOMO_INITIAL_BIN:-/usr/local/bin/mihomo.initial}"
+DEFAULT_CONFIG_PATH="${DEFAULT_CONFIG_PATH:-/app/default-config.yaml}"
 
 umask 077
 [ ! -L "${MIHOMO_HOME}" ] || { echo "Mihomo 数据目录不能是符号链接" >&2; exit 1; }
+if [ -e "${MIHOMO_HOME}" ] && [ ! -d "${MIHOMO_HOME}" ]; then
+  echo "Mihomo 数据路径不是目录" >&2
+  exit 1
+fi
+mkdir -p "${MIHOMO_HOME}"
+[ -d "${MIHOMO_HOME}" ] && [ ! -L "${MIHOMO_HOME}" ] || { echo "Mihomo 数据目录无效" >&2; exit 1; }
+[ ! -L "${MIHOMO_HOME}/bin" ] || { echo "Mihomo 内核目录不能是符号链接" >&2; exit 1; }
+[ ! -L "${MIHOMO_HOME}/etc" ] || { echo "Mihomo 配置目录不能是符号链接" >&2; exit 1; }
 mkdir -p "${MIHOMO_HOME}/bin" "${MIHOMO_HOME}/etc"
 [ -d "${MIHOMO_HOME}/bin" ] && [ ! -L "${MIHOMO_HOME}/bin" ] || { echo "Mihomo 内核目录无效" >&2; exit 1; }
+[ -d "${MIHOMO_HOME}/etc" ] && [ ! -L "${MIHOMO_HOME}/etc" ] || { echo "Mihomo 配置目录无效" >&2; exit 1; }
+chmod 0700 "${MIHOMO_HOME}" "${MIHOMO_HOME}/bin" "${MIHOMO_HOME}/etc"
 
 # Persistent volumes are untrusted input: never follow symlinks for executable,
 # rollback, or configuration paths.
-for path in "${MIHOMO_BIN}" "${MIHOMO_BACKUP}" "${MIHOMO_BIN}.tmp" "${CONFIG_PATH}"; do
+for path in "${MIHOMO_BIN}" "${MIHOMO_BACKUP}" "${CONFIG_PATH}"; do
   [ ! -L "$path" ] || { echo "拒绝符号链接数据文件：$path" >&2; exit 1; }
 done
 if [ -e "${MIHOMO_BIN}" ] && [ ! -f "${MIHOMO_BIN}" ]; then
@@ -39,18 +51,23 @@ fi
 
 # Seed the persistent kernel only on first boot; use a unique temporary file.
 if [ ! -x "${MIHOMO_BIN}" ]; then
-  kernel_tmp="${MIHOMO_BIN}.tmp.$"
-  trap 'rm -f "$kernel_tmp"' EXIT HUP INT TERM
-  cp /usr/local/bin/mihomo.initial "$kernel_tmp"
+  kernel_tmp="$(mktemp "${MIHOMO_BIN}.tmp.XXXXXX")" || {
+    echo "无法创建 Mihomo 内核临时文件" >&2
+    exit 1
+  }
+  trap 'rm -f "$kernel_tmp"' EXIT
+  trap 'exit 1' HUP INT TERM
+  cp "${MIHOMO_INITIAL_BIN}" "$kernel_tmp"
   chmod 0700 "$kernel_tmp"
   mv -f "$kernel_tmp" "${MIHOMO_BIN}"
-  trap - EXIT HUP INT TERM
+  trap - HUP INT TERM
+  trap - EXIT
 fi
 [ -f "${MIHOMO_BIN}" ] && [ -x "${MIHOMO_BIN}" ] || { echo "Mihomo 内核文件无效" >&2; exit 1; }
 chmod 0700 "${MIHOMO_BIN}"
 
 if [ ! -s "${CONFIG_PATH}" ]; then
-  cp /app/default-config.yaml "${CONFIG_PATH}"
+  cp "${DEFAULT_CONFIG_PATH}" "${CONFIG_PATH}"
 fi
 [ -f "${CONFIG_PATH}" ] && [ ! -L "${CONFIG_PATH}" ] || { echo "Mihomo 配置文件无效" >&2; exit 1; }
 # Existing volumes may have permissive modes from older releases. Always
