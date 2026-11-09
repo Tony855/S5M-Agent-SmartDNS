@@ -57,7 +57,7 @@ RUN set -eux; \
     tar -Jxpf /tmp/s6-overlay-${s6_arch}.tar.xz -C /out
 
 FROM alpine:${ALPINE_VERSION}
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata bind-tools \
     && mkdir -p /app /data/bin /data/etc
 COPY --from=s6-overlay-fetch /out/ /
 WORKDIR /app
