@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,8 +77,8 @@ func filterNoSmartDNSResolvers(n *yaml.Node) bool {
 				if filterNoSmartDNSResolvers(value) {
 					if len(value.Content) == 0 {
 						value.Content = []*yaml.Node{
-							{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
-							{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"},
+							{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
+							{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
 						}
 					}
 					changed = true
@@ -85,8 +86,8 @@ func filterNoSmartDNSResolvers(n *yaml.Node) bool {
 			} else if noSmartDNSStaleResolver(value) {
 				// Replace only the stale policy value; unrelated policy entries survive.
 				n.Content[i] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
-					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"},
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
 				}}
 				changed = true
 			}
@@ -99,6 +100,90 @@ func noSmartDNSMapValue(n *yaml.Node, key string) *yaml.Node {
 	if n == nil || n.Kind != yaml.MappingNode { return nil }
 	for i := 0; i+1 < len(n.Content); i += 2 { if n.Content[i].Value == key { return n.Content[i+1] } }
 	return nil
+}
+
+func secureNoSmartDNSBootstrapResolvers(n *yaml.Node) bool {
+	if n == nil { return false }
+	changed := false
+	if n.Kind == yaml.SequenceNode {
+		for _, child := range n.Content { if secureNoSmartDNSBootstrapResolvers(child) { changed = true } }
+		return changed
+	}
+	if n.Kind != yaml.ScalarNode { return false }
+	value := strings.TrimSpace(n.Value)
+	if strings.Contains(value, "://") { return false }
+	ip := net.ParseIP(strings.Trim(value, "[]"))
+	if ip == nil { return false }
+	if ip.To4() == nil {
+		n.Value = "tls://[" + ip.String() + "]"
+	} else {
+		n.Value = "tls://" + ip.String()
+	}
+	return true
+}
+
+func ensureNoSmartDNSProxyAwareDNS(dns *yaml.Node) bool {
+	changed := false
+	defaultNS := noSmartDNSMapValue(dns, "default-nameserver")
+	if defaultNS == nil || (defaultNS.Kind == yaml.SequenceNode && len(defaultNS.Content) == 0) || (defaultNS.Kind == yaml.ScalarNode && strings.TrimSpace(defaultNS.Value) == "") || (defaultNS.Kind != yaml.SequenceNode && defaultNS.Kind != yaml.ScalarNode) {
+		defaultNS = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
+		}}
+		if noSmartDNSMapValue(dns, "default-nameserver") == nil {
+			dns.Content = append(dns.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "default-nameserver"}, defaultNS)
+		} else {
+			for i := 0; i+1 < len(dns.Content); i += 2 { if dns.Content[i].Value == "default-nameserver" { dns.Content[i+1] = defaultNS; break } }
+		}
+		changed = true
+	} else if defaultNS.Kind == yaml.ScalarNode {
+		defaultNS = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: defaultNS.Value}}}
+		for i := 0; i+1 < len(dns.Content); i += 2 { if dns.Content[i].Value == "default-nameserver" { dns.Content[i+1] = defaultNS; break } }
+		changed = true
+	}
+	if secureNoSmartDNSBootstrapResolvers(defaultNS) { changed = true }
+
+	proxyNS := noSmartDNSMapValue(dns, "proxy-server-nameserver")
+	if proxyNS == nil || (proxyNS.Kind == yaml.SequenceNode && len(proxyNS.Content) == 0) || (proxyNS.Kind == yaml.ScalarNode && strings.TrimSpace(proxyNS.Value) == "") || (proxyNS.Kind != yaml.SequenceNode && proxyNS.Kind != yaml.ScalarNode) {
+		proxyNS = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		if defaultNS != nil && defaultNS.Kind == yaml.SequenceNode {
+			for _, item := range defaultNS.Content {
+				if item != nil && item.Kind == yaml.ScalarNode {
+					proxyNS.Content = append(proxyNS.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: item.Value})
+				}
+			}
+		}
+		if len(proxyNS.Content) == 0 {
+			proxyNS.Content = []*yaml.Node{
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
+			}
+		}
+		if noSmartDNSMapValue(dns, "proxy-server-nameserver") == nil {
+			dns.Content = append(dns.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "proxy-server-nameserver"}, proxyNS)
+		} else {
+			for i := 0; i+1 < len(dns.Content); i += 2 { if dns.Content[i].Value == "proxy-server-nameserver" { dns.Content[i+1] = proxyNS; break } }
+		}
+		changed = true
+	} else if proxyNS.Kind == yaml.ScalarNode {
+		proxyNS = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: proxyNS.Value}}}
+		for i := 0; i+1 < len(dns.Content); i += 2 { if dns.Content[i].Value == "proxy-server-nameserver" { dns.Content[i+1] = proxyNS; break } }
+		changed = true
+	}
+	if secureNoSmartDNSBootstrapResolvers(proxyNS) { changed = true }
+
+	respectRules := noSmartDNSMapValue(dns, "respect-rules")
+	if respectRules == nil {
+		dns.Content = append(dns.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "respect-rules"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"})
+		changed = true
+	} else if respectRules.Kind != yaml.ScalarNode || !strings.EqualFold(respectRules.Value, "true") {
+		respectRules.Kind = yaml.ScalarNode
+		respectRules.Tag = "!!bool"
+		respectRules.Value = "true"
+		respectRules.Content = nil
+		changed = true
+	}
+	return changed
 }
 
 func migrateNoSmartDNSConfig(path string) error {
@@ -119,19 +204,22 @@ func migrateNoSmartDNSConfig(path string) error {
 		value := dns.Content[i+1]
 		if key == "nameserver" && value.Kind != yaml.SequenceNode && noSmartDNSStaleResolver(value) {
 			dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
 			}}
 			changed = true
 			continue
 		}
 		if filterNoSmartDNSResolvers(value) { changed = true }
 	}
+	// Route regular DNS upstreams through Mihomo rules. Bootstrap resolvers remain
+	// independent of the proxy handshake and use DoT to avoid plaintext DNS leaks.
+	if ensureNoSmartDNSProxyAwareDNS(dns) { changed = true }
 	// Guarantee a usable default resolver if a legacy policy left nameserver empty.
 	ns := noSmartDNSMapValue(dns, "nameserver")
 	if ns == nil || (ns.Kind == yaml.SequenceNode && len(ns.Content) == 0) {
-		if ns == nil { dns.Content = append(dns.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"}, &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"}}}) } else {
-			ns.Content = []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.5.5.5"}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: "223.6.6.6"}}
+		if ns == nil { dns.Content = append(dns.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"}, &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"}}}) } else {
+			ns.Content = []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"}}
 		}
 		changed = true
 	}
