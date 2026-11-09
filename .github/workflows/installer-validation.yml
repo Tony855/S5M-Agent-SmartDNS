@@ -44,7 +44,6 @@ jobs:
           bash -n scripts/deploy-s5m-agent.sh
           bash -n scripts/s5m-deploy.sh
           bash -n scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh
-          bash -n scripts/tests/deploy-s5m-agent-rollback.sh
 
       - name: Verify self-contained server installer contract
         run: |
@@ -134,7 +133,7 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck errors
-        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/deploy-s5m-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/deploy-s5m-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh
 
       - name: Test Agent deployment rollback fault paths
         run: bash scripts/tests/deploy-agent-rollback.sh
