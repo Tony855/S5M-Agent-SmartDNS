@@ -29,11 +29,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for config in s5m-agent/default-config.yaml s5m-agent/smartdns/default-config-smartdns.yaml; do
-            grep -Fqx '    - tls://223.5.5.5' "$config"
-            grep -Fqx '    - tls://223.6.6.6' "$config"
-            ! grep -Fqx '    - 223.5.5.5' "$config"
-            ! grep -Fqx '    - 119.29.29.29' "$config"
+          # SmartDNS-enabled images use encrypted DNS bootstrap resolvers.
+          config=s5m-agent/smartdns/default-config-smartdns.yaml
+          grep -Fqx '    - tls://223.5.5.5' "$config"
+          grep -Fqx '    - tls://223.6.6.6' "$config"
+          ! grep -Fqx '    - 223.5.5.5' "$config"
+          ! grep -Fqx '    - 119.29.29.29' "$config"
+
+          # SmartDNS-free images (including RouterOS) must not reference the
+          # absent local resolver; literal bootstrap IPs avoid DNS recursion.
+          for config in s5m-agent/default-config.yaml s5m-agent/default-config-no-smartdns.yaml; do
+            grep -Fqx '    - 223.5.5.5' "$config"
+            grep -Fqx '    - 223.6.6.6' "$config"
+            ! grep -Eq '127\\.0\\.0\\.1:605[34]' "$config"
           done
       - name: Validate SmartDNS encrypted upstreams and private listeners
         shell: bash
