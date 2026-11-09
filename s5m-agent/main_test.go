@@ -2282,3 +2282,85 @@ func TestRegistrationPageDisablesCaching(t *testing.T) {
 	if got := rec.Header().Get("Pragma"); got != "no-cache" { t.Fatalf("Pragma = %q", got) }
 	if got := rec.Header().Get("Expires"); got != "0" { t.Fatalf("Expires = %q", got) }
 }
+
+
+func TestReadManagedRouteCIDRsRejectsUntrustedJournalState(t *testing.T) {
+	t.Run("accepts only canonical host routes", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MIHOMO_HOME", dir)
+		if err := writeManagedRouteCIDRs([]string{"198.51.100.10/32", "2001:db8::10/128"}); err != nil {
+			t.Fatalf("writeManagedRouteCIDRs: %v", err)
+		}
+		got := readManagedRouteCIDRs()
+		if len(got) != 2 || !got["198.51.100.10/32"] || !got["2001:db8::10/128"] {
+			t.Fatalf("readManagedRouteCIDRs() = %#v, want canonical IPv4 and IPv6 host routes", got)
+		}
+	})
+
+	t.Run("rejects broad route", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MIHOMO_HOME", dir)
+		path := managedRouteCIDRsPath()
+		if err := os.WriteFile(path, []byte(`["0.0.0.0/0"]`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readManagedRouteCIDRs(); len(got) != 0 {
+			t.Fatalf("broad route journal must be ignored, got %#v", got)
+		}
+	})
+
+	t.Run("rejects symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MIHOMO_HOME", dir)
+		target := filepath.Join(dir, "outside.json")
+		if err := os.WriteFile(target, []byte(`["198.51.100.10/32"]`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, managedRouteCIDRsPath()); err != nil {
+			t.Fatal(err)
+		}
+		if got := readManagedRouteCIDRs(); len(got) != 0 {
+			t.Fatalf("symlink journal must be ignored, got %#v", got)
+		}
+	})
+
+	t.Run("rejects oversized journal", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MIHOMO_HOME", dir)
+		data := []byte("[" + strings.Repeat(" ", managedRouteCIDRsMaxBytes) + "]")
+		if err := os.WriteFile(managedRouteCIDRsPath(), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readManagedRouteCIDRs(); len(got) != 0 {
+			t.Fatalf("oversized journal must be ignored, got %#v", got)
+		}
+	})
+
+	t.Run("rejects overly permissive file mode", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MIHOMO_HOME", dir)
+		path := managedRouteCIDRsPath()
+		if err := os.WriteFile(path, []byte(`["198.51.100.10/32"]`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if got := readManagedRouteCIDRs(); len(got) != 0 {
+			t.Fatalf("overly permissive journal must be ignored, got %#v", got)
+		}
+	})
+}
+
+
+func TestWriteManagedRouteCIDRsRejectsUnboundedOrBroadRoutes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	if err := writeManagedRouteCIDRs([]string{"0.0.0.0/0"}); err == nil {
+		t.Fatal("writer must reject a broad route")
+	}
+	values := make([]string, managedRouteCIDRsMaxEntries+1)
+	for i := range values {
+		values[i] = fmt.Sprintf("198.51.100.%d/32", i+1)
+	}
+	if err := writeManagedRouteCIDRs(values); err == nil {
+		t.Fatal("writer must reject more than the bounded number of host routes")
+	}
+}
