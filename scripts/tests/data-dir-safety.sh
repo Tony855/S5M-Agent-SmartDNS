@@ -28,7 +28,8 @@ for script in \
     "$TMP/../outside" \
     "relative/path" \
     "/" \
-    "$TMP//double"; do
+    "$TMP//double" \
+    "$TMP/good/data/"; do
     if DATA_DIR="$unsafe" bash -c 'source "$1"; validate_data_dir_path' _ "$helper" >/dev/null 2>&1; then
       echo "unsafe DATA_DIR accepted by $script: $unsafe" >&2
       exit 1
