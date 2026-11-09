@@ -127,7 +127,7 @@ func TestNoSmartDNSBuildReportsControlUnsupported(t *testing.T) {
 
 func TestMigrateNoSmartDNSConfigSecuresPlainBootstrapResolvers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	original := []byte("dns:\\n  default-nameserver: [223.5.5.5, 223.6.6.6]\\n  nameserver: [9.9.9.9]\\n")
+	original := []byte("dns:\n  default-nameserver: [223.5.5.5, 223.6.6.6]\n  nameserver: [9.9.9.9]\n")
 	if err := os.WriteFile(path, original, 0600); err != nil { t.Fatal(err) }
 	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
 	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
