@@ -10,6 +10,7 @@ on:
       - "scripts/deploy-s5m-agent.sh"
       - "scripts/tests/deploy-s5m-agent-image-selection.sh"
       - "scripts/tests/deploy-s5m-agent-rollback.sh"
+      - "scripts/tests/data-dir-safety.sh"
       - "scripts/s5m-deploy.sh"
       - "server/**"
       - "scripts/tests/proxy-import-parser.test.js"
