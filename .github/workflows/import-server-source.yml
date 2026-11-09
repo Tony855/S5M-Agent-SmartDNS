@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   extract-and-commit:
-    if: github.ref == 'refs/heads/main' && hashFiles('source.zip') != ''
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,7 +26,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check whether a source archive is available
+        id: archive
+        shell: bash
+        run: |
+          if [[ -s source.zip ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No source.zip is present; skipping source import."
+          fi
+
       - name: Validate and extract archive
+        if: steps.archive.outputs.present == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -48,12 +60,14 @@ jobs:
           echo "Imported $(find server -type f | wc -l) files into server/"
 
       - name: Verify Go source
+        if: steps.archive.outputs.present == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: "1.23.x"
           cache: false
 
       - name: Test and build S5M-Server
+        if: steps.archive.outputs.present == 'true'
         working-directory: server
         run: |
           set -Eeuo pipefail
@@ -62,6 +76,7 @@ jobs:
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/S5M-Server .
 
       - name: Commit extracted source
+        if: steps.archive.outputs.present == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
