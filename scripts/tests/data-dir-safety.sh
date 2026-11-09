@@ -47,12 +47,12 @@ test -s "$TMP/mount-helper.sh"
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/findmnt" <<'SH'
 #!/usr/bin/env sh
-[ "\${FINDMNT_FAIL:-0}" = "1" ] && exit 2
+[ "${FINDMNT_FAIL:-0}" = "1" ] && exit 2
 printf '%s\n' "$FINDMNT_TARGETS"
 SH
 chmod 0755 "$TMP/bin/findmnt"
 run_mount_check() {
-  DATA_DIR="$1" FINDMNT_TARGETS="$2" FINDMNT_FAIL="\${3:-0}" PATH="$TMP/bin:/usr/bin:/bin" \
+  DATA_DIR="$1" FINDMNT_TARGETS="$2" FINDMNT_FAIL="${3:-0}" PATH="$TMP/bin:/usr/bin:/bin" \
     bash -c 'err() { return 1; }; source "$1"; ensure_no_data_dir_mounts' _ "$TMP/mount-helper.sh"
 }
 run_mount_check "$TMP/good/data" "/\n/tmp\n$TMP/outside"
