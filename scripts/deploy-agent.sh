@@ -8,7 +8,7 @@ die() { printf '[S5M-Agent][ERROR] %s\n' "$*" >&2; exit 1; }
 validate_data_dir_path() {
   local path="$DATA_DIR" current="" component
   local -a components=()
-  if [[ -z "$path" || "$path" != /* || "$path" == "/" ||
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" || "$path" == */ ||
         "$path" == *"//"* || "$path" == *"/./"* || "$path" == *"/." ||
         "$path" == *"/../"* || "$path" == *"/.." ]]; then
     printf '拒绝不安全的数据目录路径：%q\n' "$path" >&2

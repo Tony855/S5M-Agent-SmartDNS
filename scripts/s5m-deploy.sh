@@ -20,7 +20,7 @@ die()  { echo -e "\033[31m[x]\033[0m $*"; exit 1; }
 validate_data_dir_path() {
   local path="$DATA_DIR" current="" component
   local -a components=()
-  if [[ -z "$path" || "$path" != /* || "$path" == "/" ||
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" || "$path" == */ ||
         "$path" == *"//"* || "$path" == *"/./"* || "$path" == *"/." ||
         "$path" == *"/../"* || "$path" == *"/.." ]]; then
     printf '拒绝不安全的数据目录路径：%q\n' "$path" >&2
