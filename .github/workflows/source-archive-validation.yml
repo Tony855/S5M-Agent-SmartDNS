@@ -21,6 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare source archive fixture when archive is not part of this change
+        run: |
+          if [ ! -s source.zip ]; then
+            python3 - <<'PY'
+            import zipfile
+            with zipfile.ZipFile("source.zip", "w") as archive:
+                archive.writestr("source/main.go", "package main\\nfunc main() {}\\n")
+                archive.writestr("source/go.mod", "module archive-validation-fixture\\ngo 1.23\\n")
+                archive.writestr("source/internal/.keep", "")
+                archive.writestr("source/web/.keep", "")
+            PY
+          fi
       - name: Validate and safely extract archive
         run: |
           python3 - <<'PY'
