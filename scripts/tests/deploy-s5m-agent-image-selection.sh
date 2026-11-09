@@ -84,7 +84,7 @@ grep -Fq 'if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then' "$SCRI
 # before touching any container, image, or data directory.
 : > "$TMP/docker.log"
 if sudo env PATH="$TMP/bin:$PATH" CONFIG_FILE="$TMP/empty.conf" \
-  DOCKER_CALL_LOG="$TMP/docker.log" FULL_RESET=true \
+  DATA_DIR="$TMP/auto-reset-data" DOCKER_CALL_LOG="$TMP/docker.log" FULL_RESET=true \
   bash "$SCRIPT" deploy >"$TMP/auto-reset.log" 2>&1; then
   echo "Automatic full reset unexpectedly proceeded without data-wipe consent" >&2
   cat "$TMP/auto-reset.log" >&2
