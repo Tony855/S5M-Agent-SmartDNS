@@ -89,12 +89,29 @@ validate_data_dir_path() {
 
 # Destructive data removal is never the default. Interactive users must type
 # the exact target path; automation must opt in and provide the same phrase.
-confirm_data_wipe() {
-  validate_data_dir_path || return 1
-  if ! command -v mountpoint >/dev/null 2>&1 || mountpoint -q -- "${DATA_DIR}"; then
-    err "数据目录是挂载点或无法确认挂载状态，拒绝递归清理"
+ensure_no_data_dir_mounts() {
+  local mount_targets mount_target
+  if ! command -v findmnt >/dev/null 2>&1; then
+    err "无法检查数据目录挂载点，拒绝递归清理"
     return 1
   fi
+  mount_targets="$(findmnt -rn -o TARGET)" || {
+    err "读取系统挂载表失败，拒绝递归清理"
+    return 1
+  }
+  while IFS= read -r mount_target; do
+    case "$mount_target" in
+      "$DATA_DIR"|"$DATA_DIR"/*)
+        err "数据目录包含挂载点，拒绝递归清理：$mount_target"
+        return 1
+        ;;
+    esac
+  done <<< "$mount_targets"
+}
+
+confirm_data_wipe() {
+  validate_data_dir_path || return 1
+  ensure_no_data_dir_mounts || return 1
   local expected="DELETE:${DATA_DIR}" confirmation=""
   if [[ -t 0 ]]; then
     read -r -p "警告：将永久删除数据目录 ${DATA_DIR}。输入 ${expected} 确认：" confirmation || return 1
