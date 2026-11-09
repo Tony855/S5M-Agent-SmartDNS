@@ -305,7 +305,14 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [prepare, test-amd64, test-arm64]
+    needs: [prepare, test-amd64, test-arm64, publish]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.test-amd64.result == 'success' &&
+      needs.test-arm64.result == 'success' &&
+      (needs.publish.result == 'success' ||
+       (needs.publish.result == 'skipped' && inputs.publish != true))
     runs-on: ubuntu-latest
     permissions:
       contents: write
