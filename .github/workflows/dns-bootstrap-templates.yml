@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "s5m-agent/default-config.yaml"
+      - "s5m-agent/default-config-no-smartdns.yaml"
+      - "s5m-agent/default-config-routeros.yaml"
       - "s5m-agent/smartdns/default-config-smartdns.yaml"
       - "s5m-agent/smartdns/smartdns.conf"
       - ".github/workflows/dns-bootstrap-templates.yml"
