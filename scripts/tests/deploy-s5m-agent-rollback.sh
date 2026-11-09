@@ -55,6 +55,7 @@ case "$cmd" in
     exit 0
     ;;
   run)
+    printf '%q\n' "$@" >> "$DOCKER_RUN_ARGS_LOG"
     [[ "${FAIL_RUN:-false}" != "true" ]] || exit 1
     write_state "s5m-agent" running
     echo mock-container-id
@@ -94,8 +95,8 @@ printf 's5m-agent|running\n' > "$TMP/state"
 
 run_deploy() {
   sudo env PATH="$TMP/bin:$PATH" \
-    DOCKER_CALL_LOG="$TMP/docker.log" STATE_FILE="$TMP/state" \
-    CONFIG_FILE="$TMP/agent.conf" "${@:1}" bash "$DEPLOY_SCRIPT" deploy
+    DOCKER_CALL_LOG="$TMP/docker.log" DOCKER_RUN_ARGS_LOG="$TMP/docker-run-args.log" \
+    STATE_FILE="$TMP/state" CONFIG_FILE="$TMP/agent.conf" "${@:1}" bash "$DEPLOY_SCRIPT" deploy
 }
 
 # Registry failure must leave the old container running and untouched.
@@ -141,4 +142,27 @@ if ! grep -q '^rename s5m-agent-rollback-.* s5m-agent$' "$TMP/docker.log"; then
 fi
 [[ "$(cat "$TMP/state")" == "s5m-agent|running" ]]
 
-echo "Legacy Agent deployment pull/start/health rollback paths verified."
+
+# Successful redeploy must pass each Docker option/value as a separate argv item.
+printf 's5m-agent|running\n' > "$TMP/state"
+: > "$TMP/docker.log"
+: > "$TMP/docker-run-args.log"
+if ! run_deploy; then
+  echo "deploy unexpectedly failed with a healthy replacement" >&2
+  exit 1
+fi
+for expected in '-d' '--name' 's5m-agent' '--restart' 'unless-stopped' '-p' '80:80/tcp' '127.0.0.1:7890:7890/tcp' '127.0.0.1:7890:7890/udp' '--device' '/dev/net/tun:/dev/net/tun' '--cap-add' 'NET_ADMIN' 'NET_RAW' '-v' "$TMP/data:/data" '-e' 'TZ=Asia/Shanghai' 'ghcr.io/tony855/s5m-agent-smartdns:dev'; do
+  if ! grep -Fxq -- "$expected" "$TMP/docker-run-args.log"; then
+    echo "docker run lost or combined argument: $expected" >&2
+    cat "$TMP/docker-run-args.log" >&2
+    exit 1
+  fi
+done
+if grep -Eq '^["]|"
+ "$TMP/docker-run-args.log"; then
+  echo "docker run arguments contain literal quote characters" >&2
+  cat "$TMP/docker-run-args.log" >&2
+  exit 1
+fi
+
+echo "Legacy Agent deployment argv boundaries and pull/start/health rollback paths verified."
