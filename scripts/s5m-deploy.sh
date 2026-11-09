@@ -26,12 +26,12 @@ validate_data_dir_path() {
     printf '拒绝不安全的数据目录路径：%q\n' "$path" >&2
     return 1
   fi
-  IFS='/' read -r -a components <<< "\${path#/}"
-  if (("\${#components[@]}" < 2)); then
+  IFS='/' read -r -a components <<< "${path#/}"
+  if (("${#components[@]}" < 2)); then
     printf '数据目录必须是独立子目录\n' >&2
     return 1
   fi
-  for component in "\${components[@]}"; do
+  for component in "${components[@]}"; do
     if [[ -z "$component" || "$component" == "." || "$component" == ".." ]]; then
       printf '数据目录包含不安全路径组件：%q\n' "$path" >&2
       return 1
