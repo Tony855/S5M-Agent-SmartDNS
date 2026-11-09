@@ -6,31 +6,56 @@ CONFIG_PATH="${MIHOMO_HOME}/config.yaml"
 MIHOMO_BIN="${MIHOMO_HOME}/bin/mihomo"
 MIHOMO_BACKUP="${MIHOMO_BIN}.previous"
 
+umask 077
+[ ! -L "${MIHOMO_HOME}" ] || { echo "Mihomo 数据目录不能是符号链接" >&2; exit 1; }
 mkdir -p "${MIHOMO_HOME}/bin" "${MIHOMO_HOME}/etc"
+[ -d "${MIHOMO_HOME}/bin" ] && [ ! -L "${MIHOMO_HOME}/bin" ] || { echo "Mihomo 内核目录无效" >&2; exit 1; }
+
+# Persistent volumes are untrusted input: never follow symlinks for executable,
+# rollback, or configuration paths.
+for path in "${MIHOMO_BIN}" "${MIHOMO_BACKUP}" "${MIHOMO_BIN}.tmp" "${CONFIG_PATH}"; do
+  [ ! -L "$path" ] || { echo "拒绝符号链接数据文件：$path" >&2; exit 1; }
+done
+if [ -e "${MIHOMO_BIN}" ] && [ ! -f "${MIHOMO_BIN}" ]; then
+  echo "Mihomo 内核不是普通文件，拒绝启动" >&2
+  exit 1
+fi
+if [ -e "${CONFIG_PATH}" ] && [ ! -f "${CONFIG_PATH}" ]; then
+  echo "Mihomo 配置不是普通文件，拒绝启动" >&2
+  exit 1
+fi
 
 # Roll back an interrupted kernel update before starting either service.
 if [ -e "${MIHOMO_BACKUP}" ]; then
-  if [ -x "${MIHOMO_BACKUP}" ]; then
+  if [ -f "${MIHOMO_BACKUP}" ] && [ -x "${MIHOMO_BACKUP}" ]; then
     mv -f "${MIHOMO_BACKUP}" "${MIHOMO_BIN}"
-    chmod 0755 "${MIHOMO_BIN}"
+    chmod 0700 "${MIHOMO_BIN}"
     echo "已恢复上一次 Mihomo 内核"
   else
-    echo "Mihomo 旧内核备份不可执行，拒绝自动覆盖" >&2
+    echo "Mihomo 旧内核备份不可执行或不是普通文件，拒绝自动覆盖" >&2
     exit 1
   fi
 fi
 
-# Seed the persistent kernel only on first boot; never overwrite an installed update.
+# Seed the persistent kernel only on first boot; use a unique temporary file.
 if [ ! -x "${MIHOMO_BIN}" ]; then
-  cp /usr/local/bin/mihomo.initial "${MIHOMO_BIN}.tmp"
-  chmod 0755 "${MIHOMO_BIN}.tmp"
-  mv -f "${MIHOMO_BIN}.tmp" "${MIHOMO_BIN}"
+  kernel_tmp="${MIHOMO_BIN}.tmp.$"
+  trap 'rm -f "$kernel_tmp"' EXIT HUP INT TERM
+  cp /usr/local/bin/mihomo.initial "$kernel_tmp"
+  chmod 0700 "$kernel_tmp"
+  mv -f "$kernel_tmp" "${MIHOMO_BIN}"
+  trap - EXIT HUP INT TERM
 fi
+[ -f "${MIHOMO_BIN}" ] && [ -x "${MIHOMO_BIN}" ] || { echo "Mihomo 内核文件无效" >&2; exit 1; }
+chmod 0700 "${MIHOMO_BIN}"
 
 if [ ! -s "${CONFIG_PATH}" ]; then
   cp /app/default-config.yaml "${CONFIG_PATH}"
-  chmod 0600 "${CONFIG_PATH}"
 fi
+[ -f "${CONFIG_PATH}" ] && [ ! -L "${CONFIG_PATH}" ] || { echo "Mihomo 配置文件无效" >&2; exit 1; }
+# Existing volumes may have permissive modes from older releases. Always
+# protect API secrets and proxy credentials, not only newly seeded configs.
+chmod 0600 "${CONFIG_PATH}"
 
 if grep -Eq '^secret:[[:space:]]*"?(__S5M_GENERATED_SECRET__|__S5M_MIHOMO_SECRET__|change-this-secret)"?[[:space:]]*$' "${CONFIG_PATH}"; then
   secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d '[:space:]')"
