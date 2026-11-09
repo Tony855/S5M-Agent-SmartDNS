@@ -27,7 +27,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/tony855/s5m-agent-smartdns
-  SMARTDNS_REF: Release48.4
+  SMARTDNS_COMMIT: 21c940edc65520849ba03544c5cf8d9cf326e680
 
 jobs:
   prepare:
@@ -136,7 +136,7 @@ jobs:
       - name: Build AMD64 image
         run: |
           docker build --platform linux/amd64 \
-            --build-arg SMARTDNS_REF="$SMARTDNS_REF" \
+            --build-arg SMARTDNS_COMMIT="$SMARTDNS_COMMIT" \
             -f s5m-agent/Dockerfile.smartdns \
             -t s5m-agent-smartdns:release-amd64 .
       - name: Verify image services and DNS
@@ -216,7 +216,7 @@ jobs:
           push: false
           tags: s5m-agent-smartdns:release-arm64
           build-args: |
-            SMARTDNS_REF=${{ env.SMARTDNS_REF }}
+            SMARTDNS_COMMIT=${{ env.SMARTDNS_COMMIT }}
       - name: Verify ARM64 services and DNS
         shell: bash
         run: |
@@ -293,7 +293,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            SMARTDNS_REF=${{ env.SMARTDNS_REF }}
+            SMARTDNS_COMMIT=${{ env.SMARTDNS_COMMIT }}
           tags: |
             ${{ needs.prepare.outputs.image_tags }}
           labels: |
