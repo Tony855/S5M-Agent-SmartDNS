@@ -16,6 +16,11 @@ case "$MIHOMO_HOME" in
   *) echo "Mihomo 数据目录必须是绝对路径" >&2; exit 1 ;;
 esac
 case "$MIHOMO_HOME" in
+  /data) ;;
+  /*/*) ;;
+  *) echo "Mihomo 数据目录必须是专用子目录，拒绝系统根级目录" >&2; exit 1 ;;
+esac
+case "$MIHOMO_HOME" in
   /|*//*|*/./*|*/.|*/../*|*/..) echo "Mihomo 数据目录路径不安全" >&2; exit 1 ;;
 esac
 current=""
