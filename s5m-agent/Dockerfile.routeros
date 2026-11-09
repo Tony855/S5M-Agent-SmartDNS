@@ -1,3 +1,4 @@
+# CI revalidation after rebasing current main
 # syntax=docker/dockerfile:1
 ARG ALPINE_VERSION=3.24
 ARG MIHOMO_VERSION=v1.19.31
