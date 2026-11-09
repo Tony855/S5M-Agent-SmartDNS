@@ -55,9 +55,11 @@ run_mount_check() {
   DATA_DIR="$1" FINDMNT_TARGETS="$2" FINDMNT_FAIL="${3:-0}" PATH="$TMP/bin:/usr/bin:/bin" \
     bash -c 'err() { return 1; }; source "$1"; ensure_no_data_dir_mounts' _ "$TMP/mount-helper.sh"
 }
-run_mount_check "$TMP/good/data" "/\n/tmp\n$TMP/outside"
+safe_mounts="$(printf '/\n/tmp\n%s\n' "$TMP/outside")"
+run_mount_check "$TMP/good/data" "$safe_mounts"
 for mounted in "$TMP/good/data" "$TMP/good/data/cache"; do
-  if run_mount_check "$TMP/good/data" "/\n$mounted"; then
+  nested_mounts="$(printf '/\n%s\n' "$mounted")"
+  if run_mount_check "$TMP/good/data" "$nested_mounts"; then
     echo "nested data mount unexpectedly accepted: $mounted" >&2
     exit 1
   fi
