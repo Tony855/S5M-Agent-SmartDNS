@@ -129,6 +129,7 @@ func TestNoSmartDNSImageDefaultConfigFailsClosedForTransparentProxy(t *testing.T
 	if err := yaml.Unmarshal(data, &root); err != nil { t.Fatalf("parse default config: %v", err) }
 	rules, ok := root["rules"].([]any)
 	if !ok || len(rules) == 0 { t.Fatalf("default rules missing: %#v", root["rules"]) }
+	if root["allow-lan"] != false { t.Fatalf("default config must not expose unauthenticated LAN proxy, allow-lan=%#v", root["allow-lan"]) }
 	if rules[len(rules)-1] != "MATCH,REJECT" {
 		t.Fatalf("unmatched traffic must fail closed until a valid proxy policy is received, got %#v", rules)
 	}
