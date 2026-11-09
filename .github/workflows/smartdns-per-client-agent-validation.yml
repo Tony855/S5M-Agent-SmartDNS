@@ -27,8 +27,8 @@ jobs:
       run:
         working-directory: s5m-agent
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: s5m-agent/go.mod
           cache-dependency-path: s5m-agent/go.sum
