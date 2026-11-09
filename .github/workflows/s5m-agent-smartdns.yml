@@ -155,7 +155,8 @@ jobs:
           grep -q 'MATCH,REJECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
           ! grep -Eq '127\.0\.0\.1:605[34]' s5m-agent/default-config.yaml
           grep -q 'MATCH,REJECT' s5m-agent/default-config.yaml
-          grep -q '1.1.1.1' s5m-agent/default-config.yaml
+          grep -q 'https://dns.cloudflare.com/dns-query' s5m-agent/default-config.yaml
+          grep -q 'respect-rules: true' s5m-agent/default-config.yaml
           grep -q 'COPY s5m-agent/default-config-routeros.yaml /app/default-config.yaml' s5m-agent/Dockerfile.routeros
           ! grep -q 'smartdns-builder' s5m-agent/Dockerfile.routeros
           grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/smartdns/default-config-smartdns.yaml
