@@ -221,6 +221,18 @@ jobs:
       - name: Test deployment rollback fault injection
         run: bash scripts/tests/deploy-rollback-faults.sh
 
+      - name: Build and inspect RouterOS image
+        run: |
+          docker build --platform linux/amd64 -f s5m-agent/Dockerfile.routeros -t s5m-agent-routeros:test .
+          docker run --rm --entrypoint /bin/sh s5m-agent-routeros:test -ec '
+            test -x /app/s5m-agent
+            command -v dig
+            test -x /usr/local/bin/mihomo.initial
+            ! test -e /usr/sbin/smartdns
+            ! grep -Eq "127\\.0\\.0\\.1:605[34]" /app/default-config.yaml
+            grep -q "MATCH,REJECT" /app/default-config.yaml
+          '
+
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh
 
