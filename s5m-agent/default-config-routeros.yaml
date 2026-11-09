@@ -21,19 +21,22 @@ dns:
     - "*.local"
     - '+.v2net.cc'
     - "geosite:private"
+  # Bootstrap resolvers are encrypted and independent of the proxy being built.
   default-nameserver:
-    - 223.5.5.5
-    - 223.6.6.6
+    - tls://223.5.5.5
+    - tls://223.6.6.6
   proxy-server-nameserver:
-    - 223.5.5.5
-    - 223.6.6.6
+    - tls://223.5.5.5
+    - tls://223.6.6.6
+  # DNS upstream sockets follow Mihomo routing rules, preventing direct DNS egress.
+  respect-rules: true
   nameserver:
-    - 1.1.1.1
-    - 8.8.8.8
+    - https://dns.cloudflare.com/dns-query
+    - https://dns.google/dns-query
   nameserver-policy:
     "geosite:cn":
-      - 223.5.5.5
-      - 223.6.6.6
+      - tls://223.5.5.5
+      - tls://223.6.6.6
   fallback:
     - https://dns.cloudflare.com/dns-query
     - https://dns.google/dns-query
