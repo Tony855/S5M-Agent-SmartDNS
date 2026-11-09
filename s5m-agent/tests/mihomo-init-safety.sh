@@ -44,6 +44,10 @@ if run_init "$TMP/data-link/child"; then
   echo "symlinked MIHOMO_HOME parent unexpectedly accepted" >&2
   exit 1
 fi
+if run_init "/tmp"; then
+  echo "system root-level temporary directory unexpectedly accepted" >&2
+  exit 1
+fi
 
 # A symlinked config must not overwrite its target.
 BAD_CONFIG="$TMP/bad-config"
