@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - "source.zip"
+      - "scripts/validate-source-archive.py"
+      - "scripts/tests/test-source-archive-validation.py"
       - ".github/workflows/import-server-source.yml"
       - ".github/workflows/source-archive-validation.yml"
   push:
     branches: [main]
     paths:
       - "source.zip"
+      - "scripts/validate-source-archive.py"
+      - "scripts/tests/test-source-archive-validation.py"
       - ".github/workflows/import-server-source.yml"
       - ".github/workflows/source-archive-validation.yml"
 
@@ -21,64 +25,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare source archive fixture when archive is not part of this change
+      - name: Test archive path, type, duplicate, and extraction limits
+        run: python3 scripts/tests/test-source-archive-validation.py
+      - name: Set up Go
+        if: hashFiles('source.zip') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: false
+      - name: Validate and build bundled server archive when present
+        if: hashFiles('source.zip') != ''
         run: |
-          if [ ! -s source.zip ]; then
-            python3 - <<'PY'
-            import zipfile
-            with zipfile.ZipFile("source.zip", "w") as archive:
-                archive.writestr("source/main.go", "package main\\nfunc main() {}\\n")
-                archive.writestr("source/go.mod", "module archive-validation-fixture\\ngo 1.23\\n")
-                archive.writestr("source/internal/.keep", "")
-                archive.writestr("source/web/.keep", "")
-            PY
-          fi
-      - name: Validate and safely extract archive
-        run: |
-          python3 - <<'PY'
-          import pathlib
-          import stat
-          import zipfile
-
-          archive = zipfile.ZipFile("source.zip")
-          infos = archive.infolist()
-          if not infos or len(infos) > 10000:
-              raise SystemExit("source.zip has an invalid entry count")
-          total = 0
-          seen = set()
-          for info in infos:
-              name = info.filename
-              path = pathlib.PurePosixPath(name)
-              if "\\\\" in name or path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-                  raise SystemExit(f"unsafe archive path: {name!r}")
-              if path.parts[0] != "source":
-                  raise SystemExit(f"unexpected archive root: {name!r}")
-              normalized = str(path)
-              if normalized in seen:
-                  raise SystemExit(f"duplicate archive path: {name!r}")
-              seen.add(normalized)
-              mode = (info.external_attr >> 16) & 0xFFFF
-              kind = stat.S_IFMT(mode)
-              if kind not in (0, stat.S_IFREG, stat.S_IFDIR):
-                  raise SystemExit(f"non-regular archive entry: {name!r}")
-              if info.file_size > 25 * 1024 * 1024:
-                  raise SystemExit(f"archive entry too large: {name!r}")
-              total += info.file_size
-              if total > 150 * 1024 * 1024:
-                  raise SystemExit("source.zip expands beyond 150 MiB")
-          archive.extractall("/tmp/s5m-server-import")
-          PY
+          set -Eeuo pipefail
+          rm -rf /tmp/s5m-server-import
+          python3 scripts/validate-source-archive.py source.zip /tmp/s5m-server-import
           test -f /tmp/s5m-server-import/source/main.go
           test -f /tmp/s5m-server-import/source/go.mod
           test -d /tmp/s5m-server-import/source/internal
           test -d /tmp/s5m-server-import/source/web
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23.x"
-          cache: false
-      - name: Test imported server source
-        working-directory: /tmp/s5m-server-import/source
-        run: |
+          cd /tmp/s5m-server-import/source
           go mod download
           go test ./...
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/S5M-Server .
