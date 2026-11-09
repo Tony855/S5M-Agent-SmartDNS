@@ -4,11 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,27 +32,6 @@ import (
 type Config struct {
 	CentralURL string `json:"central_url"`
 	Token      string `json:"token"`
-}
-
-// 解密函数 (与你原本的实现保持一致)
-func decrypt(cryptoText string) (string, error) {
-	key := []byte("0123456789abcdef0123456789abcdef") // 32 bytes
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	ciphertext, err := base64.StdEncoding.DecodeString(cryptoText)
-	if err != nil {
-		return "", err
-	}
-	if len(ciphertext) < aes.BlockSize {
-		return "", fmt.Errorf("ciphertext too short")
-	}
-	iv := ciphertext[:aes.BlockSize]
-	ciphertext = ciphertext[aes.BlockSize:]
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(ciphertext, ciphertext)
-	return string(ciphertext), nil
 }
 
 // Mihomo 配置目录统一由 MIHOMO_HOME 控制，默认使用持久化挂载目录 /data。
