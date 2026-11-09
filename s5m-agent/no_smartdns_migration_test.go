@@ -160,6 +160,22 @@ func TestNoSmartDNSImageDefaultConfigFailsClosedForTransparentProxy(t *testing.T
 			if value, ok := resolver.(string); !ok || !(strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "tls://")) { t.Fatalf("%s must use encrypted DNS, got %#v", key, resolver) }
 		}
 	}
+
+	for _, configPath := range []string{"default-config.yaml", "default-config-routeros.yaml"} {
+		configData, err := os.ReadFile(configPath)
+		if err != nil { t.Fatalf("read %s: %v", configPath, err) }
+		var configRoot map[string]any
+		if err := yaml.Unmarshal(configData, &configRoot); err != nil { t.Fatalf("parse %s: %v", configPath, err) }
+		configDNS, ok := configRoot["dns"].(map[string]any)
+		if !ok || configDNS["respect-rules"] != true { t.Fatalf("%s must route DNS through Mihomo rules: %#v", configPath, configRoot["dns"]) }
+		for _, key := range []string{"default-nameserver", "proxy-server-nameserver"} {
+			resolvers, ok := configDNS[key].([]any)
+			if !ok || len(resolvers) == 0 { t.Fatalf("%s %s missing: %#v", configPath, key, configDNS[key]) }
+			for _, resolver := range resolvers {
+				if value, ok := resolver.(string); !ok || !strings.HasPrefix(value, "tls://") { t.Fatalf("%s %s must use DoT: %#v", configPath, key, resolver) }
+			}
+		}
+	}
 	if rules[len(rules)-1] != "MATCH,REJECT" {
 		t.Fatalf("unmatched traffic must fail closed until a valid proxy policy is received, got %#v", rules)
 	}
