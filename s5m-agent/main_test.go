@@ -2348,3 +2348,19 @@ func TestReadManagedRouteCIDRsRejectsUntrustedJournalState(t *testing.T) {
 		}
 	})
 }
+
+
+func TestWriteManagedRouteCIDRsRejectsUnboundedOrBroadRoutes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	if err := writeManagedRouteCIDRs([]string{"0.0.0.0/0"}); err == nil {
+		t.Fatal("writer must reject a broad route")
+	}
+	values := make([]string, managedRouteCIDRsMaxEntries+1)
+	for i := range values {
+		values[i] = fmt.Sprintf("198.51.100.%d/32", i+1)
+	}
+	if err := writeManagedRouteCIDRs(values); err == nil {
+		t.Fatal("writer must reject more than the bounded number of host routes")
+	}
+}
