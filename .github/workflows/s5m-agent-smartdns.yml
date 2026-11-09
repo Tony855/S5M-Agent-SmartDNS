@@ -8,6 +8,7 @@ on:
       - "s5m-agent/docker-compose.yml"
       - "s5m-agent/docker-compose.tun.yml"
       - "s5m-agent/default-config.yaml"
+      - "s5m-agent/default-config-routeros.yaml"
       - "s5m-agent/smartdns/default-config-smartdns.yaml"
       - "s5m-agent/Dockerfile"
       - "scripts/s5m-deploy.sh"
@@ -232,6 +233,7 @@ jobs:
             ! test -e /usr/sbin/smartdns
             ! grep -Eq "127\.0\.0\.1:605[34]" /app/default-config.yaml
             grep -q "MATCH,REJECT" /app/default-config.yaml
+            grep -Eq '^[[:space:]]+enable:[[:space:]]+false' /app/default-config.yaml
           '
 
       - name: Test SmartDNS config initialization failure handling
