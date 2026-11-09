@@ -1,3 +1,4 @@
+# CI revalidation after rebasing current main
 # syntax=docker/dockerfile:1
 # Optional combined image: S5M Agent + Mihomo + SmartDNS.
 # This is a separate image variant; the standard Agent and RouterOS images remain unchanged.
