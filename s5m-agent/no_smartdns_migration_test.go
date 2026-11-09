@@ -40,7 +40,7 @@ rules:
 	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
 	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
 	text := string(got)
-	for _, want := range []string{"keep-this-secret", "node-one", "192.0.2.10", "v2net.cc,DIRECT", "MATCH,DIRECT", "+.internal.example", "192.0.2.53", "192.0.2.54", "223.5.5.5"} {
+	for _, want := range []string{"keep-this-secret", "node-one", "192.0.2.10", "v2net.cc,DIRECT", "MATCH,DIRECT", "+.internal.example", "192.0.2.53", "192.0.2.54", "223.5.5.5", "proxy-server-nameserver", "respect-rules: true", "tls://223.5.5.5"} {
 		if !strings.Contains(text, want) { t.Fatalf("migration lost %q: %s", want, text) }
 	}
 	for _, stale := range []string{"127.0.0.1:6053", "127.0.0.1:6054"} {
@@ -51,6 +51,9 @@ rules:
 	var parsed map[string]any
 	if err := yaml.Unmarshal(got, &parsed); err != nil { t.Fatalf("migrated YAML invalid: %v", err) }
 	if parsed["secret"] != "keep-this-secret" { t.Fatal("API secret changed") }
+	dns, ok := parsed["dns"].(map[string]any)
+	if !ok || dns["respect-rules"] != true { t.Fatalf("no-SmartDNS migration must route DNS through Mihomo rules: %#v", parsed["dns"]) }
+	if proxyNS, ok := dns["proxy-server-nameserver"].([]any); !ok || len(proxyNS) == 0 { t.Fatalf("respect-rules requires proxy-server-nameserver bootstrap: %#v", dns["proxy-server-nameserver"]) }
 	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
 	backup2, err := os.ReadFile(path+".pre-no-smartdns"); if err != nil { t.Fatal(err) }
 	if string(backup2) != string(original) { t.Fatal("second migration overwrote original backup") }
@@ -105,7 +108,7 @@ rules:
 	for _, stale := range []string{"127.0.0.1:6053", "127.0.0.1:6054"} {
 		if strings.Contains(string(got), stale) { t.Fatalf("controller config still contains %s: %s", stale, got) }
 	}
-	for _, keep := range []string{"9.9.9.9", "223.5.5.5", "192.0.2.80", "v2net.cc,DIRECT", "MATCH,DIRECT"} {
+	for _, keep := range []string{"9.9.9.9", "223.5.5.5", "192.0.2.80", "v2net.cc,DIRECT", "MATCH,DIRECT", "respect-rules: true", "proxy-server-nameserver", "tls://223.5.5.5"} {
 		if !strings.Contains(string(got), keep) { t.Fatalf("controller config lost %s: %s", keep, got) }
 	}
 }
@@ -122,6 +125,17 @@ func TestNoSmartDNSBuildReportsControlUnsupported(t *testing.T) {
 }
 
 
+func TestMigrateNoSmartDNSConfigSecuresPlainBootstrapResolvers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("dns:\n  default-nameserver: [223.5.5.5, 223.6.6.6]\n  nameserver: [9.9.9.9]\n")
+	if err := os.WriteFile(path, original, 0600); err != nil { t.Fatal(err) }
+	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
+	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
+	for _, want := range []string{"tls://223.5.5.5", "tls://223.6.6.6", "respect-rules: true", "proxy-server-nameserver"} {
+		if !strings.Contains(string(got), want) { t.Fatalf("secure DNS migration missing %q: %s", want, got) }
+	}
+}
+
 func TestNoSmartDNSImageDefaultConfigFailsClosedForTransparentProxy(t *testing.T) {
 	data, err := os.ReadFile("default-config-no-smartdns.yaml")
 	if err != nil { t.Fatalf("read no-SmartDNS default config: %v", err) }
@@ -130,6 +144,38 @@ func TestNoSmartDNSImageDefaultConfigFailsClosedForTransparentProxy(t *testing.T
 	rules, ok := root["rules"].([]any)
 	if !ok || len(rules) == 0 { t.Fatalf("default rules missing: %#v", root["rules"]) }
 	if root["allow-lan"] != false { t.Fatalf("default config must not expose unauthenticated LAN proxy, allow-lan=%#v", root["allow-lan"]) }
+	dns, ok := root["dns"].(map[string]any)
+	if !ok || dns["respect-rules"] != true { t.Fatalf("no-SmartDNS default must route DNS upstreams through Mihomo rules: %#v", root["dns"]) }
+	for _, key := range []string{"default-nameserver", "proxy-server-nameserver"} {
+		resolvers, ok := dns[key].([]any)
+		if !ok || len(resolvers) == 0 { t.Fatalf("%s must provide independent bootstrap resolvers: %#v", key, dns[key]) }
+		for _, resolver := range resolvers {
+			if value, ok := resolver.(string); !ok || !strings.HasPrefix(value, "tls://") { t.Fatalf("%s must use encrypted bootstrap DNS, got %#v", key, resolver) }
+		}
+	}
+	for _, key := range []string{"nameserver", "fallback"} {
+		resolvers, ok := dns[key].([]any)
+		if !ok || len(resolvers) == 0 { t.Fatalf("%s resolver list missing: %#v", key, dns[key]) }
+		for _, resolver := range resolvers {
+			if value, ok := resolver.(string); !ok || !(strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "tls://")) { t.Fatalf("%s must use encrypted DNS, got %#v", key, resolver) }
+		}
+	}
+
+	for _, configPath := range []string{"default-config.yaml", "default-config-routeros.yaml"} {
+		configData, err := os.ReadFile(configPath)
+		if err != nil { t.Fatalf("read %s: %v", configPath, err) }
+		var configRoot map[string]any
+		if err := yaml.Unmarshal(configData, &configRoot); err != nil { t.Fatalf("parse %s: %v", configPath, err) }
+		configDNS, ok := configRoot["dns"].(map[string]any)
+		if !ok || configDNS["respect-rules"] != true { t.Fatalf("%s must route DNS through Mihomo rules: %#v", configPath, configRoot["dns"]) }
+		for _, key := range []string{"default-nameserver", "proxy-server-nameserver"} {
+			resolvers, ok := configDNS[key].([]any)
+			if !ok || len(resolvers) == 0 { t.Fatalf("%s %s missing: %#v", configPath, key, configDNS[key]) }
+			for _, resolver := range resolvers {
+				if value, ok := resolver.(string); !ok || !strings.HasPrefix(value, "tls://") { t.Fatalf("%s %s must use DoT: %#v", configPath, key, resolver) }
+			}
+		}
+	}
 	if rules[len(rules)-1] != "MATCH,REJECT" {
 		t.Fatalf("unmatched traffic must fail closed until a valid proxy policy is received, got %#v", rules)
 	}
