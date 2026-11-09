@@ -82,6 +82,13 @@ on:
       - "server/web/app.js"
       - ".github/workflows/s5m-agent-smartdns.yml"
       - ".github/workflows/release.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish multi-architecture image to GHCR"
+        required: true
+        default: false
+        type: boolean
 
 # Validation jobs may run concurrently across commits. Only GHCR publication
 # is serialized because all main-branch runs update the shared image tags.
@@ -699,7 +706,7 @@ jobs:
 
   publish:
     name: Publish multi-arch image to GHCR
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main'
     needs: [test-server, test-amd64, build-arm64]
     concurrency:
       group: s5m-agent-smartdns-publish-${{ github.ref }}
