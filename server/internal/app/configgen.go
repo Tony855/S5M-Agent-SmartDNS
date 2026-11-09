@@ -1424,7 +1424,9 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		if firstProxy != "" {
 			rules = append(rules, "MATCH,PROXY")
 		} else {
-			rules = append(rules, "MATCH,DIRECT")
+			// Global mode promises proxy-only egress. Never silently bypass when
+			// the node has no eligible proxy configured.
+			rules = append(rules, "MATCH,REJECT")
 		}
 	case "split":
 		// Legacy split mode keeps its historical proxy fallback for existing records.
@@ -1453,14 +1455,14 @@ func buildConfigFromProxiesWithMode(proxies []Proxy, machineCode, secret, routin
 		}
 		rules = append(rules, "MATCH,DIRECT")
 	case "game":
-		gameProxy := ""
+		gameTarget := "REJECT"
 		if firstProxy != "" {
-			gameProxy = "PROXY"
+			gameTarget = "PROXY"
 		}
-		if gameProxy != "" {
-			for _, domain := range []string{"steampowered.com", "steamcommunity.com", "steamcontent.com", "epicgames.com", "playstation.net", "playstation.com", "xboxlive.com", "xbox.com", "battle.net", "blizzard.com", "riotgames.com", "leagueoflegends.com", "valorant.com", "ea.com"} {
-				rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, gameProxy))
-			}
+		// Keep non-game traffic direct by design, but never leak configured game
+		// destinations direct merely because the node currently has no proxy.
+		for _, domain := range []string{"steampowered.com", "steamcommunity.com", "steamcontent.com", "epicgames.com", "playstation.net", "playstation.com", "xboxlive.com", "xbox.com", "battle.net", "blizzard.com", "riotgames.com", "leagueoflegends.com", "valorant.com", "ea.com"} {
+			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, gameTarget))
 		}
 		rules = append(rules, "MATCH,DIRECT")
 	}
