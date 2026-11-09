@@ -32,39 +32,9 @@ jobs:
           set -Eeuo pipefail
           test -s source.zip
           # Validate archive paths, file types, and expansion limits before extraction.
-          python3 - <<'PY'
-          import pathlib
-          import stat
-          import zipfile
-
-          archive = zipfile.ZipFile("source.zip")
-          infos = archive.infolist()
-          if not infos or len(infos) > 10000:
-              raise SystemExit("source.zip has an invalid entry count")
-          total = 0
-          seen = set()
-          for info in infos:
-              name = info.filename
-              path = pathlib.PurePosixPath(name)
-  if "\\" in name or path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-                  raise SystemExit(f"unsafe archive path: {name!r}")
-              if path.parts[0] != "source":
-                  raise SystemExit(f"unexpected archive root: {name!r}")
-              normalized = str(path)
-              if normalized in seen:
-                  raise SystemExit(f"duplicate archive path: {name!r}")
-              seen.add(normalized)
-              mode = (info.external_attr >> 16) & 0xFFFF
-              kind = stat.S_IFMT(mode)
-              if kind not in (0, stat.S_IFREG, stat.S_IFDIR):
-                  raise SystemExit(f"non-regular archive entry: {name!r}")
-              if info.file_size > 25 * 1024 * 1024:
-                  raise SystemExit(f"archive entry too large: {name!r}")
-              total += info.file_size
-              if total > 150 * 1024 * 1024:
-                  raise SystemExit("source.zip expands beyond 150 MiB")
-          archive.extractall("/tmp/s5m-server-import")
-          PY
+          python3 scripts/tests/test-source-archive-validation.py
+          rm -rf /tmp/s5m-server-import
+          python3 scripts/validate-source-archive.py source.zip /tmp/s5m-server-import
           test -d /tmp/s5m-server-import/source
           test -f /tmp/s5m-server-import/source/main.go
           test -f /tmp/s5m-server-import/source/go.mod
