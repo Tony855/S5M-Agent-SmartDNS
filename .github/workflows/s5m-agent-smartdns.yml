@@ -278,7 +278,8 @@ jobs:
           ! grep -q '^authentication:' s5m-agent/default-config.yaml
           grep -q '^allow-lan: false' s5m-agent/smartdns/default-config-smartdns.yaml
           ! grep -q '^authentication:' s5m-agent/smartdns/default-config-smartdns.yaml
-          grep -q '127.0.0.1:6053' s5m-agent/default-config.yaml
+          ! grep -Eq '127\\.0\\.0\\.1:605[34]' s5m-agent/default-config.yaml
+          grep -q 'MATCH,REJECT' s5m-agent/default-config.yaml
           grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '^ipv6: true' s5m-agent/default-config.yaml
           grep -q '^  ipv6: true' s5m-agent/default-config.yaml
