@@ -11,6 +11,7 @@ on:
       - "scripts/tests/deploy-s5m-agent-image-selection.sh"
       - "scripts/tests/deploy-s5m-agent-rollback.sh"
       - "scripts/tests/data-dir-safety.sh"
+      - "scripts/tests/verify-workflow-action-pins.sh"
       - "scripts/s5m-deploy.sh"
       - "server/**"
       - "scripts/tests/proxy-import-parser.test.js"
@@ -46,7 +47,7 @@ jobs:
           bash -n scripts/deploy-agent.sh
           bash -n scripts/deploy-s5m-agent.sh
           bash -n scripts/s5m-deploy.sh
-          bash -n scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh
+          bash -n scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh scripts/tests/verify-workflow-action-pins.sh
 
       - name: Verify self-contained server installer contract
         run: |
