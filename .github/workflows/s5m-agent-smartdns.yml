@@ -8,6 +8,7 @@ on:
       - "s5m-agent/docker-compose.yml"
       - "s5m-agent/docker-compose.tun.yml"
       - "s5m-agent/default-config.yaml"
+      - "s5m-agent/default-config-routeros.yaml"
       - "s5m-agent/smartdns/default-config-smartdns.yaml"
       - "s5m-agent/Dockerfile"
       - "scripts/s5m-deploy.sh"
@@ -152,7 +153,11 @@ jobs:
           ! grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'PROCESS-NAME,smartdns,DIRECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
           grep -q 'MATCH,REJECT' s5m-agent/smartdns/tests/ci-mihomo-config.yaml
-          grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/default-config.yaml
+          ! grep -Eq '127\.0\.0\.1:605[34]' s5m-agent/default-config.yaml
+          grep -q 'MATCH,REJECT' s5m-agent/default-config.yaml
+          grep -q '1.1.1.1' s5m-agent/default-config.yaml
+          grep -q 'COPY s5m-agent/default-config-routeros.yaml /app/default-config.yaml' s5m-agent/Dockerfile.routeros
+          ! grep -q 'smartdns-builder' s5m-agent/Dockerfile.routeros
           grep -q '"geosite:cn": 127.0.0.1:6054' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q 'bind 127.0.0.1:6054 -group china-dot' s5m-agent/smartdns/smartdns.conf
           grep -q '^cache-persist yes$' s5m-agent/smartdns/smartdns.conf
@@ -204,6 +209,8 @@ jobs:
           check "TUN overlay adds NET_ADMIN" grep -q NET_ADMIN <<<"$tun_compose"
           check "TUN overlay mounts tun device" grep -q 'target: /dev/net/tun' <<<"$tun_compose"
           check "default Mihomo config enables TUN" grep -q 'enable: true' s5m-agent/default-config.yaml
+          check "RouterOS image copies complete Agent Go package" grep -Fq 'COPY s5m-agent/*.go ./' s5m-agent/Dockerfile.routeros
+          check "RouterOS image does not advertise public proxy port" bash -c '! grep -q "EXPOSE.*7890" s5m-agent/Dockerfile.routeros'
           check "default SmartDNS config enables TUN" grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           check "s5m-deploy shell syntax" bash -n scripts/s5m-deploy.sh
           check "s5m-deploy defaults TUN on" grep -q 'ENABLE_TUN=.*:-1' scripts/s5m-deploy.sh
@@ -221,6 +228,19 @@ jobs:
           check "container startup wait exists" grep -q '等待 Agent 容器启动检查' scripts/s5m-deploy.sh
       - name: Test deployment rollback fault injection
         run: bash scripts/tests/deploy-rollback-faults.sh
+
+      - name: Build and inspect RouterOS image
+        run: |
+          docker build --platform linux/amd64 -f s5m-agent/Dockerfile.routeros -t s5m-agent-routeros:test .
+          docker run --rm --entrypoint /bin/sh s5m-agent-routeros:test -ec '
+            test -x /app/s5m-agent
+            command -v dig
+            test -x /usr/local/bin/mihomo.initial
+            ! test -e /usr/sbin/smartdns
+            ! grep -Eq "127\.0\.0\.1:605[34]" /app/default-config.yaml
+            grep -q "MATCH,REJECT" /app/default-config.yaml
+            grep -Eq '^[[:space:]]+enable:[[:space:]]+false' /app/default-config.yaml
+          '
 
       - name: Test SmartDNS config initialization failure handling
         run: sh s5m-agent/smartdns/tests/config-init-faults.sh
@@ -267,7 +287,8 @@ jobs:
           ! grep -q '^authentication:' s5m-agent/default-config.yaml
           grep -q '^allow-lan: false' s5m-agent/smartdns/default-config-smartdns.yaml
           ! grep -q '^authentication:' s5m-agent/smartdns/default-config-smartdns.yaml
-          grep -q '127.0.0.1:6053' s5m-agent/default-config.yaml
+          ! grep -Eq '127\.0\.0\.1:605[34]' s5m-agent/default-config.yaml
+          grep -q 'MATCH,REJECT' s5m-agent/default-config.yaml
           grep -q '127.0.0.1:6053' s5m-agent/smartdns/default-config-smartdns.yaml
           grep -q '^ipv6: true' s5m-agent/default-config.yaml
           grep -q '^  ipv6: true' s5m-agent/default-config.yaml

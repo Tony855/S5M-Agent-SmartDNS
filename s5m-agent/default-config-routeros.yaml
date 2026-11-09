@@ -1,0 +1,55 @@
+# Standalone S5M Agent + Mihomo image: no SmartDNS dependency.
+allow-lan: false
+mode: rule
+log-level: info
+find-process-mode: strict
+ipv6: true
+external-controller: 127.0.0.1:8088
+secret: __S5M_GENERATED_SECRET__
+profile:
+  store-selected: true
+  store-fake-ip: true
+dns:
+  enable: true
+  ipv6: true
+  listen: 127.0.0.1:5353
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-range6: fdfe:dcba:9876::1/64
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - '+.v2net.cc'
+    - "geosite:private"
+  default-nameserver:
+    - 223.5.5.5
+    - 223.6.6.6
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 223.6.6.6
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  nameserver-policy:
+    "geosite:cn":
+      - 223.5.5.5
+      - 223.6.6.6
+  fallback:
+    - https://dns.cloudflare.com/dns-query
+    - https://dns.google/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+proxies: []
+proxy-groups: []
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - MATCH,REJECT
+tun:
+  enable: false
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - "any:53"
+    - "tcp://any:53"
