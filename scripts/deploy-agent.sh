@@ -5,6 +5,37 @@ CONFIG_FILE="${CONFIG_FILE:-/etc/default/s5m-agent-smartdns}"
 
 log() { printf '[S5M-Agent] %s\n' "$*"; }
 die() { printf '[S5M-Agent][ERROR] %s\n' "$*" >&2; exit 1; }
+validate_data_dir_path() {
+  local path="$DATA_DIR" current="" component
+  local -a components=()
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" ||
+        "$path" == *"//"* || "$path" == *"/./"* || "$path" == *"/." ||
+        "$path" == *"/../"* || "$path" == *"/.." ]]; then
+    printf '拒绝不安全的数据目录路径：%q\n' "$path" >&2
+    return 1
+  fi
+  IFS='/' read -r -a components <<< "${path#/}"
+  if (("${#components[@]}" < 2)); then
+    printf '数据目录必须是独立子目录\n' >&2
+    return 1
+  fi
+  for component in "${components[@]}"; do
+    if [[ -z "$component" || "$component" == "." || "$component" == ".." ]]; then
+      printf '数据目录包含不安全路径组件：%q\n' "$path" >&2
+      return 1
+    fi
+    current+="/$component"
+    if [[ -L "$current" ]]; then
+      printf '数据目录路径包含符号链接：%s\n' "$current" >&2
+      return 1
+    fi
+    if [[ -e "$current" && ! -d "$current" ]]; then
+      printf '数据目录路径组件不是目录：%s\n' "$current" >&2
+      return 1
+    fi
+  done
+}
+
 
 [[ "${EUID}" -eq 0 ]] || die "请使用 root 运行。"
 command -v docker >/dev/null 2>&1 || die "未检测到 Docker，请先安装并启动 Docker。"
@@ -99,6 +130,8 @@ config_uses_tun() {
     END { exit !found }
   ' "$1"
 }
+validate_data_dir_path || die "数据目录路径不安全，拒绝挂载。"
+
 if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "$DATA_DIR/config.yaml"; then
   die "现有 config.yaml 中 tun.enable=true；为避免升级后 TUN 失效，请使用 ENABLE_TUN=1 或先明确关闭 TUN。"
 fi
