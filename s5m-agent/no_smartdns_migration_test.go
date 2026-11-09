@@ -120,3 +120,22 @@ func TestNoSmartDNSBuildReportsControlUnsupported(t *testing.T) {
 	if status["smartdns_control_supported"] != false { t.Fatalf("SmartDNS controls should be unsupported: %#v", status) }
 	if status["smartdns_enabled"] != false { t.Fatalf("SmartDNS should report disabled: %#v", status) }
 }
+
+
+func TestNoSmartDNSImageDefaultConfigFailsClosedForTransparentProxy(t *testing.T) {
+	data, err := os.ReadFile("default-config-no-smartdns.yaml")
+	if err != nil { t.Fatalf("read no-SmartDNS default config: %v", err) }
+	var root map[string]any
+	if err := yaml.Unmarshal(data, &root); err != nil { t.Fatalf("parse default config: %v", err) }
+	rules, ok := root["rules"].([]any)
+	if !ok || len(rules) == 0 { t.Fatalf("default rules missing: %#v", root["rules"]) }
+	if root["allow-lan"] != false { t.Fatalf("default config must not expose unauthenticated LAN proxy, allow-lan=%#v", root["allow-lan"]) }
+	if rules[len(rules)-1] != "MATCH,REJECT" {
+		t.Fatalf("unmatched traffic must fail closed until a valid proxy policy is received, got %#v", rules)
+	}
+	for _, raw := range rules {
+		if raw == "MATCH,DIRECT" { t.Fatal("default transparent-proxy policy must not leak unmatched traffic direct") }
+	}
+	tun, ok := root["tun"].(map[string]any)
+	if !ok || tun["enable"] != true { t.Fatalf("TUN must remain enabled by default: %#v", root["tun"]) }
+}

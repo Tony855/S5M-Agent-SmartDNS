@@ -1,5 +1,5 @@
 # Standalone S5M Agent + Mihomo image: no SmartDNS dependency.
-allow-lan: true
+allow-lan: false
 mode: rule
 log-level: info
 find-process-mode: strict
@@ -44,7 +44,7 @@ proxies: []
 proxy-groups: []
 rules:
   - DOMAIN-SUFFIX,v2net.cc,DIRECT
-  - MATCH,DIRECT
+  - MATCH,REJECT
 tun:
   enable: true
   stack: system

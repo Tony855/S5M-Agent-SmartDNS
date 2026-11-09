@@ -12,6 +12,7 @@ func TestSmartDNSImageDefaultConfigFailsClosed(t *testing.T) {
 		t.Fatalf("read SmartDNS image default config: %v", err)
 	}
 	config := string(data)
+	if !strings.Contains(config, "allow-lan: false") { t.Fatal("default config must not expose unauthenticated proxy to LAN") }
 	if !strings.Contains(config, "  - DOMAIN-SUFFIX,v2net.cc,DIRECT") {
 		t.Fatal("controller domain direct rule is missing")
 	}
