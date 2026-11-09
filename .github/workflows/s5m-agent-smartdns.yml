@@ -211,6 +211,9 @@ jobs:
           check "default Mihomo config enables TUN" grep -q 'enable: true' s5m-agent/default-config.yaml
           check "RouterOS image copies complete Agent Go package" grep -Fq 'COPY s5m-agent/*.go ./' s5m-agent/Dockerfile.routeros
           check "RouterOS image does not advertise public proxy port" bash -c '! grep -q "EXPOSE.*7890" s5m-agent/Dockerfile.routeros'
+          check "RouterOS init rejects symlinked persistent files" grep -Fq '[ ! -L "$path" ]' s5m-agent/routeros/cont-init.d/10-mihomo-config
+          check "RouterOS init always protects config credentials" grep -Fq 'chmod 0600 "${CONFIG_PATH}"' s5m-agent/routeros/cont-init.d/10-mihomo-config
+          check "RouterOS init uses unique kernel temp file" grep -Fq 'kernel_tmp="${MIHOMO_BIN}.tmp.$"' s5m-agent/routeros/cont-init.d/10-mihomo-config
           check "default SmartDNS config enables TUN" grep -q 'enable: true' s5m-agent/smartdns/default-config-smartdns.yaml
           check "s5m-deploy shell syntax" bash -n scripts/s5m-deploy.sh
           check "s5m-deploy defaults TUN on" grep -q 'ENABLE_TUN=.*:-1' scripts/s5m-deploy.sh
