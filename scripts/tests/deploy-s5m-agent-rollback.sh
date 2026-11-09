@@ -13,21 +13,24 @@ cat > "$TMP/bin/docker" <<'MOCK'
 set -euo pipefail
 printf '%s\n' "$*" >> "$DOCKER_CALL_LOG"
 cmd="$1"; shift || true
-read_state() {
-  if [[ -f "$STATE_FILE" ]]; then
-    IFS='|' read -r STATE_NAME STATE_STATUS < "$STATE_FILE"
-  else
-    STATE_NAME=""; STATE_STATUS=""
-  fi
+get_status() {
+  awk -F'|' -v n="$1" '$1 == n { print $2; found=1 } END { if (!found) exit 1 }' "$STATE_FILE"
 }
-write_state() { printf '%s|%s\n' "$1" "$2" > "$STATE_FILE"; }
+write_state() {
+  local name="$1" status="$2" tmp="${STATE_FILE}.tmp"
+  awk -F'|' -v n="$name" '$1 != n { print }' "$STATE_FILE" > "$tmp" || true
+  printf '%s|%s\n' "$name" "$status" >> "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+delete_state() {
+  local name="$1" tmp="${STATE_FILE}.tmp"
+  awk -F'|' -v n="$name" '$1 != n { print }' "$STATE_FILE" > "$tmp" || true
+  mv "$tmp" "$STATE_FILE"
+}
 case "$cmd" in
   info) exit 0 ;;
   ps)
-    read_state
-    if [[ " $* " == *" -a "* ]]; then
-      [[ -n "$STATE_NAME" ]] && printf '%s\n' "$STATE_NAME"
-    fi
+    if [[ " $* " == *" -a "* ]]; then cut -d'|' -f1 "$STATE_FILE"; fi
     exit 0
     ;;
   pull)
@@ -35,14 +38,14 @@ case "$cmd" in
     exit 0
     ;;
   stop)
-    read_state
-    if [[ "$1" == "$STATE_NAME" ]]; then write_state "$STATE_NAME" stopped; fi
+    status="$(get_status "$1")" || exit 1
+    write_state "$1" stopped
     exit 0
     ;;
   rename)
-    read_state
-    if [[ "$1" != "$STATE_NAME" ]]; then exit 1; fi
-    write_state "$2" "$STATE_STATUS"
+    status="$(get_status "$1")" || exit 1
+    delete_state "$1"
+    write_state "$2" "$status"
     exit 0
     ;;
   start)
@@ -56,25 +59,22 @@ case "$cmd" in
     exit 0
     ;;
   inspect)
-    read_state
     name="$1"
-    [[ "$name" == "$STATE_NAME" ]] || exit 1
+    status="$(get_status "$name")" || exit 1
     format=""
     while (($#)); do
       if [[ "$1" == "--format" ]]; then format="$2"; break; fi
       shift
     done
     case "$format" in
-      "{{.State.Status}}") printf '%s\n' "$STATE_STATUS" ;;
+      "{{.State.Status}}") printf '%s\n' "$status" ;;
       "{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}") printf '%s\n' "${VERIFY_HEALTH:-healthy}" ;;
       *) printf '{}\n' ;;
     esac
     exit 0
     ;;
   rm)
-    read_state
-    name="${@: -1}"
-    if [[ "$name" == "$STATE_NAME" ]]; then : > "$STATE_FILE"; fi
+    delete_state "${@: -1}"
     exit 0
     ;;
   image) exit 0 ;;
