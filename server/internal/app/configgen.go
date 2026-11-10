@@ -891,6 +891,18 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// An explicit negative capability report identifies the no-SmartDNS image.
+	// Older Agents omit this field, so absence remains backward compatible.
+	noSmartDNSAgent := false
+	if strings.TrimSpace(machineCode) != "" {
+		var status map[string]any
+		if raw := strings.TrimSpace(settings["agent_status_"+machineCode]); raw != "" &&
+			json.Unmarshal([]byte(raw), &status) == nil {
+			if available, reported := status["smartdns_available"].(bool); reported && !available {
+				noSmartDNSAgent = true
+			}
+		}
+	}
 	// An explicitly configured routing value remains authoritative. For upgraded
 	// installations without that global setting, enabling SmartDNS on a node
 	// automatically opts that node into the shared proxy route. This prevents a
@@ -901,12 +913,12 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	rawRouting, routingSettingExists := settings["smartdns_routing_config"]
 	applySharedFallback := false
 	var routing SmartDNSRoutingConfig
-	if routingSettingExists && strings.TrimSpace(rawRouting) != "" {
+	if !noSmartDNSAgent && routingSettingExists && strings.TrimSpace(rawRouting) != "" {
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
 		applySharedFallback = true
-	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
+	} else if !noSmartDNSAgent && !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
 		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") {
 		routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
 		applySharedFallback = true
@@ -951,6 +963,12 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 		yml, err = normalizeAgentProxyConfig(yml)
 		if err != nil {
 			return "", err
+		}
+		if noSmartDNSAgent {
+			// Do not send a SmartDNS image's loopback DNS endpoints to an Agent
+			// whose heartbeat explicitly reports that the daemon is unavailable.
+			yml, err = routeAgentDNSFallbackIfSmartDNS(yml)
+			if err != nil { return "", fmt.Errorf("清理无 SmartDNS Agent 的 DNS 配置失败: %w", err) }
 		}
 	}
 	// SmartDNS is applied only to the runtime WebSocket payload. Never persist
