@@ -153,3 +153,20 @@ func TestDecompressMihomoAssetEnforcesOutputLimitAndChecksum(t *testing.T) {
 		t.Fatal("gzip checksum mismatch was accepted")
 	}
 }
+
+
+func TestAcquireMihomoServerUpdateSerializesRequests(t *testing.T) {
+	unlock, ok := acquireMihomoServerUpdate()
+	if !ok || unlock == nil {
+		t.Fatal("first update request should acquire the update lock")
+	}
+	if secondUnlock, secondOK := acquireMihomoServerUpdate(); secondOK || secondUnlock != nil {
+		t.Fatal("concurrent update request must be rejected while an update is active")
+	}
+	unlock()
+	thirdUnlock, thirdOK := acquireMihomoServerUpdate()
+	if !thirdOK || thirdUnlock == nil {
+		t.Fatal("update lock should be available after the first request releases it")
+	}
+	thirdUnlock()
+}
