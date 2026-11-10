@@ -1946,10 +1946,18 @@ func readSystemMachineID(path string) (string, error) {
 	return id[:11], nil
 }
 
+var machineIDPersistenceMu sync.Mutex
+
 // loadOrCreateMachineID prefers /etc/machine-id. If unavailable, it generates
 // a random ID and persists it under /data, which survives container recreation
 // when the configured volume is retained. Storage errors are never ignored.
 func loadOrCreateMachineID(systemPath, storagePath string) (string, error) {
+	// Startup registration, the machine-id endpoint, and the public bind
+	// handler can race. Serialize fallback creation so every caller observes
+	// the same persisted identity rather than returning competing random IDs.
+	machineIDPersistenceMu.Lock()
+	defer machineIDPersistenceMu.Unlock()
+
 	if id, err := readSystemMachineID(systemPath); err == nil {
 		return id, nil
 	}
