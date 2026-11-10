@@ -77,6 +77,50 @@ type proxyOut struct {
 	Extra  map[string]any `yaml:",inline"`
 }
 
+// validateUniqueYAMLMappingKeys rejects ambiguous YAML mappings before policy
+// normalization. yaml.Node intentionally preserves duplicate keys, while later
+// decoders may choose a different duplicate value than mappingValue (first-wins).
+// That discrepancy is unsafe for policy-controlled keys such as dns, tun and
+// proxy-groups, so reject duplicates recursively before mutating the tree.
+func validateUniqueYAMLMappingKeys(node *yaml.Node) error {
+	visited := make(map[*yaml.Node]bool)
+	var walk func(*yaml.Node) error
+	walk = func(current *yaml.Node) error {
+		if current == nil || visited[current] {
+			return nil
+		}
+		visited[current] = true
+		if current.Kind == yaml.AliasNode {
+			return walk(current.Alias)
+		}
+		if current.Kind == yaml.MappingNode {
+			seen := make(map[string]struct{}, len(current.Content)/2)
+			for i := 0; i+1 < len(current.Content); i += 2 {
+				key := current.Content[i]
+				if key.Kind != yaml.ScalarNode {
+					return fmt.Errorf("YAML 映射键必须是标量")
+				}
+				identity := key.Tag + "\x00" + key.Value
+				if _, exists := seen[identity]; exists {
+					return fmt.Errorf("YAML 映射包含重复键 %q", key.Value)
+				}
+				seen[identity] = struct{}{}
+				if err := walk(current.Content[i+1]); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, child := range current.Content {
+			if err := walk(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(node)
+}
+
 // normalizeAgentProxyConfig applies the Agent policy until the serialized YAML reaches a stable fixed point.
 // This keeps persisted configuration and its SHA-256 stable across repeated WebSocket requests.
 func normalizeAgentProxyConfig(yml string) (string, error) {
@@ -99,6 +143,9 @@ func normalizeAgentProxyConfigOnce(yml string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
 		return "", fmt.Errorf("解析 Agent Mihomo 配置失败: %w", err)
+	}
+	if err := validateUniqueYAMLMappingKeys(&doc); err != nil {
+		return "", fmt.Errorf("Agent Mihomo 配置存在歧义: %w", err)
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return "", fmt.Errorf("Agent Mihomo 配置必须是 YAML 对象")
@@ -1779,6 +1826,19 @@ func mergeManagedProxyGroupValues(customValue, generatedValue any) ([]any, error
 }
 
 func mergeManagedProxySections(customYAML, generatedYAML string) (string, error) {
+	var customNode, generatedNode yaml.Node
+	if err := yaml.Unmarshal([]byte(customYAML), &customNode); err != nil {
+		return "", fmt.Errorf("全局 YAML 语法错误: %w", err)
+	}
+	if err := validateUniqueYAMLMappingKeys(&customNode); err != nil {
+		return "", fmt.Errorf("全局 YAML 存在歧义: %w", err)
+	}
+	if err := yaml.Unmarshal([]byte(generatedYAML), &generatedNode); err != nil {
+		return "", fmt.Errorf("生成的 YAML 无效: %w", err)
+	}
+	if err := validateUniqueYAMLMappingKeys(&generatedNode); err != nil {
+		return "", fmt.Errorf("生成的 YAML 存在歧义: %w", err)
+	}
 	var customDoc map[string]any
 	if err := yaml.Unmarshal([]byte(customYAML), &customDoc); err != nil {
 		return "", fmt.Errorf("全局 YAML 语法错误: %w", err)
