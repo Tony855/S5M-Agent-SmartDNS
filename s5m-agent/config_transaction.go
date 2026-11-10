@@ -163,16 +163,16 @@ func applyAgentConfigTransaction(mihomoYAML, smartDNSConfig []byte, updateSmartD
 		mihomoYAML, err = normalizeNoSmartDNSYAML(mihomoYAML)
 		if err != nil { return fmt.Errorf("清理主控下发配置中的 SmartDNS DNS 引用失败: %w", err) }
 	}
-	return applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, controllerPayload)
+	return applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, controllerPayload, false)
 }
 
 func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool) error {
-	return applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, mihomoYAML)
+	return applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, mihomoYAML, true)
 }
 
 // Runtime YAML may be sanitized for an image capability while the exact
 // controller payload is retained separately for WebSocket SHA-256 consistency.
-func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte) error {
+func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool) error {
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
 	mihomoConfigApplyMu.Lock()
@@ -245,7 +245,7 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 		restored, restoreErr := restoreSmartDNSConfigVerified(smartPath, oldSmartDNS, hadSmartDNS)
 		if !restored {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", restoreErr))
-		} else if smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
+		} else if !skipSmartDNSHealth && smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
 			if err := transactionRestartSmartDNS(); err != nil {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
 			} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
