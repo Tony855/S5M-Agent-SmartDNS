@@ -1592,16 +1592,57 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 	cmd.Version = strings.TrimSpace(cmd.Version)
 	cmd.SHA256 = strings.TrimSpace(cmd.SHA256)
 
-	// ACK delivery can fail after a successful update. If the same command is
-	// delivered again, recognize the already-installed target version and avoid
-	// downloading/replacing/restarting the kernel a second time.
+	binaryPath := mihomoBinaryPath()
+	backupPath := binaryPath + ".previous"
+	configPath := mihomoConfigPath()
+
+	// A replaced binary does not prove the running Mihomo process has restarted.
+	// After an Agent crash between rename and restart/health-check, reconcile the
+	// runtime version before acknowledging the retried command.
 	stage = "check-current-version"
-	fmt.Printf("mihomo_update: checking current version command_id=%q\n", cmd.ID)
-	if output, err := exec.Command(mihomoBinaryPath(), "-v").CombinedOutput(); err == nil {
-		versionPattern := regexp.MustCompile(`\bv` + regexp.QuoteMeta(strings.TrimPrefix(cmd.Version, "v")) + `\b`)
+	fmt.Printf("mihomo_update: checking current version command_id=%q\\n", cmd.ID)
+	if output, err := exec.Command(binaryPath, "-v").CombinedOutput(); err == nil {
+		versionPattern := regexp.MustCompile(`\\bv` + regexp.QuoteMeta(strings.TrimPrefix(cmd.Version, "v")) + `\\b`)
 		if versionPattern.Match(output) {
-			fmt.Printf("mihomo_update: skipped command_id=%q reason=already-installed duration_ms=%d\n", cmd.ID, time.Since(started).Milliseconds())
-			return "Mihomo 已是目标版本 " + cmd.Version + "，按幂等重试跳过重复安装", nil
+			configData, readErr := os.ReadFile(configPath)
+			if readErr != nil {
+				return "", fmt.Errorf("读取 Mihomo 配置以恢复升级状态失败: %w", readErr)
+			}
+			var config map[string]any
+			if parseErr := yaml.Unmarshal(configData, &config); parseErr != nil {
+				return "", fmt.Errorf("解析 Mihomo 配置以恢复升级状态失败: %w", parseErr)
+			}
+			secret, _ := config["secret"].(string)
+			if strings.TrimSpace(secret) == "" {
+				return "", fmt.Errorf("当前配置没有 Mihomo API secret，拒绝确认升级成功")
+			}
+			stage = "recover-runtime-version"
+			expectedVersion := strings.TrimPrefix(cmd.Version, "v")
+			recoveryErr := ensureMihomoRuntimeVersion(
+				func() error { return waitForMihomoVersion(secret, expectedVersion, 0) },
+				func() error { return restartMihomo(secret) },
+				func() error { return waitForMihomoVersion(secret, expectedVersion, 30*time.Second) },
+				func() error {
+					if _, statErr := os.Stat(backupPath); statErr != nil {
+						if os.IsNotExist(statErr) {
+							return fmt.Errorf("没有可用的旧内核备份，无法自动回滚")
+						}
+					return statErr
+					}
+					return restoreMihomoKernel(binaryPath, backupPath, secret)
+				},
+			)
+			if recoveryErr != nil {
+				return "", fmt.Errorf("磁盘内核已是目标版本，但运行态恢复/验证失败: %w", recoveryErr)
+			}
+			if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+				return "", fmt.Errorf("运行态已确认目标版本，但清理旧内核备份失败")
+			}
+			if err := syncDirectoryForFile(binaryPath); err != nil {
+				return "", fmt.Errorf("运行态已确认目标版本，但同步备份清理失败: %w", err)
+			}
+			fmt.Printf("mihomo_update: recovered command_id=%q reason=runtime-version-verified duration_ms=%d\\n", cmd.ID, time.Since(started).Milliseconds())
+			return "Mihomo 磁盘和运行态均已确认目标版本 " + cmd.Version + "，升级重试已恢复", nil
 		}
 	}
 	asset := ""
@@ -1682,7 +1723,6 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 		return "", fmt.Errorf("新内核自检失败（已隐藏底层路径详情）")
 	}
 	stage = "config-validation"
-	configPath := mihomoConfigPath()
 	if _, err := exec.Command(newPath, "-t", "-d", mihomoHome(), "-f", configPath).CombinedOutput(); err != nil {
 		fmt.Printf("mihomo_update: failed command_id=%q stage=config-validation error=%q\n", cmd.ID, safeMihomoValidationDiagnostic([]byte(err.Error())))
 		return "", fmt.Errorf("新内核未通过当前配置校验（已隐藏底层路径详情）")
@@ -1701,8 +1741,6 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 		return "", fmt.Errorf("当前配置没有 Mihomo API secret")
 	}
 	stage = "install-binary"
-	binaryPath := mihomoBinaryPath()
-	backupPath := binaryPath + ".previous"
 	if err := installMihomoKernelFiles(newPath, binaryPath, backupPath); err != nil {
 		return "", fmt.Errorf("安装新 Mihomo 内核失败: %w", err)
 	}
@@ -1748,6 +1786,20 @@ func verifyKernelUpgrade(restart, healthCheck, rollback func() error) error {
 		return fmt.Errorf("新内核健康检查失败，已恢复旧内核: %w", healthErr)
 	}
 	return nil
+}
+
+ 
+// ensureMihomoRuntimeVersion does not equate an installed binary with a running
+// upgrade. A restart is required whenever the live API does not report the
+// expected version; failed health checks must invoke the supplied rollback.
+func ensureMihomoRuntimeVersion(check, restart, healthCheck, rollback func() error) error {
+	if check == nil || restart == nil || healthCheck == nil || rollback == nil {
+		return fmt.Errorf("Mihomo 运行态恢复回调不完整")
+	}
+	if err := check(); err == nil {
+		return nil
+	}
+	return verifyKernelUpgrade(restart, healthCheck, rollback)
 }
 
 // newMihomoRestartRequest builds the documented Mihomo restart request.
