@@ -13,6 +13,7 @@ import (
 const (
 	loginAttemptWindow = time.Minute
 	loginAttemptLimit = 10
+	agentRegistrationAttemptLimit = 600
 	loginAttemptMaxKeys = 4096
 	loginAttemptRetention = 10 * time.Minute
 )
@@ -58,6 +59,11 @@ func firstForwardedFor(value string) string {
 }
 
 func (l *loginAttemptLimiter) allow(key string, now time.Time) (bool, time.Duration) {
+	return l.allowWithLimit(key, now, loginAttemptLimit)
+}
+
+func (l *loginAttemptLimiter) allowWithLimit(key string, now time.Time, limit int) (bool, time.Duration) {
+	if limit < 1 { limit = loginAttemptLimit }
 	key = strings.TrimSpace(key)
 	if key == "" { key = "unknown" }
 	l.mu.Lock()
@@ -81,7 +87,7 @@ func (l *loginAttemptLimiter) allow(key string, now time.Time) (bool, time.Durat
 		entry = loginAttempt{windowStart: now}
 	}
 	entry.lastSeen = now
-	if entry.count >= loginAttemptLimit {
+	if entry.count >= limit {
 		l.entries[key] = entry
 		return false, entry.windowStart.Add(loginAttemptWindow).Sub(now)
 	}
