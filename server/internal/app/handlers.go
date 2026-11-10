@@ -857,28 +857,109 @@ func (a *App) handleMonitorTraffic(w http.ResponseWriter, _ *http.Request) {
 }
 
 type mihomoReleaseAsset struct {
-	Name               string "json:\"name\""
-	BrowserDownloadURL string "json:\"browser_download_url\""
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
+	Digest             string `json:"digest"`
 }
 
+const (
+	maxMihomoReleaseMetadataBytes = 1 << 20
+	maxMihomoCompressedAssetBytes = 128 << 20
+	maxMihomoBinaryBytes          = 256 << 20
+)
+
 func parseMihomoVersion(output []byte) string {
-	match := regexp.MustCompile("Mihomo Meta (v[0-9]+\\.[0-9]+\\.[0-9]+)").FindSubmatch(output)
+	match := regexp.MustCompile("Mihomo Meta (v[0-9]+\.[0-9]+\.[0-9]+)").FindSubmatch(output)
 	if len(match) < 2 {
 		return "unknown"
 	}
 	return string(match[1])
 }
 
-func findMihomoCompatibleAsset(assets []mihomoReleaseAsset) string {
+func validateMihomoReleaseAsset(asset mihomoReleaseAsset, version string) error {
+	if asset.Size <= 0 || asset.Size > maxMihomoCompressedAssetBytes {
+		return fmt.Errorf("Mihomo 压缩更新包大小无效或超过 128 MiB")
+	}
+	if !regexp.MustCompile("^mihomo-linux-amd64-compatible-" + regexp.QuoteMeta(version) + "\.gz$").MatchString(asset.Name) {
+		return fmt.Errorf("Mihomo 更新资产名称与目标版本不匹配")
+	}
+	if !strings.HasPrefix(asset.Digest, "sha256:") {
+		return fmt.Errorf("GitHub 发布资产缺少 SHA-256 digest")
+	}
+	digest := strings.TrimPrefix(asset.Digest, "sha256:")
+	decoded, err := hex.DecodeString(digest)
+	if err != nil || len(decoded) != sha256.Size {
+		return fmt.Errorf("GitHub 发布资产 SHA-256 digest 格式无效")
+	}
+	u, err := url.Parse(asset.BrowserDownloadURL)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "github.com") ||
+		u.Port() != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("Mihomo 更新资产下载地址不是受信任的 GitHub HTTPS 地址")
+	}
+	wantPrefix := "/MetaCubeX/mihomo/releases/download/" + version + "/"
+	if !strings.HasPrefix(u.EscapedPath(), wantPrefix) || filepath.Base(u.Path) != asset.Name {
+		return fmt.Errorf("Mihomo 更新资产路径与官方仓库或文件名不匹配")
+	}
+	return nil
+}
+
+func findMihomoCompatibleAsset(assets []mihomoReleaseAsset, version string) (mihomoReleaseAsset, error) {
 	for _, asset := range assets {
-		if strings.Contains(asset.Name, "linux-amd64-compatible") &&
-			strings.HasSuffix(asset.Name, ".gz") &&
-			!strings.HasSuffix(asset.Name, ".tar.gz") &&
-			strings.HasPrefix(asset.BrowserDownloadURL, "https://") {
-			return asset.BrowserDownloadURL
+		if asset.Name == "mihomo-linux-amd64-compatible-"+version+".gz" {
+			if err := validateMihomoReleaseAsset(asset, version); err != nil {
+				return mihomoReleaseAsset{}, err
+			}
+			return asset, nil
 		}
 	}
-	return ""
+	return mihomoReleaseAsset{}, fmt.Errorf("未找到匹配目标版本的 linux-amd64-compatible 更新包")
+}
+
+func verifyMihomoDownloadedAsset(path string, asset mihomoReleaseAsset) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != asset.Size || info.Size() > maxMihomoCompressedAssetBytes {
+		return fmt.Errorf("Mihomo 压缩更新包实际大小与 GitHub 元数据不一致")
+	}
+	hash := sha256.New()
+	written, err := io.Copy(hash, io.LimitReader(file, maxMihomoCompressedAssetBytes+1))
+	if err != nil {
+		return err
+	}
+	if written != asset.Size || hex.EncodeToString(hash.Sum(nil)) != strings.TrimPrefix(asset.Digest, "sha256:") {
+		return fmt.Errorf("Mihomo 更新包 SHA-256 校验失败")
+	}
+	return nil
+}
+
+func decompressMihomoAsset(source io.Reader, destination io.Writer) error {
+	reader, err := gzip.NewReader(source)
+	if err != nil {
+		return fmt.Errorf("更新包不是有效的 gzip 文件: %w", err)
+	}
+	written, copyErr := io.Copy(destination, io.LimitReader(reader, maxMihomoBinaryBytes+1))
+	closeErr := reader.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if written > maxMihomoBinaryBytes {
+		return fmt.Errorf("Mihomo 解压后二进制超过 256 MiB")
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if written == 0 {
+		return fmt.Errorf("Mihomo 解压后二进制为空")
+	}
+	return nil
 }
 
 func isGzipHeader(header []byte) bool {
@@ -974,11 +1055,16 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metadata, err := io.ReadAll(io.LimitReader(resp.Body, maxMihomoReleaseMetadataBytes+1))
+	if err != nil || len(metadata) > maxMihomoReleaseMetadataBytes {
+		writeErr(w, http.StatusBadGateway, "GitHub Mihomo 发布元数据读取失败或超过 1 MiB")
+		return
+	}
 	var release struct {
-		TagName string               "json:\"tag_name\""
+		TagName string "json:\"tag_name\""
 		Assets  []mihomoReleaseAsset "json:\"assets\""
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.Unmarshal(metadata, &release); err != nil {
 		writeErr(w, http.StatusBadGateway, "解析 Mihomo 发布信息失败")
 		return
 	}
@@ -991,11 +1077,12 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	assetURL := findMihomoCompatibleAsset(release.Assets)
-	if assetURL == "" {
-		writeErr(w, http.StatusBadGateway, "未找到有效的 linux-amd64-compatible 更新包")
+	asset, err := findMihomoCompatibleAsset(release.Assets, release.TagName)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "Mihomo 发布资产校验失败: "+err.Error())
 		return
 	}
+	assetURL := asset.BrowserDownloadURL
 
 	gzFile, err := os.CreateTemp("", "s5m-mihomo-update-*.gz")
 	if err != nil {
@@ -1011,7 +1098,8 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(gzPath)
 
 	download := func(url string) error {
-		cmd := exec.CommandContext(r.Context(), "curl", "--fail", "--location", "--retry", "2",
+		cmd := exec.CommandContext(r.Context(), "curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
+			"--max-filesize", strconv.FormatInt(asset.Size, 10), "--retry", "2",
 			"--connect-timeout", "15", "--max-time", "240", "--output", gzPath, url)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
@@ -1042,33 +1130,29 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := verifyMihomoDownloadedAsset(gzPath, asset); err != nil {
+		writeErr(w, http.StatusBadGateway, "Mihomo 更新包完整性校验失败: "+err.Error())
+		return
+	}
 
 	gz, err := os.Open(gzPath)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "打开下载文件失败")
 		return
 	}
-	reader, err := gzip.NewReader(gz)
-	if err != nil {
-		_ = gz.Close()
-		writeErr(w, http.StatusBadGateway, "更新包不是有效的 gzip 文件")
-		return
-	}
 	candidate, err := os.CreateTemp(filepath.Dir(binaryPath), ".mihomo-candidate-*")
 	if err != nil {
-		_ = reader.Close()
 		_ = gz.Close()
 		writeErr(w, http.StatusInternalServerError, "创建候选二进制失败")
 		return
 	}
 	candidatePath := candidate.Name()
 	defer os.Remove(candidatePath)
-	_, copyErr := io.Copy(candidate, reader)
-	readerErr := reader.Close()
+	decompressErr := decompressMihomoAsset(gz, candidate)
 	gzErr := gz.Close()
-	if copyErr != nil || readerErr != nil || gzErr != nil {
+	if decompressErr != nil || gzErr != nil {
 		_ = candidate.Close()
-		writeErr(w, http.StatusBadGateway, "解压 Mihomo 更新包失败")
+		writeErr(w, http.StatusBadGateway, "解压 Mihomo 更新包失败或超过 256 MiB")
 		return
 	}
 	if err := candidate.Chmod(0o755); err != nil {
