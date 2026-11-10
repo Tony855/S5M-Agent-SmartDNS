@@ -4,7 +4,7 @@ A small multi-stage Docker image built from the official [pymumu/smartdns](https
 
 ## Build inputs
 
-- Default upstream source ref: `Release48.4` (override with `SMARTDNS_REF`).
+- Default upstream source ref: commit `21c940edc65520849ba03544c5cf8d9cf326e680` (immutable upstream commit).
 - Build: Alpine Linux; SmartDNS C core only, with zlib support.
 - Runtime: Alpine Linux plus the required runtime libraries and CA certificates.
 - Architectures published by CI: `linux/amd64`, `linux/arm64`.
@@ -17,7 +17,7 @@ Run from the repository root:
 ```sh
 docker buildx build \
   --platform linux/amd64 \
-  --build-arg SMARTDNS_REF=Release48.4 \
+  --build-arg SMARTDNS_COMMIT=21c940edc65520849ba03544c5cf8d9cf326e680 \
   -f docker/smartdns/Dockerfile \
   -t smartdns:local docker/smartdns
 ```
@@ -32,7 +32,7 @@ The workflow `.github/workflows/smartdns-image.yml` builds and smoke-tests the A
 - `ghcr.io/tony855/smartdns:latest`
 - an immutable commit-SHA tag
 
-A manual workflow run accepts an upstream SmartDNS ref. Manual publishing is opt-in.
+The upstream SmartDNS source is pinned to an immutable commit in the Dockerfile; manual publishing is opt-in.
 
 ## Run locally, safely
 
