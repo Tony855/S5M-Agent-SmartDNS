@@ -5,7 +5,7 @@ DEPLOY="$ROOT/scripts/deploy-agent.sh"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 awk '
-  /^BACKUP_NAME=/ { copy=1 }
+  /^stop_existing_container_checked\(\)/ { copy=1 }
   /^if docker container inspect "\$CONTAINER_NAME"/ { copy=0 }
   copy { print }
 ' "$DEPLOY" >"$tmp"
@@ -57,4 +57,52 @@ test_failed_new_container_removal_preserves_backup() (
 bash -n "$DEPLOY"
 test_successful_restore
 test_failed_new_container_removal_preserves_backup
-echo "Agent deployment rollback fault-injection tests passed"
+
+test_stop_failure_keeps_old_service_available() (
+  state=running
+  start_calls=0
+  docker() {
+    case "$1" in
+      stop) return 1 ;;
+      inspect) printf '%s\n' "$state" ;;
+      start) start_calls=$((start_calls + 1)); state=running ;;
+      *) return 90 ;;
+    esac
+  }
+  if stop_existing_container_checked s5m-agent; then
+    echo "stop helper unexpectedly accepted a running container" >&2
+    exit 1
+  fi
+  assert_eq "$state" running "old service remains running after failed stop"
+  assert_eq "$start_calls" 1 "helper attempts to restore old service"
+)
+
+test_stop_error_with_confirmed_exit_is_safe() (
+  state=exited
+  docker() {
+    case "$1" in
+      stop) return 1 ;;
+      inspect) printf '%s\n' "$state" ;;
+      *) return 90 ;;
+    esac
+  }
+  stop_existing_container_checked s5m-agent
+)
+
+test_successful_stop_is_verified() (
+  state=running
+  docker() {
+    case "$1" in
+      stop) state=exited ;;
+      inspect) printf '%s\n' "$state" ;;
+      *) return 90 ;;
+    esac
+  }
+  stop_existing_container_checked s5m-agent
+)
+
+bash -n "$DEPLOY"
+test_stop_failure_keeps_old_service_available
+test_stop_error_with_confirmed_exit_is_safe
+test_successful_stop_is_verified
+echo "Agent deployment stop failure and rollback fault-injection tests passed"
