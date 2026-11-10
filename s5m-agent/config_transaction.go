@@ -333,13 +333,17 @@ func ensureSmartDNSServiceStarted(wasEnabled bool) error {
 		if err := persistSmartDNSDisabled(false); err != nil {
 			return err
 		}
-	}
-	if err := smartDNSServiceStart(); err != nil {
-		startErr := fmt.Errorf("启动/确认 SmartDNS s6 服务失败: %w", err)
-		if !wasEnabled {
+		// When disabled, the s6 run script remains alive waiting for this marker
+		// to disappear. -u treats that waiter as already up; -r is required to
+		// rerun the script and launch the actual SmartDNS daemon.
+		if err := smartDNSServiceRestart(); err != nil {
+			startErr := fmt.Errorf("重新启动 SmartDNS s6 服务失败: %w", err)
 			return rollbackFailedSmartDNSEnable(startErr, persistSmartDNSDisabled, smartDNSServiceStop)
 		}
-		return startErr
+		return nil
+	}
+	if err := smartDNSServiceStart(); err != nil {
+		return fmt.Errorf("启动/确认 SmartDNS s6 服务失败: %w", err)
 	}
 	return nil
 }

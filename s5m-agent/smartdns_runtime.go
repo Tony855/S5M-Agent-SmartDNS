@@ -31,6 +31,12 @@ var smartDNSDisabledPath = "/data/smartdns.disabled"
 var smartDNSServiceStart = func() error {
 	return exec.Command("/command/s6-svc", "-u", "/run/service/smartdns").Run()
 }
+// A disabled SmartDNS service can remain supervised by s6 while its run script
+// waits for the persistent disabled marker to disappear. In that state -u
+// does not rerun the script, so first-enable must explicitly restart it.
+var smartDNSServiceRestart = func() error {
+	return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
+}
 var smartDNSServiceStop = func() error {
 	return exec.Command("/command/s6-svc", "-d", "/run/service/smartdns").Run()
 }

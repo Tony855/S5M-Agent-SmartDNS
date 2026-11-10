@@ -553,19 +553,46 @@ func TestEnsureSmartDNSServiceStartedRecoversAlreadyEnabledService(t *testing.T)
 	}
 }
 
-func TestEnsureSmartDNSServiceStartedRollsBackFailedFirstEnable(t *testing.T) {
-	oldStart, oldStop, oldPath := smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath
+func TestEnsureSmartDNSServiceStartedRestartsDisabledWaiter(t *testing.T) {
+	oldStart, oldRestart, oldStop, oldPath := smartDNSServiceStart, smartDNSServiceRestart, smartDNSServiceStop, smartDNSDisabledPath
 	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
-	startErr := errors.New("simulated s6 start failure")
+	if err := persistSmartDNSDisabled(true); err != nil {
+		t.Fatalf("persist disabled marker: %v", err)
+	}
+	startCalls, restartCalls := 0, 0
+	smartDNSServiceStart = func() error { startCalls++; return nil }
+	smartDNSServiceRestart = func() error {
+		restartCalls++
+		if _, err := os.Lstat(smartDNSDisabledPath); !os.IsNotExist(err) {
+			t.Fatalf("restart must happen only after disabled marker is removed, lstat err=%v", err)
+		}
+		return nil
+	}
+	smartDNSServiceStop = func() error { return nil }
+	t.Cleanup(func() {
+		smartDNSServiceStart, smartDNSServiceRestart, smartDNSServiceStop, smartDNSDisabledPath = oldStart, oldRestart, oldStop, oldPath
+	})
+	if err := ensureSmartDNSServiceStarted(false); err != nil {
+		t.Fatalf("ensure re-enabled service: %v", err)
+	}
+	if restartCalls != 1 || startCalls != 0 {
+		t.Fatalf("first enable must restart the waiting s6 service, not merely start it: restarts=%d starts=%d", restartCalls, startCalls)
+	}
+}
+
+func TestEnsureSmartDNSServiceStartedRollsBackFailedFirstEnable(t *testing.T) {
+	oldStart, oldRestart, oldStop, oldPath := smartDNSServiceStart, smartDNSServiceRestart, smartDNSServiceStop, smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	startErr := errors.New("simulated s6 restart failure")
 	stopCalls := 0
-	smartDNSServiceStart = func() error { return startErr }
+	smartDNSServiceRestart = func() error { return startErr }
 	smartDNSServiceStop = func() error { stopCalls++; return nil }
 	t.Cleanup(func() {
-		smartDNSServiceStart, smartDNSServiceStop, smartDNSDisabledPath = oldStart, oldStop, oldPath
+		smartDNSServiceStart, smartDNSServiceRestart, smartDNSServiceStop, smartDNSDisabledPath = oldStart, oldRestart, oldStop, oldPath
 	})
 
 	if err := ensureSmartDNSServiceStarted(false); !errors.Is(err, startErr) {
-		t.Fatalf("expected original start error, got %v", err)
+		t.Fatalf("expected original restart error, got %v", err)
 	}
 	if stopCalls != 1 {
 		t.Fatalf("failed first enable must request service stop, got %d calls", stopCalls)
