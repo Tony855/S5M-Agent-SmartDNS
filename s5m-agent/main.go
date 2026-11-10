@@ -2667,13 +2667,18 @@ func markAgentBindingCommitted() {
 // A transient health endpoint failure must not prevent the authoritative
 // authenticated WebSocket handshake from being attempted.
 func runAgentConnectionAttempt(cfg Config, generation uint64, probe func(Config) error, session func(Config, uint64) error) (bool, error) {
-	if probeErr := probe(cfg); probeErr != nil {
-		fmt.Printf("主控 HTTP 连通性探测失败（仅诊断，继续尝试 WebSocket）: %s\\n", safeMihomoValidationDiagnostic([]byte(probeErr.Error())))
-	}
 	if agentBindingGeneration.Load() != generation {
 		return false, nil
 	}
-	return true, session(cfg, generation)
+	sessionErr := session(cfg, generation)
+	if sessionErr != nil && !isAgentAuthorizationRevoked(sessionErr) {
+		// Probe only after the authenticated WebSocket attempt has failed. This
+		// preserves HTTP diagnostics without delaying or gating control-plane recovery.
+		if probeErr := probe(cfg); probeErr != nil {
+			fmt.Printf("主控 HTTP 连通性探测失败（仅诊断）: %s\\n", safeMihomoValidationDiagnostic([]byte(probeErr.Error())))
+		}
+	}
+	return true, sessionErr
 }
 
 
