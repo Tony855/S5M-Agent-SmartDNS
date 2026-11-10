@@ -1996,3 +1996,60 @@ func TestAgentWebSocketRegistrationWaitsForInFlightCommand(t *testing.T) {
 		t.Fatalf("replacement generation = %d, want 2", generation)
 	}
 }
+
+func TestAgentWebSocketConfigRequestDoesNotHoldGlobalLockDuringDatabaseIO(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	if err := app.store.SaveNodeConfig(code, "mixed-port: 7890\\n"); err != nil {
+		t.Fatalf("save node config: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+	if err != nil { t.Fatalf("dial authenticated WebSocket: %v", err) }
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var welcome map[string]any
+	if err := conn.ReadJSON(&welcome); err != nil || welcome["type"] != "welcome" {
+		t.Fatalf("read welcome: payload=%#v err=%v", welcome, err)
+	}
+
+	// Occupy SQLite's single connection so the config request blocks in its
+	// credential/config read after entering the per-Agent critical section.
+	waitCountBefore := app.store.db.Stats().WaitCount
+	tx, err := app.store.db.Begin()
+	if err != nil { t.Fatalf("begin blocking transaction: %v", err) }
+	if err := conn.WriteJSON(map[string]any{"type":"config.request", "id":"blocked-config", "config_sha256":""}); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("send config request: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		app.agentWSCommandMu.Lock()
+		lock := app.agentWSCommandLocks[code]
+		refs := 0
+		if lock != nil { refs = lock.refs }
+		app.agentWSCommandMu.Unlock()
+		if refs > 0 && app.store.db.Stats().WaitCount > waitCountBefore { break }
+		if time.Now().After(deadline) { _ = tx.Rollback(); t.Fatal("config request did not block on SQLite inside per-Agent critical section") }
+		time.Sleep(time.Millisecond)
+	}
+
+	globalLockAcquired := make(chan struct{})
+	go func() { app.agentWSMu.Lock(); close(globalLockAcquired); app.agentWSMu.Unlock() }()
+	select {
+	case <-globalLockAcquired:
+		// SQLite is blocked, but unrelated Agent session state remains available.
+	case <-time.After(250*time.Millisecond):
+		_ = tx.Rollback()
+		t.Fatal("config request held agentWSMu while blocked on SQLite")
+	}
+	if err := tx.Rollback(); err != nil { t.Fatalf("release blocking transaction: %v", err) }
+	var response map[string]any
+	if err := conn.ReadJSON(&response); err != nil { t.Fatalf("read config response: %v", err) }
+	if response["type"] != "config.sync" || response["id"] != "blocked-config" {
+		t.Fatalf("unexpected config response: %#v", response)
+	}
+}
