@@ -61,7 +61,7 @@ func TestAgentRegisterRejectsOversizedUnauthenticatedRequest(t *testing.T) {
 
 func TestAgentRegisterRateLimitsRepeatedRequestsPerClient(t *testing.T) {
 	app, _, _ := websocketTestApp(t)
-	for i := 0; i < loginAttemptLimit; i++ {
+	for i := 0; i < agentRegistrationAttemptLimit; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register",
 			strings.NewReader(`{"machine_code":"ws_node_01","secret":"wrong-secret"}`))
 		req.RemoteAddr = "198.51.100.77:12345"
