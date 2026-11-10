@@ -1994,17 +1994,10 @@ func (a *App) Rollback(version int) (*ConfigVersion, error) {
 			return cv, fmt.Errorf("历史配置重载失败，原先不存在配置文件，已移除回滚文件: %w", err)
 		}
 
-		restore := a.cfg.ConfigPath + ".rollback-restore"
-		if writeErr := writeConfigFileAtomic(restore, oldConfig, 0o600); writeErr != nil {
+		if restoreErr := writeConfigFileAtomic(a.cfg.ConfigPath, oldConfig, 0o600); restoreErr != nil {
 			cv.Status = "rollback_failed_restore_failed"
 			_ = a.store.UpdateVersionStatus(version, cv.Status)
-			return cv, fmt.Errorf("历史配置重载失败: %v；写入恢复文件失败: %w", err, writeErr)
-		}
-		if renameErr := writeConfigFileAtomic(a.cfg.ConfigPath, oldConfig, 0o600); renameErr != nil {
-			_ = os.Remove(restore)
-			cv.Status = "rollback_failed_restore_failed"
-			_ = a.store.UpdateVersionStatus(version, cv.Status)
-			return cv, fmt.Errorf("历史配置重载失败: %v；恢复原配置失败: %w", err, renameErr)
+			return cv, fmt.Errorf("历史配置重载失败: %v；恢复原配置失败: %w", err, restoreErr)
 		}
 
 		if reloadErr := a.ReloadMihomo(); reloadErr != nil {
