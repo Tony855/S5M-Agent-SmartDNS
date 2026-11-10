@@ -148,6 +148,7 @@
       // Registration only persists credentials; the WebSocket connects asynchronously.
       // Re-enable the button so a failed/expired connection can be retried without reload.
       btn.innerText = '重新绑定';
+      setStatus('', '绑定成功，正在连接主控端…');
       await refreshBindingStatus();
     } catch (e) {
       // The local Agent returns an allowlisted, non-secret diagnostic from the controller.
