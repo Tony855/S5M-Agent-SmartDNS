@@ -1382,8 +1382,13 @@ func (a *App) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	// Flush the WAL before closing the live store. A raw main-database copy
 	// must never omit committed transactions still present in the WAL.
-	if _, err := a.store.db.ExecContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	var walBusy, walFrames, walCheckpointed int
+	if err := a.store.db.QueryRowContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&walBusy, &walFrames, &walCheckpointed); err != nil {
 		writeErr(w, http.StatusInternalServerError, "刷新当前数据库 WAL 失败，拒绝恢复")
+		return
+	}
+	if walBusy != 0 || (walFrames >= 0 && walCheckpointed < walFrames) {
+		writeErr(w, http.StatusConflict, "当前数据库 WAL 仍有未完成事务，拒绝恢复以避免丢失已提交数据")
 		return
 	}
 	if err := a.store.db.Close(); err != nil {
