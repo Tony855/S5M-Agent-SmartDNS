@@ -11,7 +11,7 @@ Independent repository for the S5M Agent combined image with Mihomo and SmartDNS
 ## Build
 
 ```sh
-docker build --platform linux/amd64 --build-arg SMARTDNS_REF=Release48.4 -f s5m-agent/Dockerfile.smartdns -t s5m-agent-smartdns:local .
+docker build --platform linux/amd64 --build-arg SMARTDNS_COMMIT=21c940edc65520849ba03544c5cf8d9cf326e680 -f s5m-agent/Dockerfile.smartdns -t s5m-agent-smartdns:local .
 ```
 
 See [SmartDNS guide](s5m-agent/smartdns/README.md), [installation](docs/INSTALLATION_GUIDE_CN.md), [deployment](docs/DEPLOYMENT_GUIDE_CN.md), and [Agent API contract](docs/AGENT_API_CONTRACT.md).

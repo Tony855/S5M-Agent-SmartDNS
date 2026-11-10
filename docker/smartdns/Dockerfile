@@ -3,11 +3,14 @@
 ARG ALPINE_VERSION=3.22
 
 FROM alpine:${ALPINE_VERSION} AS build
-ARG SMARTDNS_REF=Release48.4
+ARG SMARTDNS_COMMIT=21c940edc65520849ba03544c5cf8d9cf326e680
 RUN apk add --no-cache --virtual .build-deps \
       build-base git linux-headers openssl-dev zlib-dev
-RUN git clone --depth 1 --branch "${SMARTDNS_REF}" \
-      https://github.com/pymumu/smartdns.git /src \
+RUN git init /src \
+    && git -C /src remote add origin https://github.com/pymumu/smartdns.git \
+    && git -C /src fetch --depth 1 origin "${SMARTDNS_COMMIT}" \
+    && git -C /src checkout --detach FETCH_HEAD \
+    && test "$(git -C /src rev-parse HEAD)" = "${SMARTDNS_COMMIT}" \
     && git -C /src rev-parse HEAD > /tmp/SMARTDNS_SOURCE_COMMIT \
     && make -C /src/src WITH_ZLIB=1 \
     && install -D -m 0755 /src/src/smartdns /out/usr/sbin/smartdns \
@@ -16,12 +19,12 @@ RUN git clone --depth 1 --branch "${SMARTDNS_REF}" \
     && printf '%s\n' 'https://github.com/pymumu/smartdns' > /out/usr/share/licenses/smartdns/SOURCE_URL
 
 FROM alpine:${ALPINE_VERSION} AS runtime
-ARG SMARTDNS_REF=Release48.4
+ARG SMARTDNS_COMMIT=21c940edc65520849ba03544c5cf8d9cf326e680
 LABEL org.opencontainers.image.title="SmartDNS (core only)" \
       org.opencontainers.image.description="Lightweight SmartDNS DNS resolver without Web UI" \
       org.opencontainers.image.source="https://github.com/pymumu/smartdns" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
-      org.opencontainers.image.version="${SMARTDNS_REF}"
+      org.opencontainers.image.version="${SMARTDNS_COMMIT}"
 
 RUN apk add --no-cache ca-certificates libgcc libstdc++ libssl3 libcrypto3 zlib \
     && mkdir -p /etc/smartdns

@@ -15,11 +15,6 @@ on:
       - ".github/workflows/smartdns-image.yml"
   workflow_dispatch:
     inputs:
-      smartdns_ref:
-        description: "Official pymumu/smartdns tag, branch, or commit"
-        required: true
-        default: "Release48.4"
-        type: string
       publish:
         description: "Publish multi-architecture image to GHCR"
         required: true
@@ -31,7 +26,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/tony855/s5m-smartdns
-  DEFAULT_SMARTDNS_REF: Release48.4
+  SMARTDNS_COMMIT: 21c940edc65520849ba03544c5cf8d9cf326e680
 
 jobs:
   test:
@@ -41,17 +36,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Verify immutable SmartDNS source pin
+        run: bash scripts/tests/verify-smartdns-source-pin.sh
+
       - name: Install DNS test client
         run: |
           sudo apt-get update
           sudo apt-get install -y dnsutils
 
       - name: Build test image
-        env:
-          SMARTDNS_REF: ${{ inputs.smartdns_ref || 'Release48.4' }}
         run: |
           docker build --platform linux/amd64 \
-            --build-arg "SMARTDNS_REF=$SMARTDNS_REF" \
+            --build-arg "SMARTDNS_COMMIT=$SMARTDNS_COMMIT" \
             -f docker/smartdns/Dockerfile \
             -t smartdns:test docker/smartdns
 
@@ -78,11 +74,9 @@ jobs:
           sudo apt-get install -y dnsutils
 
       - name: Build ARM64 test image
-        env:
-          SMARTDNS_REF: ${{ inputs.smartdns_ref || 'Release48.4' }}
         run: |
           docker buildx build --platform linux/arm64 --load \
-            --build-arg "SMARTDNS_REF=$SMARTDNS_REF" \
+            --build-arg "SMARTDNS_COMMIT=$SMARTDNS_COMMIT" \
             -f docker/smartdns/Dockerfile \
             -t smartdns:arm64 docker/smartdns
 
@@ -127,15 +121,13 @@ jobs:
 
       - name: Build and push multi-arch image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        env:
-          SMARTDNS_REF: ${{ inputs.smartdns_ref || 'Release48.4' }}
         with:
           context: docker/smartdns
           file: docker/smartdns/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            SMARTDNS_REF=${{ inputs.smartdns_ref || 'Release48.4' }}
+            SMARTDNS_COMMIT=${{ env.SMARTDNS_COMMIT }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true

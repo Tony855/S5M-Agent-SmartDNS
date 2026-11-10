@@ -4,7 +4,7 @@ This is an **optional, standalone image variant** that runs the existing S5M Age
 
 - Image published after all required checks pass on a push to this repository's `main` branch: `ghcr.io/tony855/s5m-agent-smartdns:dev` plus a commit-SHA tag.
 - Architectures: `linux/amd64` and `linux/arm64`.
-- SmartDNS source: official `pymumu/smartdns`, pinned by the `Release48.4` tag; GPL-3.0-or-later license is included in the image.
+- SmartDNS source: official `pymumu/smartdns`, pinned to immutable commit `21c940edc65520849ba03544c5cf8d9cf326e680`; GPL-3.0-or-later license is included in the image.
 - SmartDNS listens on container port `6053` (UDP and TCP). The combined Compose example does **not** publish this port to the host.
 - The bundled SmartDNS configuration is dual-stack: IPv4 and IPv6 literal-IP DoT endpoints are retained in the default pool and dedicated `china-dot` group. IPv4-only egress can use IPv4 endpoints, IPv6-only egress can use IPv6 endpoints, and dual-stack egress can use both. The domestic group is exposed only on loopback `127.0.0.1:6054`; it includes AliDNS IPv4/IPv6 DoT and DNSPod IPv4 DoT, with TLS hostname validation and `-exclude-default-group`. The primary listener remains `127.0.0.1:6053`.
 - Fresh Mihomo configs set `dns.nameserver-policy.geosite:cn` to `127.0.0.1:6054`, so mainland China domains use only the domestic DoT pool. Other domains continue through the existing `127.0.0.1:6053` resolver path. Bootstrap and proxy-server hostname lookups remain on literal-IP encrypted resolvers to avoid DNS recursion.
@@ -25,7 +25,7 @@ Build locally from the repository root:
 
 ```sh
 docker build --platform linux/amd64 \
-  --build-arg SMARTDNS_REF=Release48.4 \
+  --build-arg SMARTDNS_COMMIT=21c940edc65520849ba03544c5cf8d9cf326e680 \
   -f s5m-agent/Dockerfile.smartdns \
   -t s5m-agent-smartdns:local .
 ```
