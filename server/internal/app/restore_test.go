@@ -125,11 +125,10 @@ func TestDownloadBackupCreatesSQLiteSnapshot(t *testing.T) {
 	}
 }
 
-
 func TestRestoreBackupRejectsDatabaseWithoutEnabledAdmin(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		role       string
+		name         string
+		role         string
 		disableAdmin bool
 	}{
 		{name: "ordinary user only", role: "user"},
