@@ -191,7 +191,7 @@ func (w *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 var _ http.Hijacker = (*statusResponseWriter)(nil)
 
-const httpRequestBodyReadTimeout = 30 * time.Second
+const httpRequestBodyReadTimeout = 2 * time.Minute
 
 func withRecover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
