@@ -605,3 +605,62 @@ func TestWriteTransactionBackupPreservingPriorRejectsSymlinkSidecar(t *testing.T
 		t.Fatalf("symlink target must remain untouched, got %q", got)
 	}
 }
+
+
+func TestSmartDNSDisableTransitionCommitsFallbackBeforeDisabledMarker(t *testing.T) {
+	var events []string
+	processRunning := true
+	err := applyAgentSmartDNSDisableTransition(
+		func() error { events = append(events, "fallback-committed-and-probed"); return nil },
+		func(disabled bool) error {
+			if !disabled { t.Fatalf("disabled marker value = false, want true") }
+			events = append(events, "disabled-marker-persisted")
+			return nil
+		},
+		func() error { events = append(events, "service-stop-requested"); return nil },
+		func() bool { return processRunning },
+		func(timeout time.Duration) bool {
+			if timeout != 5*time.Second { t.Fatalf("stop timeout = %s, want 5s", timeout) }
+			events = append(events, "service-stop-confirmed")
+			processRunning = false
+			return true
+		},
+	)
+	if err != nil { t.Fatalf("disable transition: %v", err) }
+	want := []string{"fallback-committed-and-probed", "disabled-marker-persisted", "service-stop-requested", "service-stop-confirmed"}
+	if strings.Join(events, "|") != strings.Join(want, "|") {
+		t.Fatalf("transition order = %#v, want %#v", events, want)
+	}
+}
+
+func TestSmartDNSDisableTransitionMarkerFailureLeavesFallbackActiveAndServiceRunning(t *testing.T) {
+	activeDNS := "smartdns"
+	markerErr := errors.New("simulated marker persistence failure")
+	stopCalls := 0
+	err := applyAgentSmartDNSDisableTransition(
+		func() error { activeDNS = "fallback"; return nil },
+		func(bool) error { return markerErr },
+		func() error { stopCalls++; return nil },
+		func() bool { return true },
+		func(time.Duration) bool { return false },
+	)
+	if !errors.Is(err, markerErr) { t.Fatalf("expected marker error, got %v", err) }
+	if activeDNS != "fallback" { t.Fatalf("DNS dataplane = %q, want fallback", activeDNS) }
+	if stopCalls != 0 { t.Fatalf("service must not stop before marker is durable, calls=%d", stopCalls) }
+}
+
+func TestSmartDNSDisableTransitionFallbackFailureDoesNotPersistMarkerOrStop(t *testing.T) {
+	fallbackErr := errors.New("simulated fallback probe failure")
+	markerCalls, stopCalls := 0, 0
+	err := applyAgentSmartDNSDisableTransition(
+		func() error { return fallbackErr },
+		func(bool) error { markerCalls++; return nil },
+		func() error { stopCalls++; return nil },
+		func() bool { return true },
+		func(time.Duration) bool { return false },
+	)
+	if !errors.Is(err, fallbackErr) { t.Fatalf("expected fallback error, got %v", err) }
+	if markerCalls != 0 || stopCalls != 0 {
+		t.Fatalf("fallback failure must not persist disabled marker or stop service: marker=%d stop=%d", markerCalls, stopCalls)
+	}
+}

@@ -323,6 +323,37 @@ func ensureSmartDNSServiceStarted(wasEnabled bool) error {
 	return nil
 }
 
+// applyAgentSmartDNSDisableTransition commits and probes fallback DNS before
+// persisting the disabled marker. A crash after the marker is written can
+// therefore never leave Mihomo pointing at a resolver that s6 will suppress.
+func applyAgentSmartDNSDisableTransition(
+	applyFallback func() error,
+	persistDisabled func(bool) error,
+	stopService func() error,
+	processRunning func() bool,
+	waitStopped func(time.Duration) bool,
+) error {
+	if applyFallback == nil || persistDisabled == nil || stopService == nil || processRunning == nil || waitStopped == nil {
+		return fmt.Errorf("SmartDNS 禁用事务缺少必要操作")
+	}
+	if err := applyFallback(); err != nil {
+		return fmt.Errorf("切换 Mihomo 备用 DNS 失败，SmartDNS 未停止: %w", err)
+	}
+	if err := persistDisabled(true); err != nil {
+		return fmt.Errorf("备用 DNS 已切换，但持久化 SmartDNS 禁用标记失败，服务保持运行: %w", err)
+	}
+	if err := stopService(); err != nil {
+		if !processRunning() {
+			return nil
+		}
+		return fmt.Errorf("Mihomo 已切换备用 DNS；SmartDNS 禁用标记已保留，但停止服务命令失败，进程仍在运行: %w", err)
+	}
+	if !waitStopped(5 * time.Second) {
+		return fmt.Errorf("Mihomo 已切换备用 DNS，SmartDNS 禁用标记已保留，但进程在 5 秒内仍未退出")
+	}
+	return nil
+}
+
 var smartDNSRuntimeTransitionMu sync.Mutex
 
 func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string) error {
@@ -375,44 +406,22 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 		return nil
 	}
 
-	// Persist disabled intent before changing Mihomo. If the controller or
-	// container restarts mid-transition, the service must not auto-start.
-	if err := persistSmartDNSDisabled(true); err != nil {
-		return err
-	}
-	if err := applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, nil, false, centralURL, true); err != nil {
-		if wasEnabled {
-			if restoreErr := persistSmartDNSDisabled(false); restoreErr != nil {
-				return fmt.Errorf("切换备用 DNS 失败: %v；恢复 SmartDNS 启用标记也失败: %w", err, restoreErr)
+	return applyAgentSmartDNSDisableTransition(
+		func() error {
+			return applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, nil, false, centralURL, true)
+		},
+		persistSmartDNSDisabled,
+		smartDNSServiceStop,
+		func() bool { return exec.Command("pidof", "smartdns").Run() == nil },
+		func(timeout time.Duration) bool {
+			deadline := time.Now().Add(timeout)
+			for time.Now().Before(deadline) {
+				if exec.Command("pidof", "smartdns").Run() != nil {
+					return true
+				}
+				time.Sleep(100 * time.Millisecond)
 			}
-			if startErr := smartDNSServiceStart(); startErr != nil {
-				return fmt.Errorf("切换备用 DNS 失败: %v；恢复 SmartDNS 服务失败: %w", err, startErr)
-			}
-			if !waitForSmartDNSHealthy(5 * time.Second) {
-				return fmt.Errorf("切换备用 DNS 失败，SmartDNS 服务已尝试恢复但未通过 DNS 健康检查: %w", err)
-			}
-		}
-		return fmt.Errorf("切换 Mihomo 备用 DNS 失败，SmartDNS 未停止: %w", err)
-	}
-
-	if err := smartDNSServiceStop(); err != nil {
-		// Mihomo is already safely using fallback DNS. Keep the disabled marker
-		// instead of re-enabling SmartDNS while the active routing stays on
-		// fallback; report the daemon-stop failure for operator intervention.
-		if exec.Command("pidof", "smartdns").Run() != nil {
-			return nil
-		}
-		return fmt.Errorf("Mihomo 已切换备用 DNS；SmartDNS 禁用标记已保留，但停止服务命令失败，进程仍在运行: %w", err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if exec.Command("pidof", "smartdns").Run() != nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	// Do not roll back to enabled here: Mihomo has committed fallback DNS.
-	// Leaving the persistent disabled marker makes the actual desired state
-	// match the dataplane and prevents s6 from resurrecting the daemon.
-	return fmt.Errorf("Mihomo 已切换备用 DNS，SmartDNS 禁用标记已保留，但进程在 5 秒内仍未退出")
+			return exec.Command("pidof", "smartdns").Run() != nil
+		},
+	)
 }
