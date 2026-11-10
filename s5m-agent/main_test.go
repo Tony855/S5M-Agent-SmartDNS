@@ -2430,14 +2430,22 @@ func TestAgentHTTPServerHasBoundedTimeoutsAndHeaders(t *testing.T) {
 	}
 }
 
-func TestRunAgentConnectionAttemptStillDialsWebSocketWhenProbeFails(t *testing.T) {
+func TestRunAgentConnectionAttemptDoesNotGateWebSocketOnHTTPProbe(t *testing.T) {
 	generation := agentBindingGeneration.Load()
 	probeErr := fmt.Errorf("health endpoint temporarily unavailable")
+	websocketErr := fmt.Errorf("websocket handshake failed")
+	probeCalled := false
 	sessionCalled := false
 	attempted, err := runAgentConnectionAttempt(
 		Config{CentralURL: "https://controller.example", Token: "test-token"},
 		generation,
-		func(Config) error { return probeErr },
+		func(Config) error {
+			if !sessionCalled {
+				t.Fatal("HTTP health probe must not run before the WebSocket attempt")
+			}
+			probeCalled = true
+			return probeErr
+		},
 		func(cfg Config, gotGeneration uint64) error {
 			sessionCalled = true
 			if cfg.CentralURL != "https://controller.example" || cfg.Token != "test-token" {
@@ -2446,19 +2454,20 @@ func TestRunAgentConnectionAttemptStillDialsWebSocketWhenProbeFails(t *testing.T
 			if gotGeneration != generation {
 				t.Fatalf("session generation = %d, want %d", gotGeneration, generation)
 			}
-			return nil
+			return websocketErr
 		},
 	)
 	if !attempted {
-		t.Fatal("HTTP health probe failure must not prevent a WebSocket attempt")
+		t.Fatal("current binding generation must attempt WebSocket")
 	}
-	if err != nil {
-		t.Fatalf("WebSocket attempt returned unexpected error: %v", err)
+	if !errors.Is(err, websocketErr) {
+		t.Fatalf("returned error = %v, want WebSocket error %v", err, websocketErr)
 	}
-	if !sessionCalled {
-		t.Fatal("WebSocket session was not called after health probe failure")
+	if !sessionCalled || !probeCalled {
+		t.Fatalf("sessionCalled=%v probeCalled=%v, want both true", sessionCalled, probeCalled)
 	}
 }
+
 
 func TestMarkAgentBindingCommittedClearsStaleConnectionFailure(t *testing.T) {
 	previousGeneration := agentBindingGeneration.Load()
