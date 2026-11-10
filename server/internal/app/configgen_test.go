@@ -2642,3 +2642,28 @@ func TestRemoveConfigFileDurable(t *testing.T) {
 		t.Fatalf("second removeConfigFileDurable() error = %v", err)
 	}
 }
+
+func TestBuildConfigForNoSmartDNSAgentOmitsSmartDNSRoutingAndResolvers(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "no-smartdns-config.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	status, err := json.Marshal(map[string]any{
+		"smartdns_available": false,
+		"smartdns_control_supported": false,
+		"smartdns_enabled": false,
+	})
+	if err != nil { t.Fatal(err) }
+	if err := store.UpdateSettings(map[string]string{
+		"agent_status_node-no-smartdns": string(status),
+		"smartdns_enabled_node-no-smartdns": "true",
+	}); err != nil { t.Fatalf("UpdateSettings: %v", err) }
+	app := &App{store: store}
+	got, err := app.BuildConfigForMachine("node-no-smartdns")
+	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
+	for _, forbidden := range []string{"127.0.0.1:6053", "127.0.0.1:6054", "SMARTDNS-PROXY", "PROCESS-NAME,smartdns"} {
+		if strings.Contains(got, forbidden) { t.Fatalf("no-SmartDNS Agent config contains %q:\n%s", forbidden, got) }
+	}
+	for _, required := range []string{"https://dns.cloudflare.com/dns-query", "https://dns.google/dns-query", "default-nameserver:", "proxy-server-nameserver:", "respect-rules: true", "fake-ip-range6:", "ipv6: true"} {
+		if !strings.Contains(got, required) { t.Fatalf("no-SmartDNS Agent config lost required DNS/network setting %q:\n%s", required, got) }
+	}
+}
