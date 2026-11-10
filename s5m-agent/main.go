@@ -2639,12 +2639,7 @@ func clearAgentActiveWebSocket(conn *websocket.Conn) {
 	agentActiveWSMu.Unlock()
 }
 
-func closeAgentActiveWebSocketForRebind() {
-	agentActiveWSMu.Lock()
-	conn := agentActiveWSConn
-	agentActiveWSConn = nil
-	agentConnected.Store(false)
-	agentActiveWSMu.Unlock()
+func closeAgentWebSocketForRebind(conn *websocket.Conn) {
 	if conn == nil {
 		return
 	}
@@ -2654,13 +2649,37 @@ func closeAgentActiveWebSocketForRebind() {
 	_ = conn.Close()
 }
 
-// markAgentBindingCommitted clears stale connection diagnostics immediately
-// after new credentials are durably saved. The next WebSocket session owns
-// the transition from "connecting" to "connected".
+func closeAgentActiveWebSocketForRebind() {
+	agentActiveWSMu.Lock()
+	conn := agentActiveWSConn
+	agentActiveWSConn = nil
+	agentConnected.Store(false)
+	agentActiveWSMu.Unlock()
+	closeAgentWebSocketForRebind(conn)
+}
+
+// markAgentBindingCommitted serializes the generation change and stale status
+// reset with connection-failure publication. A late failure from the old
+// session can therefore never overwrite the new binding's connecting state.
 func markAgentBindingCommitted() {
+	agentActiveWSMu.Lock()
 	agentBindingGeneration.Add(1)
+	conn := agentActiveWSConn
+	agentActiveWSConn = nil
+	agentConnected.Store(false)
 	agentConnectionFailed.Store(false)
-	closeAgentActiveWebSocketForRebind()
+	agentActiveWSMu.Unlock()
+	closeAgentWebSocketForRebind(conn)
+}
+
+func markAgentConnectionFailed(expectedGeneration uint64) bool {
+	agentActiveWSMu.Lock()
+	defer agentActiveWSMu.Unlock()
+	if agentBindingGeneration.Load() != expectedGeneration {
+		return false
+	}
+	agentConnectionFailed.Store(true)
+	return true
 }
 
 // runAgentConnectionAttempt treats the HTTP health probe as diagnostic only.
@@ -2913,7 +2932,7 @@ func main() {
 				backoff = 2 * time.Second
 				continue
 			}
-			agentConnectionFailed.Store(true)
+			markAgentConnectionFailed(bindingGeneration)
 			fmt.Printf("Agent WebSocket 会话断开: %s\n", safeMihomoValidationDiagnostic([]byte(err.Error())))
 		}
 		// A session that stayed healthy for at least two minutes resets the
