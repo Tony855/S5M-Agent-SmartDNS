@@ -124,3 +124,59 @@ func TestDownloadBackupCreatesSQLiteSnapshot(t *testing.T) {
 		t.Fatal("downloaded backup is not a SQLite database snapshot")
 	}
 }
+
+
+func TestRestoreBackupRejectsDatabaseWithoutEnabledAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		role       string
+		disableAdmin bool
+	}{
+		{name: "ordinary user only", role: "user"},
+		{name: "disabled admin only", role: "admin", disableAdmin: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			livePath := filepath.Join(dir, "live.db")
+			live, err := OpenStore(livePath)
+			if err != nil {
+				t.Fatalf("OpenStore live: %v", err)
+			}
+			defer live.db.Close()
+
+			candidatePath := filepath.Join(dir, "candidate.db")
+			candidate, err := OpenStore(candidatePath)
+			if err != nil {
+				t.Fatalf("OpenStore candidate: %v", err)
+			}
+			if err := candidate.CreateUser("candidate", "not-used-as-password-hash", tc.role); err != nil {
+				t.Fatalf("CreateUser candidate: %v", err)
+			}
+			if tc.disableAdmin {
+				if _, err := candidate.db.Exec(`UPDATE users SET enabled=0 WHERE username='candidate'`); err != nil {
+					t.Fatalf("disable candidate admin: %v", err)
+				}
+			}
+			if err := candidate.db.Close(); err != nil {
+				t.Fatalf("close candidate: %v", err)
+			}
+			data, err := os.ReadFile(candidatePath)
+			if err != nil {
+				t.Fatalf("read candidate: %v", err)
+			}
+
+			app := &App{cfg: Config{DBPath: livePath}, store: live}
+			response := httptest.NewRecorder()
+			app.handleRestoreBackup(response, restoreRequest(t, data))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+			if _, err := live.CountUsers(); err != nil {
+				t.Fatalf("live database was closed or replaced after rejected restore: %v", err)
+			}
+			if _, err := os.Stat(livePath); err != nil {
+				t.Fatalf("live database path missing after rejected restore: %v", err)
+			}
+		})
+	}
+}
