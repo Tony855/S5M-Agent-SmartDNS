@@ -2465,3 +2465,36 @@ func TestLoadOrCreateMachineIDRejectsSymlinkedFallback(t *testing.T) {
 		t.Fatalf("symlink target was unexpectedly changed: %q", got)
 	}
 }
+
+func TestLoadOrCreateMachineIDFallbackConcurrentCallersShareIdentity(t *testing.T) {
+	dir := t.TempDir()
+	systemPath := filepath.Join(dir, "missing-machine-id")
+	storagePath := filepath.Join(dir, "data", "machine-id")
+	const callers = 24
+	ids := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			ids[index], errs[index] = loadOrCreateMachineID(systemPath, storagePath)
+		}(i)
+	}
+	wg.Wait()
+	for i := range ids {
+		if errs[i] != nil {
+			t.Fatalf("caller %d failed: %v", i, errs[i])
+		}
+		if ids[i] != ids[0] {
+			t.Fatalf("concurrent caller %d received machine ID %q, first caller received %q", i, ids[i], ids[0])
+		}
+	}
+	data, err := os.ReadFile(storagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids[0] != string(data[:11]) {
+		t.Fatalf("returned ID %q does not match persisted identity %q", ids[0], data)
+	}
+}
