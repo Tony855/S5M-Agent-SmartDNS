@@ -1217,6 +1217,9 @@ func copyDatabaseFileAtomic(source, destination string) error {
 	if err != nil {
 		return err
 	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("SQLite 数据库备份源不是普通文件")
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(destination), ".s5m-db-copy-*")
 	if err != nil {
 		return err
