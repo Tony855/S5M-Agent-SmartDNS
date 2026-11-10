@@ -28,6 +28,11 @@ type loginAttemptLimiter struct {
 	entries map[string]loginAttempt
 }
 
+// agentRegistrationLimiter is independent from login throttling so Agent fleet
+// enrollment does not consume administrator login attempts.
+var agentRegistrationLimiter loginAttemptLimiter
+
+
 // loginClientKey trusts proxy-supplied addresses only when the immediate peer
 // is loopback. The bundled nginx installer proxies from 127.0.0.1 and sets
 // X-Real-IP; direct clients cannot spoof these headers.
