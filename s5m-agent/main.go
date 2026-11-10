@@ -1433,53 +1433,64 @@ func processAgentCommandWebSocket(cfg Config) error {
 		return fmt.Errorf("主控端命令响应格式无效")
 	}
 	cmd := *envelope.Command
-	var runErr error
-	var data []byte
-	message := ""
-	switch cmd.Type {
-	case "update_mihomo":
-		message, runErr = updateMihomoKernel(cmd)
-	case "read_smartdns_config":
-		if !smartDNSFeatureSupported() {
-			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
-		} else {
-			data, runErr = readSmartDNSConfig()
-			if runErr == nil { message = "已读取 Agent 当前 SmartDNS 配置" }
-		}
-	case "configure_smartdns":
-		if !smartDNSFeatureSupported() {
-			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
-		} else {
-			var configHash string
-			configHash, runErr = writeSmartDNSConfig([]byte(cmd.Config))
-			if runErr == nil { message = "SmartDNS 配置已校验并应用，SHA-256: " + configHash }
-		}
-	case "set_smartdns_enabled":
-		if !smartDNSFeatureSupported() {
-			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
-		} else if cmd.Enabled == nil {
-			runErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
-		} else {
-			runErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
-			if runErr == nil {
-				if *cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
+	// Persist command intent and its final result before sending an ACK. If the
+	// connection drops after a side effect but before ACK confirmation, a redelivered
+	// command replays the stored result instead of repeating the operation.
+	status, message, config, journalErr := executeAgentCommandWithJournal(cmd, func() (string, string, error) {
+		var commandConfig string
+		var commandMessage string
+		var commandErr error
+		switch cmd.Type {
+		case "update_mihomo":
+			commandMessage, commandErr = updateMihomoKernel(cmd)
+		case "read_smartdns_config":
+			if !smartDNSFeatureSupported() {
+				commandErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+			} else {
+				var data []byte
+				data, commandErr = readSmartDNSConfig()
+				if commandErr == nil {
+					commandConfig = string(data)
+					commandMessage = "已读取 Agent 当前 SmartDNS 配置"
+				}
 			}
+		case "configure_smartdns":
+			if !smartDNSFeatureSupported() {
+				commandErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+			} else {
+				var configHash string
+				configHash, commandErr = writeSmartDNSConfig([]byte(cmd.Config))
+				if commandErr == nil {
+					commandMessage = "SmartDNS 配置已校验并应用，SHA-256: " + configHash
+				}
+			}
+		case "set_smartdns_enabled":
+			if !smartDNSFeatureSupported() {
+				commandErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+			} else if cmd.Enabled == nil {
+				commandErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
+			} else {
+				commandErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+				if commandErr == nil {
+					if *cmd.Enabled {
+						commandMessage = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS"
+					} else {
+						commandMessage = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止"
+					}
+				}
+			}
+		default:
+			commandErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
 		}
-	default:
-		runErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
-	}
-	status := "success"
-	if runErr != nil {
-		status = "failed"
-		message = runErr.Error()
-	}
-	if len(message) > 2048 {
-		message = message[:2048]
+		return commandMessage, commandConfig, commandErr
+	})
+	if journalErr != nil {
+		return fmt.Errorf("执行或持久化 Agent 命令结果失败: %w", journalErr)
 	}
 	// The command may take longer than the initial connection deadlines (for
 	// example, downloading and restarting Mihomo). Refresh the deadline for the
 	// ACK write instead of reusing the deadline set before command execution.
-	if err := writeAgentWSJSON(conn, map[string]any{"type": "command.ack", "id": cmd.ID, "command_status": status, "message": message, "config": string(data)}); err != nil {
+	if err := writeAgentWSJSON(conn, map[string]any{"type": "command.ack", "id": cmd.ID, "command_status": status, "message": message, "config": config}); err != nil {
 		return fmt.Errorf("命令已执行但 WebSocket ACK 发送失败，主控端可能重新投递: %w", err)
 	}
 	var ack struct {
@@ -1495,8 +1506,11 @@ func processAgentCommandWebSocket(cfg Config) error {
 	if ack.Type != "command.acknowledged" || ack.ID != cmd.ID || !ack.OK {
 		return fmt.Errorf("主控端命令 ACK 确认无效: %s", ack.Message)
 	}
-	if runErr != nil {
-		return runErr
+	if status == "failed" {
+		if strings.TrimSpace(message) == "" {
+			return fmt.Errorf("Agent 命令 %s 执行失败", cmd.ID)
+		}
+		return fmt.Errorf("Agent 命令 %s 执行失败: %s", cmd.ID, message)
 	}
 	fmt.Printf("Agent 命令 %s 执行成功: %s\n", cmd.ID, message)
 	return nil
