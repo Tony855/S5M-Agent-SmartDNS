@@ -9,7 +9,7 @@ dockerfile="docker/smartdns/Dockerfile"
 workflow=".github/workflows/smartdns-image.yml"
 
 grep -Fq "ARG SMARTDNS_COMMIT=${expected}" "$dockerfile"
-grep -Fq 'git fetch --depth 1 origin "${SMARTDNS_COMMIT}"' "$dockerfile"
+grep -Fq 'git -C /src fetch --depth 1 origin "${SMARTDNS_COMMIT}"' "$dockerfile"
 grep -Fq 'test "$(git -C /src rev-parse HEAD)" = "${SMARTDNS_COMMIT}"' "$dockerfile"
 grep -Fq "SMARTDNS_COMMIT: ${expected}" "$workflow"
 grep -Fq 'SMARTDNS_COMMIT=${{ env.SMARTDNS_COMMIT }}' "$workflow"
