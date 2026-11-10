@@ -942,6 +942,11 @@ func copyWithMaxSize(dst io.Writer, src io.Reader, max int64) (int64, error) {
 }
 
 func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
+	// The WebSocket task start guard does not cover direct authenticated HTTP
+	// requests. Both entry points share this lock because they replace one binary.
+	a.mihomoUpdateExecMu.Lock()
+	defer a.mihomoUpdateExecMu.Unlock()
+
 	const (
 		binaryPath = "/opt/mihomo/mihomo"
 		backupPath = "/opt/mihomo/mihomo.bak"
