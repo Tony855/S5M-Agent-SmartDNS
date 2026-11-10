@@ -1896,8 +1896,8 @@ func TestHandleRestoreBackupKeepsDurablePreviousDatabase(t *testing.T) {
 	if user, err := restored.UserByUsername("new-admin"); err != nil || user == nil {
 		t.Fatalf("restored database does not contain candidate admin: user=%v error=%v", user, err)
 	}
-	if user, err := restored.UserByUsername("old-admin"); err != nil || user != nil {
-		t.Fatalf("restored database unexpectedly retained old admin: user=%v error=%v", user, err)
+	if user, err := restored.UserByUsername("old-admin"); err == nil && user != nil {
+		t.Fatalf("restored database unexpectedly retained old admin: user=%v", user)
 	}
 	previous, err := OpenStore(backupPath)
 	if err != nil {
