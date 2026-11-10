@@ -1800,25 +1800,27 @@ func TestAgentWebSocketHandshakeRevalidatesBindingAfterUpgrade(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
 	defer server.Close()
 
-	// Hold the session/revocation mutex so the handler completes its initial
-	// JWT check and HTTP upgrade, then blocks before registering the socket.
-	app.agentWSMu.Lock()
+	// Hold the per-Agent operation lock so the handler completes its initial
+	// JWT check and HTTP upgrade, then blocks before credential revalidation.
+	// Production revocation takes this same lock; the global mutex is not the
+	// serialization boundary for database authorization checks.
+	unlockAgent := app.lockAgentWSCommand(code)
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+token)
 	conn, response, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
 	if err != nil {
-		app.agentWSMu.Unlock()
+		unlockAgent()
 		t.Fatalf("dial authenticated WebSocket: err=%v response=%v", err, response)
 	}
 	defer conn.Close()
 
-	// Model the revocation transaction winning the lock race after the first
+	// Model revocation winning the per-Agent lock race after the first
 	// authentication check but before the upgraded socket can register.
 	if err := app.store.DeleteAgentBinding(code); err != nil {
-		app.agentWSMu.Unlock()
+		unlockAgent()
 		t.Fatalf("revoke binding during handshake: %v", err)
 	}
-	app.agentWSMu.Unlock()
+	unlockAgent()
 
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var welcome map[string]any
