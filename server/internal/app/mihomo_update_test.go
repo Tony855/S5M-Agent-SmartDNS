@@ -1,6 +1,9 @@
 package app
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestParseMihomoVersion(t *testing.T) {
 	tests := []struct {
@@ -51,6 +54,35 @@ func TestIsGzipHeader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isGzipHeader(tt.data); got != tt.want {
 				t.Fatalf("isGzipHeader() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+
+func TestCopyWithMaxSize(t *testing.T) {
+	tests := []struct {
+		name string
+		input string
+		max int64
+		want string
+		wantErr bool
+	}{
+		{name: "below limit", input: "abc", max: 4, want: "abc"},
+		{name: "exact limit", input: "abcd", max: 4, want: "abcd"},
+		{name: "over limit", input: "abcde", max: 4, want: "abcde", wantErr: true},
+		{name: "empty", input: "", max: 4, want: ""},
+		{name: "invalid limit", input: "x", max: 0, want: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var dst bytes.Buffer
+			_, err := copyWithMaxSize(&dst, bytes.NewBufferString(tt.input), tt.max)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("copyWithMaxSize() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got := dst.String(); got != tt.want {
+				t.Fatalf("copied bytes = %q, want %q", got, tt.want)
 			}
 		})
 	}
