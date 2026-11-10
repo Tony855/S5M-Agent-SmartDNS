@@ -869,14 +869,18 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	if a.agentWSConnections == nil {
 		a.agentWSConnections = make(map[string]*agentWSConnection)
 	}
-	// Actively close the previous socket, rather than merely waiting for its
-	// next heartbeat/request to notice the generation change.
-	if previous := a.agentWSConnections[machineCode]; previous != nil && previous.conn != nil {
-		closeAgentWebSocket(previous.conn, "Agent connection superseded")
+	// Detach the previous socket while holding the session mutex, but perform
+	// the potentially blocking network close only after releasing the global lock.
+	var previousConn *websocket.Conn
+	if previous := a.agentWSConnections[machineCode]; previous != nil {
+		previousConn = previous.conn
 	}
 	session := &agentWSConnection{conn: conn}
 	a.agentWSConnections[machineCode] = session
 	a.agentWSMu.Unlock()
+	if previousConn != nil {
+		closeAgentWebSocket(previousConn, "Agent connection superseded")
+	}
 	unlockCommand()
 	defer func() {
 		a.agentWSMu.Lock()
