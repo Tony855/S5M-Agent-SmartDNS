@@ -186,6 +186,63 @@ func ensureNoSmartDNSProxyAwareDNS(dns *yaml.Node) bool {
 	return changed
 }
 
+
+func removeNoSmartDNSRouting(root *yaml.Node) bool {
+	if root == nil || root.Kind != yaml.MappingNode { return false }
+	changed := false
+	rules := noSmartDNSMapValue(root, "rules")
+	if rules != nil && rules.Kind == yaml.SequenceNode {
+		filtered := rules.Content[:0]
+		for _, rule := range rules.Content {
+			if rule != nil && rule.Kind == yaml.ScalarNode {
+				parts := strings.Split(rule.Value, ",")
+				if len(parts) >= 3 && strings.EqualFold(strings.TrimSpace(parts[0]), "PROCESS-NAME") &&
+					strings.EqualFold(strings.TrimSpace(parts[1]), "smartdns") {
+					changed = true
+					continue
+				}
+			}
+			filtered = append(filtered, rule)
+		}
+		rules.Content = filtered
+	}
+	groups := noSmartDNSMapValue(root, "proxy-groups")
+	if groups == nil || groups.Kind != yaml.SequenceNode { return changed }
+	// Remove the reserved group only when no remaining rule or proxy group
+	// references it. A user may have deliberately reused this group name.
+	for i := 0; i < len(groups.Content); {
+		group := groups.Content[i]
+		name := noSmartDNSMapValue(group, "name")
+		if name == nil || name.Kind != yaml.ScalarNode || name.Value != "SMARTDNS-PROXY" {
+			i++
+			continue
+		}
+		used := false
+		for _, section := range []*yaml.Node{rules, groups} {
+			if section == nil { continue }
+			for _, entry := range section.Content {
+				if entry == group { continue }
+				if entry.Kind == yaml.ScalarNode && strings.Contains(entry.Value, "SMARTDNS-PROXY") { used = true }
+				if entry.Kind == yaml.MappingNode {
+					for j := 1; j < len(entry.Content); j += 2 {
+						value := entry.Content[j]
+						if value.Kind == yaml.ScalarNode && value.Value == "SMARTDNS-PROXY" { used = true }
+						if value.Kind == yaml.SequenceNode {
+							for _, item := range value.Content {
+								if item.Kind == yaml.ScalarNode && item.Value == "SMARTDNS-PROXY" { used = true }
+							}
+						}
+					}
+				}
+			}
+		}
+		if used { i++; continue }
+		groups.Content = append(groups.Content[:i], groups.Content[i+1:]...)
+		changed = true
+	}
+	return changed
+}
+
 func migrateNoSmartDNSConfig(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil { if os.IsNotExist(err) { return nil }; return err }
@@ -195,33 +252,41 @@ func migrateNoSmartDNSConfig(path string) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil { return fmt.Errorf("parse existing Mihomo config: %w", err) }
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode { return fmt.Errorf("existing Mihomo config is not a YAML mapping") }
 	root := doc.Content[0]
+	changed := removeNoSmartDNSRouting(root)
 	dns := noSmartDNSMapValue(root, "dns")
-	if dns == nil { return nil }; if dns.Kind != yaml.MappingNode { return fmt.Errorf("existing Mihomo dns config is not a mapping") }
-	changed := false
-	for i := 0; i+1 < len(dns.Content); i += 2 {
-		key := dns.Content[i].Value
-		if !noSmartDNSResolverKeys[key] { continue }
-		value := dns.Content[i+1]
-		if key == "nameserver" && value.Kind != yaml.SequenceNode && noSmartDNSStaleResolver(value) {
-			dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
-			}}
-			changed = true
-			continue
+	if dns == nil {
+		if !changed { return nil }
+	} else if dns.Kind != yaml.MappingNode {
+		return fmt.Errorf("existing Mihomo dns config is not a mapping")
+	}
+	if dns != nil {
+		for i := 0; i+1 < len(dns.Content); i += 2 {
+			key := dns.Content[i].Value
+			if !noSmartDNSResolverKeys[key] { continue }
+			value := dns.Content[i+1]
+			if key == "nameserver" && value.Kind != yaml.SequenceNode && noSmartDNSStaleResolver(value) {
+				dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
+				}}
+				changed = true
+				continue
+			}
+			if filterNoSmartDNSResolvers(value) { changed = true }
 		}
-		if filterNoSmartDNSResolvers(value) { changed = true }
 	}
 	// Route regular DNS upstreams through Mihomo rules. Bootstrap resolvers remain
 	// independent of the proxy handshake and use DoT to avoid plaintext DNS leaks.
-	if ensureNoSmartDNSProxyAwareDNS(dns) { changed = true }
+	if dns != nil && ensureNoSmartDNSProxyAwareDNS(dns) { changed = true }
 	// Guarantee a usable default resolver if a legacy policy left nameserver empty.
-	ns := noSmartDNSMapValue(dns, "nameserver")
-	if ns == nil || (ns.Kind == yaml.SequenceNode && len(ns.Content) == 0) {
+	if dns != nil {
+		ns := noSmartDNSMapValue(dns, "nameserver")
+		if ns == nil || (ns.Kind == yaml.SequenceNode && len(ns.Content) == 0) {
 		if ns == nil { dns.Content = append(dns.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "nameserver"}, &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"}}}) } else {
 			ns.Content = []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"}}
 		}
-		changed = true
+			changed = true
+		}
 	}
 	if !changed { return nil }
 	backup := path + ".pre-no-smartdns"
