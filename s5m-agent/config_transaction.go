@@ -276,7 +276,7 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 			return rollback(fmt.Errorf("应用 SmartDNS 配置失败: %w", err))
 		}
 	}
-	if smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
+	if !skipSmartDNSHealth && smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
 		if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 			return rollback(fmt.Errorf("SmartDNS 联合事务 UDP/TCP DNS 健康检查失败"))
 		}
