@@ -1751,6 +1751,60 @@ func mergeManagedProxySections(customYAML, generatedYAML string) (string, error)
 	return string(merged), nil
 }
 
+// syncConfigDirectory persists directory-entry changes made by rename/remove.
+func syncConfigDirectory(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+// writeConfigFileAtomic writes and fsyncs a sibling temporary file before
+// atomically replacing the destination and syncing its containing directory.
+func writeConfigFileAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".s5m-config-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return syncConfigDirectory(path)
+}
+
+func removeConfigFileDurable(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return syncConfigDirectory(path)
+}
+
+func renameConfigFileDurable(source, destination string) error {
+	if err := os.Rename(source, destination); err != nil {
+		return err
+	}
+	return syncConfigDirectory(destination)
+}
+
 func (a *App) Publish() (*ConfigVersion, error) {
 	a.configPublishMu.Lock()
 	defer a.configPublishMu.Unlock()
@@ -1773,7 +1827,7 @@ func (a *App) Publish() (*ConfigVersion, error) {
 	}
 
 	candidate := a.cfg.ConfigPath + ".candidate"
-	if err := os.WriteFile(candidate, []byte(yml), 0o600); err != nil {
+	if err := writeConfigFileAtomic(candidate, []byte(yml), 0o600); err != nil {
 		return nil, fmt.Errorf("写入候选配置失败: %w", err)
 	}
 	defer os.Remove(candidate)
@@ -1796,7 +1850,7 @@ func (a *App) Publish() (*ConfigVersion, error) {
 
 	if hadOld {
 		backupPath := filepath.Join(a.cfg.BackupDir, time.Now().Format("20060102-150405.000000")+".yaml")
-		if err := os.WriteFile(backupPath, oldConfig, 0o600); err != nil {
+		if err := writeConfigFileAtomic(backupPath, oldConfig, 0o600); err != nil {
 			return nil, fmt.Errorf("备份当前配置失败，未发布: %w", err)
 		}
 	}
@@ -1806,17 +1860,16 @@ func (a *App) Publish() (*ConfigVersion, error) {
 
 	restoreOld := func() error {
 		if !hadOld {
-			return os.Remove(a.cfg.ConfigPath)
+			return removeConfigFileDurable(a.cfg.ConfigPath)
 		}
-		tmpRestore := a.cfg.ConfigPath + ".restore"
-		if err := os.WriteFile(tmpRestore, oldConfig, 0o600); err != nil {
-			return err
-		}
-		return os.Rename(tmpRestore, a.cfg.ConfigPath)
+		return writeConfigFileAtomic(a.cfg.ConfigPath, oldConfig, 0o600)
 	}
 
-	if err := os.Rename(candidate, a.cfg.ConfigPath); err != nil {
-		return nil, fmt.Errorf("替换配置文件失败: %w", err)
+	if err := renameConfigFileDurable(candidate, a.cfg.ConfigPath); err != nil {
+		if restoreErr := restoreOld(); restoreErr != nil {
+			return nil, fmt.Errorf("替换配置文件或同步目录失败: %v；恢复旧配置也失败: %w", err, restoreErr)
+		}
+		return nil, fmt.Errorf("替换配置文件或同步目录失败，已恢复旧配置: %w", err)
 	}
 
 	if err := a.store.InsertVersion(v, sha, yml, "published"); err != nil {
@@ -1902,7 +1955,7 @@ func (a *App) Rollback(version int) (*ConfigVersion, error) {
 	if hadOld {
 		backupPath := filepath.Join(a.cfg.BackupDir,
 			"before-rollback-"+time.Now().Format("20060102-150405.000000")+".yaml")
-		if err := os.WriteFile(backupPath, oldConfig, 0o600); err != nil {
+		if err := writeConfigFileAtomic(backupPath, oldConfig, 0o600); err != nil {
 			return nil, fmt.Errorf("备份当前配置失败，未回滚: %w", err)
 		}
 	}
@@ -1915,30 +1968,39 @@ func (a *App) Rollback(version int) (*ConfigVersion, error) {
 	}
 
 	tmp := a.cfg.ConfigPath + ".rollback-tmp"
-	if err := os.WriteFile(tmp, []byte(yml), 0o600); err != nil {
+	if err := writeConfigFileAtomic(tmp, []byte(yml), 0o600); err != nil {
 		return cv, fmt.Errorf("写入回滚临时文件失败: %w", err)
 	}
 	defer os.Remove(tmp)
 
-	if err := os.Rename(tmp, a.cfg.ConfigPath); err != nil {
-		return cv, fmt.Errorf("替换配置失败: %w", err)
+	if err := renameConfigFileDurable(tmp, a.cfg.ConfigPath); err != nil {
+		var restoreErr error
+		if hadOld {
+			restoreErr = writeConfigFileAtomic(a.cfg.ConfigPath, oldConfig, 0o600)
+		} else {
+			restoreErr = removeConfigFileDurable(a.cfg.ConfigPath)
+		}
+		if restoreErr != nil {
+			return cv, fmt.Errorf("替换配置或同步目录失败: %v；恢复原配置失败: %w", err, restoreErr)
+		}
+		return cv, fmt.Errorf("替换配置或同步目录失败，已恢复原状态: %w", err)
 	}
 
 	if err := a.ReloadMihomo(); err != nil {
 		if !hadOld {
-			_ = os.Remove(a.cfg.ConfigPath)
+			_ = removeConfigFileDurable(a.cfg.ConfigPath)
 			cv.Status = "rollback_failed_no_previous_config"
 			_ = a.store.UpdateVersionStatus(version, cv.Status)
 			return cv, fmt.Errorf("历史配置重载失败，原先不存在配置文件，已移除回滚文件: %w", err)
 		}
 
 		restore := a.cfg.ConfigPath + ".rollback-restore"
-		if writeErr := os.WriteFile(restore, oldConfig, 0o600); writeErr != nil {
+		if writeErr := writeConfigFileAtomic(restore, oldConfig, 0o600); writeErr != nil {
 			cv.Status = "rollback_failed_restore_failed"
 			_ = a.store.UpdateVersionStatus(version, cv.Status)
 			return cv, fmt.Errorf("历史配置重载失败: %v；写入恢复文件失败: %w", err, writeErr)
 		}
-		if renameErr := os.Rename(restore, a.cfg.ConfigPath); renameErr != nil {
+		if renameErr := writeConfigFileAtomic(a.cfg.ConfigPath, oldConfig, 0o600); renameErr != nil {
 			_ = os.Remove(restore)
 			cv.Status = "rollback_failed_restore_failed"
 			_ = a.store.UpdateVersionStatus(version, cv.Status)
