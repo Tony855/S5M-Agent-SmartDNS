@@ -655,6 +655,8 @@ func TestHTTPAgentHeartbeatAcceptsCompleteTelemetry(t *testing.T) {
 // that deleting an Agent binding invalidates its already-open WebSocket session.
 func TestAgentWebSocketCannotPersistHeartbeatAfterAuthorizationRevocation(t *testing.T) {
 	app, code, token := websocketTestApp(t)
+	app.agentTelemetryPersistAt = map[string]time.Time{code: time.Now()}
+	app.agentTelemetryLogAt = map[string]time.Time{code: time.Now()}
 	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
 	defer server.Close()
 
@@ -702,6 +704,12 @@ func TestAgentWebSocketCannotPersistHeartbeatAfterAuthorizationRevocation(t *tes
 	}
 	if settings["agent_status_"+code] != "" || settings["agent_lastseen_"+code] != "" {
 		t.Fatalf("revoked Agent heartbeat was persisted: %#v", settings)
+	}
+	if _, ok := app.agentTelemetryPersistAt[code]; ok {
+		t.Fatal("revoked Agent telemetry persistence timestamp was retained")
+	}
+	if _, ok := app.agentTelemetryLogAt[code]; ok {
+		t.Fatal("revoked Agent telemetry log timestamp was retained")
 	}
 }
 
