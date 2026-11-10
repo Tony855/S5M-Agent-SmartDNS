@@ -905,7 +905,17 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
-		applySharedFallback = true
+		// Per-client routing is not supported yet. Reject it consistently,
+		// including when a controller config is requested.
+		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
+		}
+		// SmartDNS routing groups and process rules belong only to Agent
+		// configs. A global routing setting must never leak into the controller
+		// Mihomo config. An explicit node-level disable also wins over the
+		// global strategy; absent node state remains backward-compatible.
+		applySharedFallback = strings.TrimSpace(machineCode) != "" &&
+			!strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false")
 	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
 		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") {
 		routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
