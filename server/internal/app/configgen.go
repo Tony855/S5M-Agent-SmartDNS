@@ -634,6 +634,11 @@ func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 		key, value := dns.Content[i].Value, dns.Content[i+1]
 		switch key {
 		case "nameserver":
+			if value.Kind == yaml.ScalarNode && isSmartDNSLoopbackResolver(value) {
+				dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: fallbackResolverNodes(false)}
+				changed = true
+				continue
+			}
 			if value.Kind != yaml.SequenceNode {
 				continue
 			}
