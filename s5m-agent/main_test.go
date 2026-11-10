@@ -2299,6 +2299,7 @@ func TestSafeAgentRegistrationFailureDiagnostics(t *testing.T) {
 		{name:"invalid machine code", status:http.StatusBadRequest, body:"机器码格式错误", want:"机器码格式无效"},
 		{name:"unknown upstream body is not leaked", status:http.StatusForbidden, body:"secret=do-not-leak", want:"HTTP 403"},
 		{name:"not found", status:http.StatusNotFound, body:"", want:"HTTP 404"},
+		{name:"rate limited", status:http.StatusTooManyRequests, body:"Agent 注册请求过于频繁", want:"Retry-After"},
 	}
 	for _, tt := range tests { t.Run(tt.name, func(t *testing.T) {
 		got := safeAgentRegistrationFailure(tt.status, []byte(tt.body))
