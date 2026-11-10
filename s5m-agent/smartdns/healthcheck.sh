@@ -21,9 +21,10 @@ run_dns_probe() {
 wget -q -T 3 -O /dev/null http://127.0.0.1:80/api/config || fail "Agent API is not ready"
 pidof mihomo >/dev/null 2>&1 || fail "Mihomo process is not running"
 
-# A deliberate disable is healthy only when Mihomo's own fallback DNS works.
-# During the transition, also require the still-running SmartDNS listener to work.
+# A deliberate disable is healthy only after SmartDNS has fully stopped.
+# Do not hide a stuck SmartDNS process behind a successful Mihomo fallback probe.
 if [ -f /data/smartdns.disabled ]; then
+  pidof smartdns >/dev/null 2>&1 && fail "SmartDNS is still running while disabled"
   dns_listener="$(awk '
     /^dns:[[:space:]]*$/ { in_dns=1; next }
     in_dns && /^[^[:space:]]/ { in_dns=0 }
@@ -38,9 +39,6 @@ if [ -f /data/smartdns.disabled ]; then
   case "$dns_port" in
     ""|*[!0-9]*) fail "Mihomo DNS listen port is missing or invalid" ;;
   esac
-  if pidof smartdns >/dev/null 2>&1; then
-    run_dns_probe "transition SmartDNS UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=3 +tries=1 +short @127.0.0.1 -p 6053 example.com A
-  fi
   run_dns_probe "fallback UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=3 +tries=1 +short @127.0.0.1 -p "$dns_port" example.com A
   run_dns_probe "fallback TCP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +tcp +time=3 +tries=1 +short @127.0.0.1 -p "$dns_port" example.com A
   run_dns_probe "fallback domestic UDP A" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' dig +time=3 +tries=1 +short @127.0.0.1 -p "$dns_port" www.baidu.com A
