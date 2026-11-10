@@ -107,7 +107,7 @@ func noSmartDNSMapValue(n *yaml.Node, key string) *yaml.Node {
 // lookup, while udp/tcp/http schemes would bypass the encrypted-bootstrap policy.
 func normalizeNoSmartDNSBootstrapResolver(raw string) (string, bool) {
 	value := strings.TrimSpace(strings.Trim(raw, "\"'"))
-	if value == "" || strings.ContainsAny(value, "/?#@") {
+	if value == "" {
 		return "", false
 	}
 	scheme := ""
@@ -117,6 +117,9 @@ func normalizeNoSmartDNSBootstrapResolver(raw string) (string, bool) {
 		if scheme != "tls" {
 			return "", false
 		}
+	}
+	if strings.ContainsAny(value, "/?#@") {
+		return "", false
 	}
 	host := value
 	port := ""
