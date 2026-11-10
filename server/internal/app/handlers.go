@@ -920,6 +920,27 @@ func copyFileAtomic(source, destination string) error {
 	return syncConfigDirectory(destination)
 }
 
+const (
+	maxMihomoCompressedBytes   int64 = 200 << 20
+	maxMihomoDecompressedBytes int64 = 256 << 20
+)
+
+// copyWithMaxSize reads at most max+1 bytes so oversized and chunked streams
+// are rejected even when the sender omits Content-Length.
+func copyWithMaxSize(dst io.Writer, src io.Reader, max int64) (int64, error) {
+	if max <= 0 {
+		return 0, fmt.Errorf("无效的文件大小限制")
+	}
+	written, err := io.Copy(dst, io.LimitReader(src, max+1))
+	if err != nil {
+		return written, err
+	}
+	if written > max {
+		return written, fmt.Errorf("文件超过 %d 字节限制", max)
+	}
+	return written, nil
+}
+
 func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 	const (
 		binaryPath = "/opt/mihomo/mihomo"
@@ -1012,7 +1033,7 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 
 	download := func(url string) error {
 		cmd := exec.CommandContext(r.Context(), "curl", "--fail", "--location", "--retry", "2",
-			"--connect-timeout", "15", "--max-time", "240", "--output", gzPath, url)
+			"--connect-timeout", "15", "--max-time", "240", "--max-filesize", strconv.FormatInt(maxMihomoCompressedBytes, 10), "--output", gzPath, url)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 		}
@@ -1020,8 +1041,8 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return fmt.Errorf("下载文件为空或无效")
+		if !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxMihomoCompressedBytes {
+			return fmt.Errorf("下载文件为空、无效或超过 %d MiB 限制", maxMihomoCompressedBytes>>20)
 		}
 		downloaded, err := os.Open(gzPath)
 		if err != nil {
@@ -1063,12 +1084,12 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 	}
 	candidatePath := candidate.Name()
 	defer os.Remove(candidatePath)
-	_, copyErr := io.Copy(candidate, reader)
+	_, copyErr := copyWithMaxSize(candidate, reader, maxMihomoDecompressedBytes)
 	readerErr := reader.Close()
 	gzErr := gz.Close()
 	if copyErr != nil || readerErr != nil || gzErr != nil {
 		_ = candidate.Close()
-		writeErr(w, http.StatusBadGateway, "解压 Mihomo 更新包失败")
+		writeErr(w, http.StatusBadGateway, "解压 Mihomo 更新包失败或超过 256 MiB 限制")
 		return
 	}
 	if err := candidate.Chmod(0o755); err != nil {
