@@ -243,6 +243,76 @@ func removeNoSmartDNSRouting(root *yaml.Node) bool {
 	return changed
 }
 
+// validateNoSmartDNSBackup rejects symlinks, special files, and backups that
+// are readable by group/other users. A backup is the recovery point for the
+// user's original Mihomo configuration, so an unsafe pre-existing path must
+// never be treated as a successful backup.
+func validateNoSmartDNSBackup(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("backup path is not a regular non-symlink file")
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		return fmt.Errorf("backup permissions are not private")
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("backup file is empty")
+	}
+	return nil
+}
+
+// createNoSmartDNSBackup publishes the original config atomically without
+// replacing an existing one-time backup. The temporary file is created in the
+// same directory so the hard-link publication is atomic and cannot expose a
+// partially written backup after a crash.
+func createNoSmartDNSBackup(path string, data []byte) error {
+	if err := validateNoSmartDNSBackup(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".pre-no-smartdns-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Link(tmpPath, path); err != nil {
+		if os.IsExist(err) {
+			// Another process may have completed the backup concurrently.
+			return validateNoSmartDNSBackup(path)
+		}
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
 func migrateNoSmartDNSConfig(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil { if os.IsNotExist(err) { return nil }; return err }
@@ -290,13 +360,9 @@ func migrateNoSmartDNSConfig(path string) error {
 	}
 	if !changed { return nil }
 	backup := path + ".pre-no-smartdns"
-	if _, err := os.Lstat(backup); os.IsNotExist(err) {
-		bf, createErr := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if createErr != nil { return fmt.Errorf("create one-time config backup: %w", createErr) }
-		if _, writeErr := bf.Write(data); writeErr != nil { bf.Close(); return writeErr }
-		if syncErr := bf.Sync(); syncErr != nil { bf.Close(); return syncErr }
-		if closeErr := bf.Close(); closeErr != nil { return closeErr }
-	} else if err != nil { return err }
+	if err := createNoSmartDNSBackup(backup, data); err != nil {
+		return fmt.Errorf("create or validate one-time config backup: %w", err)
+	}
 	var out bytes.Buffer
 	enc := yaml.NewEncoder(&out); enc.SetIndent(2)
 	if err := enc.Encode(&doc); err != nil { return err }
