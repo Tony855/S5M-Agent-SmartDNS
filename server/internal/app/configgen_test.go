@@ -12,6 +12,45 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestNormalizeAgentProxyConfigRejectsDuplicateMappingKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "duplicate top-level dns",
+			yaml: "dns:\\n  enable: true\\ndns:\\n  enable: false\\n",
+		},
+		{
+			name: "duplicate nested dns nameserver",
+			yaml: "dns:\\n  nameserver:\\n    - 127.0.0.1:6053\\n  nameserver:\\n    - 1.1.1.1\\n",
+		},
+		{
+			name: "duplicate TUN route key",
+			yaml: "tun:\\n  route-exclude-address: []\\n  route-exclude-address: [0.0.0.0/0]\\n",
+		},
+		{
+			name: "quoted and unquoted duplicate key",
+			yaml: "dns:\\n  enable: true\\n  \"enable\": false\\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := normalizeAgentProxyConfig(tc.yaml); err == nil {
+				t.Fatal("ambiguous duplicate mapping key must be rejected")
+			}
+		})
+	}
+}
+
+func TestMergeManagedProxySectionsRejectsDuplicateCustomMappingKeys(t *testing.T) {
+	custom := "mode: rule\\ndns:\\n  enable: true\\ndns:\\n  enable: false\\n"
+	generated := "mode: rule\\nproxies: []\\nproxy-groups: []\\nrules: []\\n"
+	if _, err := mergeManagedProxySections(custom, generated); err == nil {
+		t.Fatal("duplicate custom mapping key must be rejected before merging")
+	}
+}
+
 func TestNormalizeAgentProxyConfigKeepsOnlyMixedProxyListenerOn7890(t *testing.T) {
 	input := `secret: test-secret
 mixed-port: 7890
