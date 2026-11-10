@@ -59,13 +59,13 @@ test_successful_restore
 test_failed_new_container_removal_preserves_backup
 
 test_stop_failure_keeps_old_service_available() (
-  state=running
+  MOCK_STATE=running
   start_calls=0
   docker() {
     case "$1" in
       stop) return 1 ;;
-      inspect) printf '%s\n' "$state" ;;
-      start) start_calls=$((start_calls + 1)); state=running ;;
+      inspect) printf '%s\n' "$MOCK_STATE" ;;
+      start) start_calls=$((start_calls + 1)); MOCK_STATE=running ;;
       *) return 90 ;;
     esac
   }
@@ -73,16 +73,16 @@ test_stop_failure_keeps_old_service_available() (
     echo "stop helper unexpectedly accepted a running container" >&2
     exit 1
   fi
-  assert_eq "$state" running "old service remains running after failed stop"
+  assert_eq "$MOCK_STATE" running "old service remains running after failed stop"
   assert_eq "$start_calls" 1 "helper attempts to restore old service"
 )
 
 test_stop_error_with_confirmed_exit_is_safe() (
-  state=exited
+  MOCK_STATE=exited
   docker() {
     case "$1" in
       stop) return 1 ;;
-      inspect) printf '%s\n' "$state" ;;
+      inspect) printf '%s\n' "$MOCK_STATE" ;;
       *) return 90 ;;
     esac
   }
@@ -90,11 +90,11 @@ test_stop_error_with_confirmed_exit_is_safe() (
 )
 
 test_successful_stop_is_verified() (
-  state=running
+  MOCK_STATE=running
   docker() {
     case "$1" in
-      stop) state=exited ;;
-      inspect) printf '%s\n' "$state" ;;
+      stop) MOCK_STATE=exited ;;
+      inspect) printf '%s\n' "$MOCK_STATE" ;;
       *) return 90 ;;
     esac
   }
