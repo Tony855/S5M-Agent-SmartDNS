@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1762,5 +1763,61 @@ func TestHandleUpdateSettingsAcceptsSmartDNSUpstreamStrategies(t *testing.T) {
 				t.Fatalf("stored SmartDNS routing config = %#v, want strategy %s", got, strategy)
 			}
 		})
+	}
+}
+
+func TestCopyDatabaseFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.db")
+	destination := filepath.Join(dir, "backup.db")
+	if err := os.WriteFile(source, []byte("sqlite-database-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("stale-backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyDatabaseFileAtomic(source, destination); err != nil {
+		t.Fatalf("copyDatabaseFileAtomic() error = %v", err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "sqlite-database-content" {
+		t.Fatalf("backup content = %q", got)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("backup permissions = %o, want 600", info.Mode().Perm())
+	}
+	live, err := os.ReadFile(source)
+	if err != nil || string(live) != "sqlite-database-content" {
+		t.Fatalf("live database changed during backup: content=%q error=%v", live, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".s5m-db-copy-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary database copies left behind: %v", matches)
+	}
+}
+
+func TestCopyDatabaseFileAtomicMissingSourcePreservesDestination(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "backup.db")
+	if err := os.WriteFile(destination, []byte("known-good-backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := copyDatabaseFileAtomic(filepath.Join(dir, "missing.db"), destination)
+	if err == nil {
+		t.Fatal("expected missing source error")
+	}
+	got, readErr := os.ReadFile(destination)
+	if readErr != nil || string(got) != "known-good-backup" {
+		t.Fatalf("existing backup was not preserved: content=%q error=%v", got, readErr)
 	}
 }
