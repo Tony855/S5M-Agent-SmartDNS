@@ -160,6 +160,27 @@ if [[ "$ENABLE_TUN" == "1" ]]; then
   args+=(--cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun)
 fi
 
+# A failed docker stop can still leave the container stopped (for example,
+# after a daemon/timeout error). Verify the actual state and restore service
+# availability before aborting if the old container is not safely stopped.
+stop_existing_container_checked() {
+  local name="$1" state
+  if ! docker stop "$name" >/dev/null 2>&1; then
+    state="$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null)" || state="unknown"
+    if [[ "$state" != "exited" && "$state" != "created" && "$state" != "dead" ]]; then
+      docker start "$name" >/dev/null 2>&1 || log "警告：停止失败后无法重新启动旧容器：$name"
+      log "停止旧容器失败（状态：$state），已取消替换。"
+      return 1
+    fi
+  fi
+  state="$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null)" || state="unknown"
+  if [[ "$state" != "exited" && "$state" != "created" && "$state" != "dead" ]]; then
+    docker start "$name" >/dev/null 2>&1 || log "警告：旧容器仍运行且重新启动请求失败：$name"
+    log "无法确认旧容器已停止（状态：$state），已取消替换。"
+    return 1
+  fi
+}
+
 # 保留旧容器直到新容器通过启动检查；失败时自动恢复旧容器。
 BACKUP_NAME="${CONTAINER_NAME}.rollback.$$"
 HAD_OLD=0
@@ -188,7 +209,9 @@ deployment_failed() { local message="$1"; docker logs --tail 100 "$CONTAINER_NAM
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   HAD_OLD=1
   log "暂存旧容器：$CONTAINER_NAME"
-  docker stop "$CONTAINER_NAME" >/dev/null || die "停止旧容器失败，未替换现有服务。"
+  if ! stop_existing_container_checked "$CONTAINER_NAME"; then
+    die "无法安全停止旧容器，未替换现有服务。"
+  fi
   if ! docker rename "$CONTAINER_NAME" "$BACKUP_NAME"; then
     docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
     HAD_OLD=0
