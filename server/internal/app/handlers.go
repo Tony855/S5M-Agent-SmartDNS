@@ -1533,10 +1533,10 @@ func (a *App) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "备份数据库完整性检查失败")
 		return
 	}
-	users, err := candidate.CountUsers()
-	if err != nil || users < 1 {
+	admins, err := candidate.CountEnabledAdmins()
+	if err != nil || admins < 1 {
 		_ = candidate.db.Close()
-		writeErr(w, http.StatusBadRequest, "备份缺少有效管理员账户，拒绝恢复")
+		writeErr(w, http.StatusBadRequest, "备份缺少启用的管理员账户，拒绝恢复")
 		return
 	}
 	if err := candidate.db.Close(); err != nil {
