@@ -1008,20 +1008,26 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			// Config synchronization can normalize persisted YAML, so retain its
 			// existing revocation lock. Command operations are serialized per node.
 			if msg.Type == "config.request" {
+				// Config reads and optional normalization touch SQLite. Serialize
+				// with this Agent's revocation/reconnect path, but never hold the
+				// process-wide session mutex during credential or config I/O.
+				unlockConfig := a.lockAgentWSCommand(machineCode)
 				a.agentWSMu.Lock()
-				if a.agentWSGeneration[machineCode] != generation {
-					a.agentWSMu.Unlock()
+				stale := a.agentWSGeneration[machineCode] != generation
+				a.agentWSMu.Unlock()
+				if stale {
+					unlockConfig()
 					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
 					return
 				}
 				authorizedCode, authErr := a.agentMachineFromRequest(r)
 				if authErr != nil || authorizedCode != machineCode {
-					a.agentWSMu.Unlock()
+					unlockConfig()
 					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
 					return
 				}
 				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
-				a.agentWSMu.Unlock()
+				unlockConfig()
 			} else {
 				unlockCommand := a.lockAgentWSCommand(machineCode)
 				a.agentWSMu.Lock()
