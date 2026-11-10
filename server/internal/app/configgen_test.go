@@ -292,23 +292,23 @@ func TestBuildConfigForMachineExposesOnlyAgentMixedProxyListener(t *testing.T) {
 	agentYAML, err := app.BuildConfigForMachine("node-a")
 	if err != nil { t.Fatalf("BuildConfigForMachine(agent): %v", err) }
 	if !strings.Contains(agentYAML, "mixed-port: 7890") {
-		t.Errorf("Agent config missing mixed-port 7890:\n%s", agentYAML)
+		t.Errorf("Agent config missing mixed-port 7890:\\n%s", agentYAML)
 	}
 	var agentConfig map[string]any
 	if err := yaml.Unmarshal([]byte(agentYAML), &agentConfig); err != nil {
 		t.Fatalf("decode generated Agent config: %v", err)
 	}
 	if tun, ok := agentConfig["tun"].(map[string]any); !ok || tun["enable"] != true {
-		t.Errorf("new Agent config must enable TUN by default, got %#v:\n%s", agentConfig["tun"], agentYAML)
+		t.Errorf("new Agent config must enable TUN by default, got %#v:\\n%s", agentConfig["tun"], agentYAML)
 	}
 	for _, forbidden := range []string{"socks-port:", "redir-port:", "tproxy-port:", "listeners:", "allow-lan: true"} {
 		if strings.Contains(agentYAML, forbidden) {
-			t.Errorf("Agent config must not expose additional proxy listener %q:\n%s", forbidden, agentYAML)
+			t.Errorf("Agent config must not expose additional proxy listener %q:\\n%s", forbidden, agentYAML)
 		}
 	}
 	for _, want := range []string{"allow-lan: false", "external-controller: 127.0.0.1:8088", "listen: 127.0.0.1:5353", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "enable: true", "127.0.0.1:6053"} {
 		if !strings.Contains(agentYAML, want) {
-			t.Errorf("Agent initial config missing %q:\n%s", want, agentYAML)
+			t.Errorf("Agent initial config missing %q:\\n%s", want, agentYAML)
 		}
 	}
 }
@@ -712,7 +712,7 @@ func TestBuildConfigNormalizesPersistedProxyFields(t *testing.T) {
 	}
 	for _, want := range []string{"name: proxy-a", "type: socks5", "server: proxy.example"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("generated config missing normalized field %q:\n%s", want, got)
+			t.Errorf("generated config missing normalized field %q:\\n%s", want, got)
 		}
 	}
 }
@@ -909,30 +909,30 @@ func TestBuildConfigRoutingModesAndControllerBypass(t *testing.T) {
 			}
 			for _, want := range tt.want {
 				if !strings.Contains(got, want) {
-					t.Errorf("mode %s missing %q:\n%s", tt.mode, want, got)
+					t.Errorf("mode %s missing %q:\\n%s", tt.mode, want, got)
 				}
 			}
 			if tt.mode == "split" && strings.Contains(got, "GEOIP,CN,") {
-				t.Errorf("split mode must not add a forced mainland route:\n%s", got)
+				t.Errorf("split mode must not add a forced mainland route:\\n%s", got)
 			}
 			if tt.mode == "return" {
 				if strings.Contains(got, "GEOIP,CN,DIRECT") || strings.Contains(got, "MATCH,proxy-a") {
-					t.Errorf("return mode must proxy CN and send non-CN traffic direct:\n%s", got)
+					t.Errorf("return mode must proxy CN and send non-CN traffic direct:\\n%s", got)
 				}
 				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "GEOIP,CN,PROXY") ||
 					strings.Index(got, "DOMAIN-SUFFIX,v2net.cc,DIRECT") > strings.Index(got, "GEOIP,CN,PROXY") {
-					t.Errorf("controller/domain bypasses must precede the CN proxy rule:\n%s", got)
+					t.Errorf("controller/domain bypasses must precede the CN proxy rule:\\n%s", got)
 				}
 			}
 			if tt.mode == "rule" {
 				if !strings.Contains(got, "MATCH,PROXY") || strings.Contains(got, "MATCH,DIRECT") || strings.Contains(got, "MATCH,REJECT") {
-					t.Errorf("rule mode must route unmatched traffic through PROXY:\n%s", got)
+					t.Errorf("rule mode must route unmatched traffic through PROXY:\\n%s", got)
 				}
 				if strings.Index(got, "DOMAIN,controller.example.com,DIRECT") > strings.Index(got, "MATCH,PROXY") {
-					t.Errorf("controller bypass must appear before terminal proxy rule:\n%s", got)
+					t.Errorf("controller bypass must appear before terminal proxy rule:\\n%s", got)
 				}
 				if strings.Index(got, "PROCESS-NAME,smartdns,proxy-a") > strings.Index(got, "MATCH,PROXY") {
-					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal proxy rule:\n%s", got)
+					t.Errorf("SmartDNS encrypted upstream traffic must use the proxy before terminal proxy rule:\\n%s", got)
 				}
 			}
 		})
@@ -951,7 +951,7 @@ func TestReturnModeWithoutProxyRejectsMainlandAndKeepsOverseasDirect(t *testing.
 	if err != nil { t.Fatalf("build return config: %v", err) }
 	if !strings.Contains(got, "GEOIP,CN,REJECT") || !strings.Contains(got, "MATCH,DIRECT") ||
 		strings.Contains(got, "GEOIP,CN,DIRECT") || strings.Contains(got, "GEOIP,CN,proxy") {
-		t.Fatalf("without a mainland egress, CN traffic must fail closed while overseas traffic stays direct:\n%s", got)
+		t.Fatalf("without a mainland egress, CN traffic must fail closed while overseas traffic stays direct:\\n%s", got)
 	}
 }
 
@@ -974,10 +974,10 @@ func TestLegacySplitModeKeepsHistoricalFallback(t *testing.T) {
 		t.Fatalf("build legacy split config: %v", err)
 	}
 	if !strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatalf("legacy split mode without a proxy must preserve its historical MATCH,DIRECT fallback:\n%s", got)
+		t.Fatalf("legacy split mode without a proxy must preserve its historical MATCH,DIRECT fallback:\\n%s", got)
 	}
 	if strings.Contains(got, "MATCH,REJECT") {
-		t.Fatalf("legacy split mode must not be silently upgraded to strict rule mode:\n%s", got)
+		t.Fatalf("legacy split mode must not be silently upgraded to strict rule mode:\\n%s", got)
 	}
 }
 
@@ -993,7 +993,7 @@ func TestStrictRuleModeIsDefault(t *testing.T) {
 		t.Fatalf("build default config: %v", err)
 	}
 	if !strings.Contains(generated, "MATCH,REJECT") || strings.Contains(generated, "MATCH,DIRECT") {
-		t.Fatalf("default config must reject unmatched traffic:\n%s", generated)
+		t.Fatalf("default config must reject unmatched traffic:\\n%s", generated)
 	}
 }
 
@@ -1115,7 +1115,7 @@ func TestBuildConfigRoutesConfiguredDoHThroughProxy(t *testing.T) {
 		"DOMAIN-SUFFIX,dns.google,PROXY",
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("generated config missing %q:\n%s", want, got)
+			t.Errorf("generated config missing %q:\\n%s", want, got)
 		}
 	}
 }
@@ -1183,11 +1183,11 @@ func TestBuildConfigUsesSharedYAMLAnchorForSameProtocolAndServer(t *testing.T) {
 		t.Fatalf("build config: %v", err)
 	}
 	if !strings.Contains(got, "&s5m_shared_proxy") || !strings.Contains(got, "<<: *s5m_shared_proxy") {
-		t.Fatalf("expected YAML merge anchor for equivalent proxies:\n%s", got)
+		t.Fatalf("expected YAML merge anchor for equivalent proxies:\\n%s", got)
 	}
 	var decoded map[string]any
 	if err := yaml.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("generated anchor YAML did not parse: %v\n%s", err, got)
+		t.Fatalf("generated anchor YAML did not parse: %v\\n%s", err, got)
 	}
 	items, ok := decoded["proxies"].([]any)
 	if !ok || len(items) != 3 {
@@ -1255,7 +1255,7 @@ func TestMarshalProxiesWithSharedAnchorFallsBackForDifferentProtocolOptions(t *t
 		t.Fatalf("marshal: %v", err)
 	}
 	if strings.Contains(string(got), "&s5m_shared_proxy") || strings.Contains(string(got), "<<:") {
-		t.Fatalf("different credentials must not be merged through an anchor:\n%s", got)
+		t.Fatalf("different credentials must not be merged through an anchor:\\n%s", got)
 	}
 	var decoded []map[string]any
 	if err := yaml.Unmarshal(got, &decoded); err != nil {
@@ -1396,7 +1396,7 @@ func TestBuildConfigForMachineHonorsExplicitTUNOptIn(t *testing.T) {
 	var generated map[string]any
 	if err := yaml.Unmarshal([]byte(got), &generated); err != nil { t.Fatalf("decode generated config: %v", err) }
 	if tun, ok := generated["tun"].(map[string]any); !ok || tun["enable"] != true {
-		t.Fatalf("explicit TUN opt-in was not applied to generated config, got %#v:\n%s", generated["tun"], got)
+		t.Fatalf("explicit TUN opt-in was not applied to generated config, got %#v:\\n%s", generated["tun"], got)
 	}
 }
 
@@ -1499,15 +1499,15 @@ func TestApplyAgentRuntimeDNSDoesNotMutateSourceAndFallsBack(t *testing.T) {
 	if err != nil { t.Fatalf("fallback generated SmartDNS DNS: %v", err) }
 	var fallbackConfig map[string]any
 	if err := yaml.Unmarshal([]byte(safeFallback), &fallbackConfig); err != nil {
-		t.Fatalf("decode unhealthy SmartDNS fallback: %v\n%s", err, safeFallback)
+		t.Fatalf("decode unhealthy SmartDNS fallback: %v\\n%s", err, safeFallback)
 	}
 	fallbackDNS, ok := fallbackConfig["dns"].(map[string]any)
 	if !ok {
-		t.Fatalf("fallback dns section missing or invalid:\n%s", safeFallback)
+		t.Fatalf("fallback dns section missing or invalid:\\n%s", safeFallback)
 	}
 	fallbackServers, ok := fallbackDNS["nameserver"].([]any)
 	if !ok {
-		t.Fatalf("fallback dns.nameserver missing or invalid:\n%s", safeFallback)
+		t.Fatalf("fallback dns.nameserver missing or invalid:\\n%s", safeFallback)
 	}
 	wantFallback := map[string]bool{
 		"https://dns.cloudflare.com/dns-query": false,
@@ -2037,10 +2037,10 @@ func TestBuildConfigForMachinePreservesLegacySmartDNSRoutingWhenUnset(t *testing
 	got, err := (&App{store: store}).BuildConfigForMachine("node-a")
 	if err != nil { t.Fatalf("BuildConfigForMachine: %v", err) }
 	if strings.Contains(got, SmartDNSGroupName) || strings.Contains(got, "PROCESS-NAME,smartdns,") {
-		t.Fatalf("unset SmartDNS routing setting changed legacy node behavior:\n%s", got)
+		t.Fatalf("unset SmartDNS routing setting changed legacy node behavior:\\n%s", got)
 	}
 	if !strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatalf("legacy return-mode fallback was unexpectedly changed:\n%s", got)
+		t.Fatalf("legacy return-mode fallback was unexpectedly changed:\\n%s", got)
 	}
 }
 
@@ -2612,7 +2612,7 @@ func TestGlobalModeWithoutEligibleProxyRejectsInsteadOfDirect(t *testing.T) {
 	got, err := buildConfigFromProxiesWithMode(nil, "node-a", "test-secret", "global", "")
 	if err != nil { t.Fatalf("build global config: %v", err) }
 	if !strings.Contains(got, "MATCH,REJECT") || strings.Contains(got, "MATCH,DIRECT") {
-		t.Fatalf("global mode without an eligible proxy must fail closed, not bypass direct:\n%s", got)
+		t.Fatalf("global mode without an eligible proxy must fail closed, not bypass direct:\\n%s", got)
 	}
 }
 
@@ -2625,7 +2625,7 @@ func TestGameModeWithoutEligibleProxyRejectsGameDestinations(t *testing.T) {
 		"DOMAIN-SUFFIX,valorant.com,REJECT",
 		"MATCH,DIRECT",
 	} {
-		if !strings.Contains(got, want) { t.Errorf("game mode without proxy missing %q:\n%s", want, got) }
+		if !strings.Contains(got, want) { t.Errorf("game mode without proxy missing %q:\\n%s", want, got) }
 	}
 	if strings.Contains(got, "DOMAIN-SUFFIX,steampowered.com,DIRECT") {
 		t.Fatal("game traffic must never fall back to DIRECT when no proxy exists")
@@ -2718,9 +2718,9 @@ func TestRouteAgentDNSFallbackIfSmartDNSSupportsScalarNameserver(t *testing.T) {
 	got, err := routeAgentDNSFallbackIfSmartDNS(input)
 	if err != nil { t.Fatalf("routeAgentDNSFallbackIfSmartDNS: %v", err) }
 	for _, stale := range []string{"127.0.0.1:6053", "127.0.0.1:6054"} {
-		if strings.Contains(got, stale) { t.Fatalf("scalar DNS fallback retained %q:\n%s", stale, got) }
+		if strings.Contains(got, stale) { t.Fatalf("scalar DNS fallback retained %q:\\n%s", stale, got) }
 	}
 	for _, want := range []string{"https://dns.cloudflare.com/dns-query", "https://dns.google/dns-query", "https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"} {
-		if !strings.Contains(got, want) { t.Fatalf("scalar DNS fallback missing %q:\n%s", want, got) }
+		if !strings.Contains(got, want) { t.Fatalf("scalar DNS fallback missing %q:\\n%s", want, got) }
 	}
 }
