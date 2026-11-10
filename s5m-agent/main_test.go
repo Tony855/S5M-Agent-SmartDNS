@@ -2430,6 +2430,63 @@ func TestAgentHTTPServerHasBoundedTimeoutsAndHeaders(t *testing.T) {
 	}
 }
 
+func TestRunAgentConnectionAttemptStillDialsWebSocketWhenProbeFails(t *testing.T) {
+	generation := agentBindingGeneration.Load()
+	probeErr := fmt.Errorf("health endpoint temporarily unavailable")
+	sessionCalled := false
+	attempted, err := runAgentConnectionAttempt(
+		Config{CentralURL: "https://controller.example", Token: "test-token"},
+		generation,
+		func(Config) error { return probeErr },
+		func(cfg Config, gotGeneration uint64) error {
+			sessionCalled = true
+			if cfg.CentralURL != "https://controller.example" || cfg.Token != "test-token" {
+				t.Fatalf("session received unexpected config: %#v", cfg)
+			}
+			if gotGeneration != generation {
+				t.Fatalf("session generation = %d, want %d", gotGeneration, generation)
+			}
+			return nil
+		},
+	)
+	if !attempted {
+		t.Fatal("HTTP health probe failure must not prevent a WebSocket attempt")
+	}
+	if err != nil {
+		t.Fatalf("WebSocket attempt returned unexpected error: %v", err)
+	}
+	if !sessionCalled {
+		t.Fatal("WebSocket session was not called after health probe failure")
+	}
+}
+
+func TestMarkAgentBindingCommittedClearsStaleConnectionFailure(t *testing.T) {
+	previousGeneration := agentBindingGeneration.Load()
+	previousFailed := agentConnectionFailed.Load()
+	agentActiveWSMu.Lock()
+	previousConn := agentActiveWSConn
+	agentActiveWSConn = nil
+	agentActiveWSMu.Unlock()
+	agentConnectionFailed.Store(true)
+	t.Cleanup(func() {
+		agentBindingGeneration.Store(previousGeneration)
+		agentConnectionFailed.Store(previousFailed)
+		agentActiveWSMu.Lock()
+		agentActiveWSConn = previousConn
+		agentActiveWSMu.Unlock()
+	})
+	markAgentBindingCommitted()
+	if agentBindingGeneration.Load() != previousGeneration+1 {
+		t.Fatal("committing a new binding must invalidate previous connection attempts")
+	}
+	if agentConnectionFailed.Load() {
+		t.Fatal("committing a new binding must clear stale connection failure state")
+	}
+	if agentConnected.Load() {
+		t.Fatal("new binding must not be reported connected before WebSocket welcome")
+	}
+}
+
 func TestTryLockAgentBindRejectsConcurrentRequests(t *testing.T) {
 	unlock, ok := tryLockAgentBind()
 	if !ok {
