@@ -973,6 +973,15 @@ func isGzipHeader(header []byte) bool {
 	return len(header) >= 2 && header[0] == 0x1f && header[1] == 0x8b
 }
 
+var mihomoServerUpdateMu sync.Mutex
+
+func acquireMihomoServerUpdate() (func(), bool) {
+	if !mihomoServerUpdateMu.TryLock() {
+		return nil, false
+	}
+	return mihomoServerUpdateMu.Unlock, true
+}
+
 func copyFileAtomic(source, destination string) error {
 	in, err := os.Open(source)
 	if err != nil {
@@ -1009,6 +1018,13 @@ func copyFileAtomic(source, destination string) error {
 }
 
 func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
+	unlockUpdate, acquired := acquireMihomoServerUpdate()
+	if !acquired {
+		writeErr(w, http.StatusConflict, "Mihomo 更新任务正在执行，请勿并发提交")
+		return
+	}
+	defer unlockUpdate()
+
 	const (
 		binaryPath = "/opt/mihomo/mihomo"
 		backupPath = "/opt/mihomo/mihomo.bak"
