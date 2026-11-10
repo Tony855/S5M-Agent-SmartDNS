@@ -2773,6 +2773,10 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	// before it can persist another heartbeat.
 	a.agentWSGeneration[code]++
 	delete(a.agentHeartbeatAt, code)
+	// Telemetry timestamps are per-Agent caches too; unlike the generation
+	// counter, they have no ABA/revocation role and must be reclaimed on delete.
+	delete(a.agentTelemetryPersistAt, code)
+	delete(a.agentTelemetryLogAt, code)
 	// Close the live socket immediately so a revoked idle Agent cannot remain
 	// connected until its next heartbeat timeout.
 	if session := a.agentWSConnections[code]; session != nil {
