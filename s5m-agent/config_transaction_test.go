@@ -498,6 +498,9 @@ func TestFallbackTransitionDoesNotRequireHealthyOldSmartDNS(t *testing.T) {
 	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) { return false, nil }
 	transactionReloadMihomo = func() error { return nil }
 	transactionWriteControllerConfig = func([]byte) error { return nil }
+	// The test isolates the old SmartDNS health dependency; the fallback DNS
+	// probe is a separate safety gate and is stubbed as healthy here.
+	transactionProbeMihomoDNS = func([]byte) bool { return true }
 	waitCalls, restartCalls := 0, 0
 	transactionWaitSmartDNSHealthy = func(time.Duration) bool { waitCalls++; return false }
 	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
