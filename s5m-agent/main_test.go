@@ -2439,3 +2439,29 @@ func TestTryLockAgentBindRejectsConcurrentRequests(t *testing.T) {
 		t.Fatal("concurrent bind lock acquisition should be rejected")
 	}
 }
+
+func TestLoadOrCreateMachineIDRejectsSymlinkedFallback(t *testing.T) {
+	dir := t.TempDir()
+	systemPath := filepath.Join(dir, "missing-machine-id")
+	target := filepath.Join(dir, "outside-id")
+	storagePath := filepath.Join(dir, "data", "machine-id")
+	if err := os.MkdirAll(filepath.Dir(storagePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("0123456789abcdef0123456789abcdef\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, storagePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreateMachineID(systemPath, storagePath); err == nil {
+		t.Fatal("expected symlinked fallback machine ID to be rejected")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "0123456789abcdef0123456789abcdef\n" {
+		t.Fatalf("symlink target was unexpectedly changed: %q", got)
+	}
+}
