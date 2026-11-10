@@ -2325,6 +2325,16 @@ func TestRegistrationPageAllowsAllSafeControllerDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRegistrationPageShowsConnectingImmediatelyAfterBind(t *testing.T) {
+	page, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read registration page: %v", err)
+	}
+	if !strings.Contains(string(page), "setStatus('', '绑定成功，正在连接主控端…')") {
+		t.Fatal("successful registration must immediately show connecting instead of retaining a stale offline state")
+	}
+}
+
 func TestRegistrationPageDisablesCaching(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
