@@ -864,6 +864,52 @@ func routeAgentDNSViaSmartDNSWithDomestic(yml string) (string, error) {
 	return string(out), nil
 }
 
+// removeGeneratedSmartDNSProcessRules removes SmartDNS-only process routing
+// from controller configs and Agent nodes where SmartDNS is explicitly disabled.
+// It leaves DNS resolver configuration untouched; runtime DNS fallback remains
+// responsible for switching away from local listeners.
+func removeGeneratedSmartDNSProcessRules(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 SmartDNS 规则清理配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("SmartDNS 规则清理配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "rules" {
+			continue
+		}
+		rules := root.Content[i+1]
+		if rules.Kind != yaml.SequenceNode {
+			return "", fmt.Errorf("SmartDNS 规则清理配置的 rules 必须是数组")
+		}
+		kept := make([]*yaml.Node, 0, len(rules.Content))
+		for _, rule := range rules.Content {
+			if rule == nil {
+				continue
+			}
+			if rule.Kind == yaml.ScalarNode {
+				parts := strings.Split(rule.Value, ",")
+				if len(parts) >= 2 &&
+					strings.EqualFold(strings.TrimSpace(parts[0]), "PROCESS-NAME") &&
+					strings.EqualFold(strings.TrimSpace(parts[1]), "smartdns") {
+					continue
+				}
+			}
+			kept = append(kept, rule)
+		}
+		rules.Content = kept
+		break
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return "", fmt.Errorf("序列化 SmartDNS 规则清理配置失败: %w", err)
+	}
+	return string(out), nil
+}
+
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
@@ -890,6 +936,18 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	yml, err := buildConfigFromProxiesWithMode(proxies, machineCode, secret, mode, controllerHost)
 	if err != nil {
 		return "", err
+	}
+	// The low-level proxy generator also serves the controller and legacy
+	// configs, so it cannot assume that a SmartDNS daemon exists. Remove its
+	// default process rule for the controller and explicitly disabled nodes;
+	// enabled Agent nodes retain legacy behavior unless a routing strategy
+	// below replaces that rule.
+	if strings.TrimSpace(machineCode) == "" ||
+		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false") {
+		yml, err = removeGeneratedSmartDNSProcessRules(yml)
+		if err != nil {
+			return "", err
+		}
 	}
 	// An explicitly configured routing value remains authoritative. For upgraded
 	// installations without that global setting, enabling SmartDNS on a node
