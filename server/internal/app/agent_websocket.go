@@ -848,14 +848,15 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	// used by revocation before registering this socket: telemetry intentionally
 	// relies on the registered session generation instead of querying SQLite
 	// for every frame.
-	a.agentWSMu.Lock()
+	// The per-Agent lock fences revocation and replacement while this
+	// credential lookup runs. Keep SQLite reads outside the global session mutex.
 	currentCode, authErr := a.agentMachineFromRequest(r)
 	if authErr != nil || currentCode != machineCode {
-		a.agentWSMu.Unlock()
 		unlockCommand()
 		closeAgentWebSocket(conn, "Agent binding is no longer authorized")
 		return
 	}
+	a.agentWSMu.Lock()
 
 	// A newly authenticated connection supersedes any older connection for the
 	// same Agent. Older sockets may still be blocked in ReadJSON, so every
@@ -868,14 +869,18 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	if a.agentWSConnections == nil {
 		a.agentWSConnections = make(map[string]*agentWSConnection)
 	}
-	// Actively close the previous socket, rather than merely waiting for its
-	// next heartbeat/request to notice the generation change.
-	if previous := a.agentWSConnections[machineCode]; previous != nil && previous.conn != nil {
-		closeAgentWebSocket(previous.conn, "Agent connection superseded")
+	// Detach the previous socket while holding the session mutex, but perform
+	// the potentially blocking network close only after releasing the global lock.
+	var previousConn *websocket.Conn
+	if previous := a.agentWSConnections[machineCode]; previous != nil {
+		previousConn = previous.conn
 	}
 	session := &agentWSConnection{conn: conn}
 	a.agentWSConnections[machineCode] = session
 	a.agentWSMu.Unlock()
+	if previousConn != nil {
+		closeAgentWebSocket(previousConn, "Agent connection superseded")
+	}
 	unlockCommand()
 	defer func() {
 		a.agentWSMu.Lock()
@@ -954,10 +959,9 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				a.agentTelemetryLogAt = make(map[string]time.Time)
 			}
 			shouldPersist := receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second
-			if shouldLogAgentTelemetry(receivedAt, a.agentTelemetryLogAt[machineCode], time.Minute) {
+			shouldLog := shouldLogAgentTelemetry(receivedAt, a.agentTelemetryLogAt[machineCode], time.Minute)
+			if shouldLog {
 				a.agentTelemetryLogAt[machineCode] = receivedAt
-				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%v download_speed=%v upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\n",
-					machineCode, telemetry["upload_speed"], telemetry["download_speed"], telemetry["upload_total"], telemetry["download_total"], telemetry["connections"], telemetry["telemetry_stale"], telemetry["traffic_error"], telemetry["connections_error"])
 			}
 			if shouldPersist {
 				// Throttle failed persistence attempts too; a database outage must
@@ -965,6 +969,10 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				a.agentTelemetryPersistAt[machineCode] = receivedAt
 			}
 			a.agentWSMu.Unlock()
+			if shouldLog {
+				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%v download_speed=%v upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\n",
+					machineCode, telemetry["upload_speed"], telemetry["download_speed"], telemetry["upload_total"], telemetry["download_total"], telemetry["connections"], telemetry["telemetry_stale"], telemetry["traffic_error"], telemetry["connections_error"])
+			}
 			if shouldPersist {
 				settings, settingsErr := a.store.GetSettings()
 				if settingsErr != nil {
@@ -1005,46 +1013,32 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if msg.Type == "config.request" || msg.Type == "command.request" || msg.Type == "command.ack" {
-			// Config synchronization can normalize persisted YAML, so retain its
-			// existing revocation lock. Command operations are serialized per node.
-			if msg.Type == "config.request" {
-				a.agentWSMu.Lock()
-				if a.agentWSGeneration[machineCode] != generation {
-					a.agentWSMu.Unlock()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
-					return
-				}
-				authorizedCode, authErr := a.agentMachineFromRequest(r)
-				if authErr != nil || authorizedCode != machineCode {
-					a.agentWSMu.Unlock()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
-					return
-				}
-				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
-				a.agentWSMu.Unlock()
-			} else {
-				unlockCommand := a.lockAgentWSCommand(machineCode)
-				a.agentWSMu.Lock()
-				stale := a.agentWSGeneration[machineCode] != generation
-				authorizedCode, authErr := a.agentMachineFromRequest(r)
-				a.agentWSMu.Unlock()
-				if stale {
-					unlockCommand()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
-					return
-				}
-				if authErr != nil || authorizedCode != machineCode {
-					unlockCommand()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
-					return
-				}
-				if msg.Type == "command.request" {
-					err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
-				} else {
-					err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
-				}
-				unlockCommand()
+			// Serialize each node's operation with revocation, but never hold the
+			// process-wide session mutex across credential or configuration DB I/O.
+			unlockNode := a.lockAgentWSCommand(machineCode)
+			a.agentWSMu.Lock()
+			stale := a.agentWSGeneration[machineCode] != generation
+			a.agentWSMu.Unlock()
+			if stale {
+				unlockNode()
+				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
+				return
 			}
+			authorizedCode, authErr := a.agentMachineFromRequest(r)
+			if authErr != nil || authorizedCode != machineCode {
+				unlockNode()
+				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
+				return
+			}
+			switch msg.Type {
+			case "config.request":
+				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
+			case "command.request":
+				err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
+			case "command.ack":
+				err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
+			}
+			unlockNode()
 			if err != nil {
 				operation := "处理 Agent WebSocket 请求"
 				if msg.Type == "config.request" {
