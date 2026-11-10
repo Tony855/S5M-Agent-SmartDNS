@@ -842,7 +842,6 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	// socket passed its generation check but before it sent a command or persisted
 	// an ACK. Keep lock ordering consistent: command lock, then agentWSMu.
 	unlockCommand := a.lockAgentWSCommand(machineCode)
-	defer unlockCommand()
 
 	// The credential may have been revoked after the initial JWT check but
 	// before the WebSocket upgrade completed. Revalidate under the same lock
@@ -853,6 +852,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	currentCode, authErr := a.agentMachineFromRequest(r)
 	if authErr != nil || currentCode != machineCode {
 		a.agentWSMu.Unlock()
+		unlockCommand()
 		closeAgentWebSocket(conn, "Agent binding is no longer authorized")
 		return
 	}
@@ -876,6 +876,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	session := &agentWSConnection{conn: conn}
 	a.agentWSConnections[machineCode] = session
 	a.agentWSMu.Unlock()
+	unlockCommand()
 	defer func() {
 		a.agentWSMu.Lock()
 		if a.agentWSConnections[machineCode] == session {
