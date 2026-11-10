@@ -2709,15 +2709,17 @@ func (a *App) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "心跳字段无法序列化")
 		return
 	}
-	a.agentWSMu.Lock()
-	// Authorization may have been revoked while this request waited for the
-	// heartbeat lock. Recheck it inside the critical section before persistence.
+	// Serialize the fallback heartbeat with WebSocket heartbeats and revocation
+	// for this node. Credential reads and SQLite writes must not hold agentWSMu,
+	// which protects every Agent's in-memory session state.
+	unlockNode := a.lockAgentWSCommand(code)
+	defer unlockNode()
 	currentCode, currentAuthErr := a.agentMachineFromRequest(r)
 	if currentAuthErr != nil || currentCode != code {
-		a.agentWSMu.Unlock()
 		writeErr(w, http.StatusUnauthorized, "Agent 授权已失效")
 		return
 	}
+	a.agentWSMu.Lock()
 	if a.agentHeartbeatAt == nil {
 		a.agentHeartbeatAt = make(map[string]int64)
 	}
@@ -2726,14 +2728,15 @@ func (a *App) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "message": "已忽略较旧的 Agent 心跳"})
 		return
 	}
+	a.agentWSMu.Unlock()
 	if err := a.store.UpdateSettings(map[string]string{
 		"agent_lastseen_" + code: strconv.FormatInt(receivedAt.Unix(), 10),
 		"agent_status_" + code:   string(payload),
 	}); err != nil {
-		a.agentWSMu.Unlock()
 		writeErr(w, http.StatusInternalServerError, "保存心跳数据失败")
 		return
 	}
+	a.agentWSMu.Lock()
 	a.agentHeartbeatAt[code] = receivedAt.UnixNano()
 	a.agentWSMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "received_at": time.Now().Unix()})
@@ -2756,9 +2759,10 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	defer agentTokenGenerateMu.Unlock()
 	unlockCommand := a.lockAgentWSCommand(code)
 	defer unlockCommand()
-	a.agentWSMu.Lock()
+	// The per-node lock fences concurrent heartbeats, commands, ACKs and
+	// reconnects. Keep the global session mutex free while SQLite revokes the
+	// credential and removes its associated records.
 	if err := a.store.DeleteAgentBinding(code); err != nil {
-		a.agentWSMu.Unlock()
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, "Agent 绑定不存在")
 			return
@@ -2766,6 +2770,7 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "删除失败")
 		return
 	}
+	a.agentWSMu.Lock()
 	if a.agentWSGeneration == nil {
 		a.agentWSGeneration = make(map[string]uint64)
 	}
