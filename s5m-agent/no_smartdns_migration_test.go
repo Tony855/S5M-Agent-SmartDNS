@@ -349,3 +349,123 @@ func TestNoSmartDNSMigrationEnforcesEncryptedLiteralIPBootstrap(t *testing.T) {
 	}
 }
 
+func TestMigrateNoSmartDNSConfigRejectsAmbiguousYAMLWithoutMutation(t *testing.T) {
+	cases := []struct {
+		name   string
+		config string
+	}{
+		{
+			name: "duplicate top-level dns key",
+			config: `dns:
+  nameserver: [127.0.0.1:6053]
+dns:
+  nameserver: [9.9.9.9]
+`,
+		},
+		{
+			name: "duplicate nested nameserver key",
+			config: `dns:
+  nameserver: [127.0.0.1:6053]
+  nameserver: [9.9.9.9]
+`,
+		},
+		{
+			name: "DNS alias",
+			config: `dns:
+  nameserver: &bootstrap [127.0.0.1:6053]
+  fallback: *bootstrap
+`,
+		},
+		{
+			name: "DNS merge key",
+			config: `dns:
+  defaults: &defaults
+    nameserver: [127.0.0.1:6053]
+  <<: *defaults
+`,
+		},
+		{
+			name: "rules alias",
+			config: `base-rules: &routes
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+rules: *routes
+`,
+		},
+		{
+			name: "proxy-groups alias",
+			config: `base-groups: &groups
+  - name: SMARTDNS-PROXY
+    type: select
+    proxies: [node-a]
+proxy-groups: *groups
+`,
+		},
+		{
+			name: "top-level merge key",
+			config: `base: &base
+  dns:
+    nameserver: [127.0.0.1:6053]
+<<: *base
+`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			original := []byte(tc.config)
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := migrateNoSmartDNSConfig(path); err == nil {
+				t.Fatal("expected ambiguous YAML to be rejected")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(original) {
+				t.Fatalf("ambiguous config was modified: %q", got)
+			}
+			if _, err := os.Lstat(path + ".pre-no-smartdns"); !os.IsNotExist(err) {
+				t.Fatalf("migration must not create a backup for rejected ambiguous YAML; stat err=%v", err)
+			}
+		})
+	}
+}
+
+func TestMigrateNoSmartDNSConfigAllowsAliasesOutsidePolicySections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte(`proxy-default: &proxy-default
+  type: socks5
+  server: 192.0.2.10
+  port: 1080
+proxies:
+  - name: node-one
+    <<: *proxy-default
+dns:
+  nameserver: [127.0.0.1:6053]
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateNoSmartDNSConfig(path); err != nil {
+		t.Fatalf("migration should preserve non-policy YAML aliases: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("migrated YAML with proxy alias is invalid: %v", err)
+	}
+	proxies, ok := parsed["proxies"].([]any)
+	if !ok || len(proxies) != 1 {
+		t.Fatalf("proxy entry was lost: %#v", parsed["proxies"])
+	}
+	proxy, ok := proxies[0].(map[string]any)
+	if !ok || proxy["type"] != "socks5" || proxy["server"] != "192.0.2.10" {
+		t.Fatalf("proxy merge values were not preserved: %#v", proxies[0])
+	}
+}

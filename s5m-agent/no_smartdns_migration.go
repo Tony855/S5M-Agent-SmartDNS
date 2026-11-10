@@ -103,6 +103,57 @@ func noSmartDNSMapValue(n *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
+// validateNoSmartDNSYAML rejects ambiguous mappings before migration. The
+// migration edits yaml.Node mappings using first-match lookup, while YAML
+// consumers may resolve duplicate keys differently. Merge keys are rejected
+// because they can inject hidden policy entries; aliases are rejected inside DNS and SmartDNS-routing policy sections because
+// they can hide stale resolver endpoints or SmartDNS-only rules/groups.
+func validateNoSmartDNSYAML(root *yaml.Node) error {
+	visited := make(map[*yaml.Node]bool)
+	var walk func(*yaml.Node, bool) error
+	walk = func(node *yaml.Node, inPolicy bool) error {
+		if node == nil || visited[node] {
+			return nil
+		}
+		visited[node] = true
+		if node.Kind == yaml.AliasNode {
+			if inPolicy {
+				return fmt.Errorf("DNS 和路由策略配置不允许使用 YAML 别名")
+			}
+			return walk(node.Alias, false)
+		}
+		if node.Kind == yaml.MappingNode {
+			seen := make(map[string]struct{}, len(node.Content)/2)
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				key := node.Content[i]
+				if key == nil || key.Kind != yaml.ScalarNode {
+					return fmt.Errorf("YAML 映射键必须是标量")
+				}
+				if (key.Tag == "!!merge" || key.Value == "<<") && (node == root || inPolicy) {
+					return fmt.Errorf("DNS 和路由策略配置不允许 YAML 合并键")
+				}
+				identity := key.Tag + "\x00" + key.Value
+				if _, exists := seen[identity]; exists {
+					return fmt.Errorf("YAML 映射包含重复键 %q", key.Value)
+				}
+				seen[identity] = struct{}{}
+				childInPolicy := inPolicy || (node == root && (key.Value == "dns" || key.Value == "rules" || key.Value == "proxy-groups"))
+				if err := walk(node.Content[i+1], childInPolicy); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, child := range node.Content {
+			if err := walk(child, inPolicy); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(root, false)
+}
+
 // normalizeNoSmartDNSBootstrapResolver accepts only encrypted DoT endpoints
 // whose destination is a literal IP. Hostnames would require a second bootstrap
 // lookup, while udp/tcp/http schemes would bypass the encrypted-bootstrap policy.
@@ -411,6 +462,9 @@ func migrateNoSmartDNSConfig(path string) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil { return fmt.Errorf("parse existing Mihomo config: %w", err) }
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode { return fmt.Errorf("existing Mihomo config is not a YAML mapping") }
 	root := doc.Content[0]
+	if err := validateNoSmartDNSYAML(root); err != nil {
+		return fmt.Errorf("existing Mihomo config is ambiguous: %w", err)
+	}
 	changed := removeNoSmartDNSRouting(root)
 	dns := noSmartDNSMapValue(root, "dns")
 	if dns == nil {
