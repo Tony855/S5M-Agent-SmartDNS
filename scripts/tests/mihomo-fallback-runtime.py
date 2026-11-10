@@ -324,7 +324,7 @@ def ipv6_socks_atyp_main():
     upstream.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     upstream.bind(("127.0.0.1", 0))
     upstream.listen(1)
-    upstream.settimeout(20)
+    upstream.settimeout(45)
     upstream_port = upstream.getsockname()[1]
     mixed = free_port()
     observed = {}
@@ -339,19 +339,24 @@ def ipv6_socks_atyp_main():
         return data
 
     def fake_socks_server():
+        stage = "accept upstream connection"
         try:
             conn, _ = upstream.accept()
             with conn:
-                conn.settimeout(15)
+                conn.settimeout(45)
+                stage = "read SOCKS greeting"
                 greeting = read_exact(conn, 2)
                 if greeting[0] != 5:
                     raise RuntimeError(f"unexpected SOCKS greeting: {greeting!r}")
+                stage = "read SOCKS authentication methods"
                 read_exact(conn, greeting[1])
                 conn.sendall(b"\x05\x00")
+                stage = "read SOCKS CONNECT header"
                 header = read_exact(conn, 4)
                 if header[:3] != b"\x05\x01\x00":
                     raise RuntimeError(f"unexpected SOCKS CONNECT header: {header!r}")
                 atyp = header[3]
+                stage = f"read SOCKS destination address (ATYP={atyp})"
                 if atyp == 4:
                     address = socket.inet_ntop(socket.AF_INET6, read_exact(conn, 16))
                 elif atyp == 1:
@@ -361,13 +366,14 @@ def ipv6_socks_atyp_main():
                     address = read_exact(conn, length).decode("ascii")
                 else:
                     raise RuntimeError(f"unsupported SOCKS ATYP: {atyp}")
+                stage = "read SOCKS destination port"
                 port = int.from_bytes(read_exact(conn, 2), "big")
                 observed.update(atyp=atyp, address=address, port=port)
                 # A successful CONNECT response is enough to test the upstream
                 # SOCKS address encoding; no external IPv6 network is required.
                 conn.sendall(b"\x05\x00\x00\x04" + socket.inet_pton(socket.AF_INET6, "::1") + b"\x00\x00")
         except Exception as exc:
-            observed["error"] = str(exc)
+            observed.update(error=str(exc), stage=stage)
 
     server_thread = threading.Thread(target=fake_socks_server, daemon=True)
     server_thread.start()
@@ -407,7 +413,7 @@ rules:
                 raise RuntimeError("Mihomo mixed-port did not become ready")
 
             with socket.create_connection(("127.0.0.1", mixed), timeout=5) as client:
-                client.settimeout(15)
+                client.settimeout(45)
                 client.sendall(b"\x05\x01\x00")
                 if read_exact(client, 2) != b"\x05\x00":
                     raise RuntimeError("Mihomo SOCKS listener rejected no-auth method")
@@ -428,11 +434,11 @@ rules:
             # The assertion is about the bytes observed by the fake upstream,
             # not whether its worker has completed Python socket cleanup. On
             # emulated ARM64, thread teardown can lag after the exchange succeeds.
-            observation_deadline = time.monotonic() + 20
+            observation_deadline = time.monotonic() + 45
             while time.monotonic() < observation_deadline and "atyp" not in observed and not observed.get("error"):
                 time.sleep(0.05)
             if observed.get("error"):
-                raise RuntimeError(f"fake SOCKS5 upstream failed: {observed['error']}")
+                raise RuntimeError(f"fake SOCKS5 upstream failed during {observed.get('stage', 'unknown stage')}: {observed['error']}")
             if "atyp" not in observed:
                 raise RuntimeError(f"fake SOCKS5 upstream did not observe the IPv6 ATYP exchange within 20 seconds: {observed!r}")
             server_thread.join(timeout=0.5)
