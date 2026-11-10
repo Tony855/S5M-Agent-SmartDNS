@@ -2523,6 +2523,16 @@ func TestMarkAgentBindingCommittedClearsStaleConnectionFailure(t *testing.T) {
 	if agentConnected.Load() {
 		t.Fatal("new binding must not be reported connected before WebSocket welcome")
 	}
+	if markAgentConnectionFailed(previousGeneration) {
+		t.Fatal("failure from the superseded binding must not overwrite the new binding state")
+	}
+	if agentConnectionFailed.Load() {
+		t.Fatal("stale session failure unexpectedly marked the new binding offline")
+	}
+	currentGeneration := agentBindingGeneration.Load()
+	if !markAgentConnectionFailed(currentGeneration) || !agentConnectionFailed.Load() {
+		t.Fatal("failure from the current binding must remain visible")
+	}
 }
 
 func TestTryLockAgentBindRejectsConcurrentRequests(t *testing.T) {
