@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -139,7 +140,8 @@ func normalizeNoSmartDNSBootstrapResolver(raw string) (string, bool) {
 		return "", false
 	}
 	if port != "" {
-		if port == "0" || strings.Trim(port, "0123456789") != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
 			return "", false
 		}
 	}
