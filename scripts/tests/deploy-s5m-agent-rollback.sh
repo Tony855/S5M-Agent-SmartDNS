@@ -41,6 +41,7 @@ case "$cmd" in
     ;;
   stop)
     status="$(get_status "$1")" || exit 1
+    [[ "${FAIL_STOP:-false}" != "true" ]] || exit 1
     write_state "$1" stopped
     exit 0
     ;;
@@ -77,6 +78,7 @@ case "$cmd" in
     exit 0
     ;;
   rm)
+    [[ "${FAIL_RM:-false}" != "true" ]] || exit 1
     delete_state "${@: -1}"
     exit 0
     ;;
@@ -106,4 +108,44 @@ if run_deploy FAIL_PULL=true; then
   exit 1
 fi
 [[ "$(cat "$TMP/state")" == "s5m-agent|running" ]]
-echo "Legacy Agent deployment argv boundaries and pull/start/health rollback paths verified."
+
+# A failed stop must abort before rename/run and must preserve the original
+# running container and persistent data.
+mkdir -p "$TMP/stop-failure-data"
+printf 'preserve-me\n' > "$TMP/stop-failure-data/identity"
+cat > "$TMP/stop-failure.conf" <<EOF
+DATA_DIR="$TMP/stop-failure-data"
+EOF
+printf 's5m-agent|running\n' > "$TMP/state"
+: > "$TMP/docker.log"
+if run_deploy CONFIG_FILE="$TMP/stop-failure.conf" FAIL_STOP=true; then
+  echo "deploy unexpectedly proceeded after docker stop failure" >&2
+  exit 1
+fi
+[[ "$(cat "$TMP/state")" == "s5m-agent|running" ]]
+[[ "$(cat "$TMP/stop-failure-data/identity")" == "preserve-me" ]]
+if grep -Eq '^(rename|run) ' "$TMP/docker.log"; then
+  echo "stop failure must abort before rename or new container creation" >&2
+  cat "$TMP/docker.log" >&2
+  exit 1
+fi
+
+# A failed container removal during explicit wipe must never delete the data
+# directory, even though the old container has already stopped.
+mkdir -p "$TMP/rm-failure-data"
+printf 'preserve-me-too\n' > "$TMP/rm-failure-data/identity"
+cat > "$TMP/rm-failure.conf" <<EOF
+DATA_DIR="$TMP/rm-failure-data"
+EOF
+printf 's5m-agent|running\n' > "$TMP/state"
+: > "$TMP/docker.log"
+if run_deploy CONFIG_FILE="$TMP/rm-failure.conf" FAIL_RM=true FULL_RESET=true \
+  WIPE_DATA=true ALLOW_DATA_WIPE=true CONFIRM_DATA_WIPE="DELETE:$TMP/rm-failure-data"; then
+  echo "data wipe unexpectedly proceeded after docker rm failure" >&2
+  exit 1
+fi
+[[ -f "$TMP/rm-failure-data/identity" ]]
+[[ "$(cat "$TMP/rm-failure-data/identity")" == "preserve-me-too" ]]
+[[ "$(cat "$TMP/state")" == "s5m-agent|stopped" ]]
+
+echo "Legacy Agent deployment stop, data-wipe safety and rollback paths verified."

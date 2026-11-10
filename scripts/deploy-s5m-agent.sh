@@ -328,6 +328,30 @@ do_pull_no_smartdns() {
   warn "重新部署会保留 ${DATA_DIR} 中的数据"
 }
 
+# A failed docker stop must never be treated as success. Verify the
+# daemon's observed state before renaming a container or deleting its data.
+stop_container_checked() {
+  local name="$1" state
+  if ! docker stop "${name}" >/dev/null 2>&1; then
+    state="$(docker inspect "${name}" --format '{{.State.Status}}' 2>/dev/null)" || {
+      err "停止命令失败且无法确认容器状态：${name}"
+      return 1
+    }
+    if [[ "${state}" != "exited" && "${state}" != "created" ]]; then
+      err "停止容器失败，当前状态为 ${state}：${name}"
+      return 1
+    fi
+  fi
+  state="$(docker inspect "${name}" --format '{{.State.Status}}' 2>/dev/null)" || {
+    err "停止后无法确认容器状态：${name}"
+    return 1
+  }
+  [[ "${state}" == "exited" || "${state}" == "created" ]] || {
+    err "容器仍未停止（${state}）：${name}"
+    return 1
+  }
+}
+
 # ---------- 重建 / 部署 ----------
 restore_previous_container() {
   local backup_container="$1"
@@ -380,8 +404,18 @@ do_recreate() {
   if [[ "${wipe_data}" == "true" ]]; then
     if container_exists; then
       log "停止并删除旧容器（已明确确认数据清除）"
-      docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-      docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+      if ! stop_container_checked "${CONTAINER_NAME}"; then
+        err "无法确认旧容器已停止；为保护数据，取消清理"
+        return 1
+      fi
+      if ! docker rm "${CONTAINER_NAME}" >/dev/null 2>&1; then
+        err "删除旧容器失败；为保护数据，保留数据目录并取消清理"
+        return 1
+      fi
+      if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+        err "旧容器删除后仍可被检查到；为保护数据，保留数据目录并取消清理"
+        return 1
+      fi
     fi
     if [[ -d "${DATA_DIR}" || -L "${DATA_DIR}" ]]; then
       log "删除旧数据目录 ${DATA_DIR}"
@@ -395,12 +429,22 @@ do_recreate() {
       return 1
     fi
     if container_exists; then
-      backup_container="${CONTAINER_NAME}-rollback-$(date +%s)-$$"
+      backup_container="${CONTAINER_NAME}-rollback-$(date +%s)-${BASHPID}"
       log "停止旧容器并保留回滚副本：${backup_container}"
-      docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+      if ! stop_container_checked "${CONTAINER_NAME}"; then
+        err "无法确认旧容器已停止，已取消部署且保留原容器"
+        return 1
+      fi
       if ! docker rename "${CONTAINER_NAME}" "${backup_container}"; then
         docker start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
         err "无法保留旧容器回滚副本，已取消部署"
+        return 1
+      fi
+      local backup_state
+      backup_state="$(docker inspect "${backup_container}" --format '{{.State.Status}}' 2>/dev/null)" || backup_state="unknown"
+      if [[ "${backup_state}" != "exited" && "${backup_state}" != "created" ]]; then
+        err "旧容器暂存后状态不是已停止（${backup_state}），取消部署并恢复旧容器"
+        restore_previous_container "${backup_container}" || true
         return 1
       fi
     fi
