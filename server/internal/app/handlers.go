@@ -1223,7 +1223,7 @@ func copyDatabaseFileAtomic(source, destination string) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(info.Mode().Perm() & 0o600); err != nil {
+	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return err
 	}
