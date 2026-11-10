@@ -1936,7 +1936,7 @@ func (a *App) Rollback(version int) (*ConfigVersion, error) {
 
 	candidate := a.cfg.ConfigPath + ".rollback-candidate"
 	defer os.Remove(candidate)
-	if err := os.WriteFile(candidate, []byte(yml), 0o600); err != nil {
+	if err := writeConfigFileAtomic(candidate, []byte(yml), 0o600); err != nil {
 		return nil, fmt.Errorf("写入候选配置失败，未回滚: %w", err)
 	}
 
