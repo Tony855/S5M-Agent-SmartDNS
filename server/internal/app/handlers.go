@@ -2778,15 +2778,17 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	// counter, they have no ABA/revocation role and must be reclaimed on delete.
 	delete(a.agentTelemetryPersistAt, code)
 	delete(a.agentTelemetryLogAt, code)
-	// Close the live socket immediately so a revoked idle Agent cannot remain
-	// connected until its next heartbeat timeout.
+	// Detach the live socket under the session mutex, then close it after
+	// releasing the global lock: WebSocket close writes can block on network I/O.
+	var revokedSession *agentWSConnection
 	if session := a.agentWSConnections[code]; session != nil {
 		delete(a.agentWSConnections, code)
-		if session.conn != nil {
-			closeAgentWebSocket(session.conn, "Agent authorization revoked")
-		}
+		revokedSession = session
 	}
 	a.agentWSMu.Unlock()
+	if revokedSession != nil && revokedSession.conn != nil {
+		closeAgentWebSocket(revokedSession.conn, "Agent authorization revoked")
+	}
 
 	// Publish only after revocation is committed and the Agent heartbeat lock is released.
 	a.publishBrowserEvent(map[string]any{
