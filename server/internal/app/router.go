@@ -191,8 +191,22 @@ func (w *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 var _ http.Hijacker = (*statusResponseWriter)(nil)
 
+const httpRequestBodyReadTimeout = 2 * time.Minute
+
 func withRecover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ReadHeaderTimeout protects only headers. Bound request-body reads too,
+		// otherwise an unauthenticated client can hold a handler/goroutine open
+		// indefinitely by slowly streaming a small body. Do not use Server.ReadTimeout:
+		// this server also upgrades long-lived Agent/browser WebSockets, whose
+		// handlers install their own heartbeat/read deadlines after the upgrade.
+		controller := http.NewResponseController(w)
+		readDeadlineSet := controller.SetReadDeadline(time.Now().Add(httpRequestBodyReadTimeout)) == nil
+		defer func() {
+			if readDeadlineSet {
+				_ = controller.SetReadDeadline(time.Time{})
+			}
+		}()
 		defer func() {
 			if e := recover(); e != nil {
 				slog.Error("系统发生 Panic 崩溃", "error", e, "path", r.URL.Path)
