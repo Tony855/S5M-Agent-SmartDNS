@@ -2639,12 +2639,7 @@ func clearAgentActiveWebSocket(conn *websocket.Conn) {
 	agentActiveWSMu.Unlock()
 }
 
-func closeAgentActiveWebSocketForRebind() {
-	agentActiveWSMu.Lock()
-	conn := agentActiveWSConn
-	agentActiveWSConn = nil
-	agentConnected.Store(false)
-	agentActiveWSMu.Unlock()
+func closeAgentWebSocketForRebind(conn *websocket.Conn) {
 	if conn == nil {
 		return
 	}
@@ -2653,6 +2648,63 @@ func closeAgentActiveWebSocketForRebind() {
 		time.Now().Add(time.Second))
 	_ = conn.Close()
 }
+
+func closeAgentActiveWebSocketForRebind() {
+	agentActiveWSMu.Lock()
+	conn := agentActiveWSConn
+	agentActiveWSConn = nil
+	agentConnected.Store(false)
+	agentActiveWSMu.Unlock()
+	closeAgentWebSocketForRebind(conn)
+}
+
+// markAgentBindingCommitted serializes the generation change and stale status
+// reset with connection-failure publication. A late failure from the old
+// session can therefore never overwrite the new binding's connecting state.
+func markAgentBindingCommitted() {
+	agentActiveWSMu.Lock()
+	agentBindingGeneration.Add(1)
+	conn := agentActiveWSConn
+	agentActiveWSConn = nil
+	agentConnected.Store(false)
+	agentConnectionFailed.Store(false)
+	agentActiveWSMu.Unlock()
+	closeAgentWebSocketForRebind(conn)
+}
+
+func markAgentConnectionFailed(expectedGeneration uint64) bool {
+	agentActiveWSMu.Lock()
+	defer agentActiveWSMu.Unlock()
+	if agentBindingGeneration.Load() != expectedGeneration {
+		return false
+	}
+	agentConnectionFailed.Store(true)
+	return true
+}
+
+// runAgentConnectionAttempt treats the HTTP health probe as diagnostic only.
+// A transient health endpoint failure must not prevent the authoritative
+// authenticated WebSocket handshake from being attempted.
+func runAgentConnectionAttempt(cfg Config, generation uint64, probe func(Config) error, session func(Config, uint64) error) (bool, error) {
+	if agentBindingGeneration.Load() != generation {
+		return false, nil
+	}
+	sessionErr := session(cfg, generation)
+	// A rebind may invalidate the session while its handshake is in flight.
+	// Do not let that stale attempt publish an error for the newly saved binding.
+	if agentBindingGeneration.Load() != generation {
+		return false, nil
+	}
+	if sessionErr != nil && !isAgentAuthorizationRevoked(sessionErr) {
+		// Probe only after the authenticated WebSocket attempt has failed. This
+		// preserves HTTP diagnostics without delaying or gating control-plane recovery.
+		if probeErr := probe(cfg); probeErr != nil {
+			fmt.Printf("主控 HTTP 连通性探测失败（仅诊断）: %s\n", safeMihomoValidationDiagnostic([]byte(probeErr.Error())))
+		}
+	}
+	return true, sessionErr
+}
+
 
 var agentConnected atomic.Bool
 var agentConnectionFailed atomic.Bool
@@ -2833,8 +2885,7 @@ func main() {
 			}
 			// Only after the new token is durably committed do we close the old
 			// session. Failed registration or disk writes leave it untouched.
-			agentBindingGeneration.Add(1)
-			closeAgentActiveWebSocketForRebind()
+			markAgentBindingCommitted()
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{"message": "绑定成功"})
 		})
@@ -2866,21 +2917,12 @@ func main() {
 		if routeErr := refreshAndApplyCentralRouteExclusions(cfg.CentralURL); routeErr != nil {
 			fmt.Printf("刷新主控直连排除地址失败（将继续重试）: %s\n", safeMihomoValidationDiagnostic([]byte(routeErr.Error())))
 		}
-		if err := probeControllerHTTP(cfg); err != nil {
-			agentConnectionFailed.Store(true)
-			fmt.Printf("主控 HTTP 连通性探测失败（仅用于诊断，不传输状态/配置/命令）: %s\n", safeMihomoValidationDiagnostic([]byte(err.Error())))
-			// Jitter probe failures too, so large Agent fleets do not retry in lockstep.
-			time.Sleep(reconnectDelayWithJitter(backoff))
-			backoff = nextReconnectDelay(backoff)
-			continue
-		}
-		// A bind may complete while the HTTP probe is running. Never start a
-		// session using credentials read before the latest successful bind.
-		if agentBindingGeneration.Load() != bindingGeneration {
-			continue
-		}
 		sessionStarted := time.Now()
-		if err := runAgentWebSocketSession(cfg, bindingGeneration); err != nil {
+		attempted, sessionErr := runAgentConnectionAttempt(cfg, bindingGeneration, probeControllerHTTP, runAgentWebSocketSession)
+		if !attempted {
+			continue
+		}
+		if err := sessionErr; err != nil {
 			if isAgentAuthorizationRevoked(err) {
 				if clearErr := clearRevokedAgentBinding(); clearErr != nil {
 					fmt.Printf("撤销授权后清除本地凭证失败: %s\n", safeMihomoValidationDiagnostic([]byte(clearErr.Error())))
@@ -2890,7 +2932,7 @@ func main() {
 				backoff = 2 * time.Second
 				continue
 			}
-			agentConnectionFailed.Store(true)
+			markAgentConnectionFailed(bindingGeneration)
 			fmt.Printf("Agent WebSocket 会话断开: %s\n", safeMihomoValidationDiagnostic([]byte(err.Error())))
 		}
 		// A session that stayed healthy for at least two minutes resets the

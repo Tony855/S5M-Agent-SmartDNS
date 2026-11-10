@@ -84,13 +84,18 @@
     } catch(e) { document.getElementById('machineId').innerText = '获取失败'; if (!document.getElementById('hostname').innerText || document.getElementById('hostname').innerText === '读取主机名中...') document.getElementById('hostname').innerText = '读取失败'; setStatus('error', 'Agent 后端无响应'); }
   };
   let bindingStatusRequest = false;
+  let bindingStatusRevision = 0;
+  let bindingStatusRefreshQueued = false;
   async function refreshBindingStatus() {
-    if (bindingStatusRequest) return;
+    if (bindingStatusRequest) { bindingStatusRefreshQueued = true; return; }
     bindingStatusRequest = true;
+    const requestRevision = bindingStatusRevision;
     try {
       const res = await fetchWithTimeout('/api/config?t=' + Date.now(), {}, 4000);
       if (!res.ok) throw new Error('状态查询失败');
       const data = await res.json();
+      // Ignore status responses started before a bind/rebind transition.
+      if (requestRevision !== bindingStatusRevision) return;
       const btn = document.getElementById('btn');
       if (data.config_readable === false) {
         btn.innerText = data.has_token ? '重新绑定' : '绑定设备';
@@ -118,6 +123,10 @@
       // Retain the last state when the local API briefly fails.
     } finally {
       bindingStatusRequest = false;
+      if (bindingStatusRefreshQueued) {
+        bindingStatusRefreshQueued = false;
+        void refreshBindingStatus();
+      }
     }
   }
 
@@ -136,7 +145,7 @@
     if (!url) return showMsg('主控服务器地址未配置，请联系管理员。', false);
     if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
     if (/^https?:\/\/$/i.test(url)) return showMsg('主控服务器地址配置无效，请联系管理员。', false);
-    const btn = document.getElementById('btn'); bindingInProgress = true; btn.innerText = '正在绑定...'; updateBindButton(); setStatus('', '正在绑定设备…');
+    const btn = document.getElementById('btn'); bindingStatusRevision++; bindingInProgress = true; btn.innerText = '正在绑定...'; updateBindButton(); setStatus('', '正在绑定设备…');
     try {
       const res = await fetchWithTimeout('/api/bind', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({central_url: url, secret: secret}) }, 20000);
       const text = await res.text(); let data = {};
@@ -148,6 +157,8 @@
       // Registration only persists credentials; the WebSocket connects asynchronously.
       // Re-enable the button so a failed/expired connection can be retried without reload.
       btn.innerText = '重新绑定';
+      bindingStatusRevision++;
+      setStatus('', '绑定成功，正在连接主控端…');
       await refreshBindingStatus();
     } catch (e) {
       // The local Agent returns an allowlisted, non-secret diagnostic from the controller.

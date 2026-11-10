@@ -2325,6 +2325,25 @@ func TestRegistrationPageAllowsAllSafeControllerDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRegistrationPageIgnoresStaleBindingStatusResponses(t *testing.T) {
+	page, err := os.ReadFile("index.html")
+	if err != nil { t.Fatalf("read registration page: %v", err) }
+	content := string(page)
+	for _, required := range []string{"let bindingStatusRevision = 0;", "const requestRevision = bindingStatusRevision;", "if (requestRevision !== bindingStatusRevision) return;", "bindingStatusRefreshQueued = true;", "bindingStatusRevision++;"} {
+		if !strings.Contains(content, required) { t.Fatalf("registration page missing stale-response guard %q", required) }
+	}
+}
+
+func TestRegistrationPageShowsConnectingImmediatelyAfterBind(t *testing.T) {
+	page, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read registration page: %v", err)
+	}
+	if !strings.Contains(string(page), "setStatus('', '绑定成功，正在连接主控端…')") {
+		t.Fatal("successful registration must immediately show connecting instead of retaining a stale offline state")
+	}
+}
+
 func TestRegistrationPageDisablesCaching(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -2427,6 +2446,111 @@ func TestAgentHTTPServerHasBoundedTimeoutsAndHeaders(t *testing.T) {
 		server.WriteTimeout != 20*time.Second || server.IdleTimeout != 60*time.Second ||
 		server.MaxHeaderBytes != 16<<10 {
 		t.Fatalf("Agent HTTP server limits changed unexpectedly: %#v", server)
+	}
+}
+
+func TestRunAgentConnectionAttemptDoesNotGateWebSocketOnHTTPProbe(t *testing.T) {
+	generation := agentBindingGeneration.Load()
+	probeErr := fmt.Errorf("health endpoint temporarily unavailable")
+	websocketErr := fmt.Errorf("websocket handshake failed")
+	probeCalled := false
+	sessionCalled := false
+	attempted, err := runAgentConnectionAttempt(
+		Config{CentralURL: "https://controller.example", Token: "test-token"},
+		generation,
+		func(Config) error {
+			if !sessionCalled {
+				t.Fatal("HTTP health probe must not run before the WebSocket attempt")
+			}
+			probeCalled = true
+			return probeErr
+		},
+		func(cfg Config, gotGeneration uint64) error {
+			sessionCalled = true
+			if cfg.CentralURL != "https://controller.example" || cfg.Token != "test-token" {
+				t.Fatalf("session received unexpected config: %#v", cfg)
+			}
+			if gotGeneration != generation {
+				t.Fatalf("session generation = %d, want %d", gotGeneration, generation)
+			}
+			return websocketErr
+		},
+	)
+	if !attempted {
+		t.Fatal("current binding generation must attempt WebSocket")
+	}
+	if !errors.Is(err, websocketErr) {
+		t.Fatalf("returned error = %v, want WebSocket error %v", err, websocketErr)
+	}
+	if !sessionCalled || !probeCalled {
+		t.Fatalf("sessionCalled=%v probeCalled=%v, want both true", sessionCalled, probeCalled)
+	}
+}
+
+
+func TestRunAgentConnectionAttemptIgnoresFailureFromSupersededBinding(t *testing.T) {
+	previousGeneration := agentBindingGeneration.Load()
+	agentBindingGeneration.Store(previousGeneration + 1)
+	generation := agentBindingGeneration.Load()
+	t.Cleanup(func() { agentBindingGeneration.Store(previousGeneration) })
+	probeCalled := false
+	attempted, err := runAgentConnectionAttempt(
+		Config{CentralURL: "https://old-controller.example", Token: "old-token"},
+		generation,
+		func(Config) error {
+			probeCalled = true
+			return fmt.Errorf("old binding probe failure")
+		},
+		func(Config, uint64) error {
+			// Simulate a rebind closing this in-flight session.
+			agentBindingGeneration.Add(1)
+			return fmt.Errorf("old WebSocket session closed during rebind")
+		},
+	)
+	if attempted || err != nil {
+		t.Fatalf("superseded session result = attempted:%v err:%v, want false,nil", attempted, err)
+	}
+	if probeCalled {
+		t.Fatal("superseded session must not run diagnostics against old credentials")
+	}
+}
+
+func TestMarkAgentBindingCommittedClearsStaleConnectionFailure(t *testing.T) {
+	previousGeneration := agentBindingGeneration.Load()
+	previousFailed := agentConnectionFailed.Load()
+	previousConnected := agentConnected.Load()
+	agentActiveWSMu.Lock()
+	previousConn := agentActiveWSConn
+	agentActiveWSConn = nil
+	agentActiveWSMu.Unlock()
+	agentConnectionFailed.Store(true)
+	t.Cleanup(func() {
+		agentBindingGeneration.Store(previousGeneration)
+		agentConnectionFailed.Store(previousFailed)
+		agentConnected.Store(previousConnected)
+		agentActiveWSMu.Lock()
+		agentActiveWSConn = previousConn
+		agentActiveWSMu.Unlock()
+	})
+	markAgentBindingCommitted()
+	if agentBindingGeneration.Load() != previousGeneration+1 {
+		t.Fatal("committing a new binding must invalidate previous connection attempts")
+	}
+	if agentConnectionFailed.Load() {
+		t.Fatal("committing a new binding must clear stale connection failure state")
+	}
+	if agentConnected.Load() {
+		t.Fatal("new binding must not be reported connected before WebSocket welcome")
+	}
+	if markAgentConnectionFailed(previousGeneration) {
+		t.Fatal("failure from the superseded binding must not overwrite the new binding state")
+	}
+	if agentConnectionFailed.Load() {
+		t.Fatal("stale session failure unexpectedly marked the new binding offline")
+	}
+	currentGeneration := agentBindingGeneration.Load()
+	if !markAgentConnectionFailed(currentGeneration) || !agentConnectionFailed.Load() {
+		t.Fatal("failure from the current binding must remain visible")
 	}
 }
 
