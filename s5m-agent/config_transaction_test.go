@@ -487,6 +487,31 @@ func TestWriteTransactionBackupPreservingPriorRemovesNewSidecarAfterFailure(t *t
 }
 
 
+func TestFallbackTransitionDoesNotRequireHealthyOldSmartDNS(t *testing.T) {
+	_, _ = setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(t.TempDir(), "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+	// The real disable transition reaches the fallback transaction before it
+	// writes the durable disabled marker. The old SmartDNS daemon may already
+	// be broken; that must not prevent committing a healthy Mihomo fallback.
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) { return false, nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionWriteControllerConfig = func([]byte) error { return nil }
+	// The test isolates the old SmartDNS health dependency; the fallback DNS
+	// probe is a separate safety gate and is stubbed as healthy here.
+	transactionProbeMihomoDNS = func([]byte) bool { return true }
+	waitCalls, restartCalls := 0, 0
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { waitCalls++; return false }
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	if err := applyAgentConfigTransactionWithFallbackProbe([]byte("fallback-mihomo"), nil, false, "", true); err != nil {
+		t.Fatalf("fallback transition must not depend on old SmartDNS health: %v", err)
+	}
+	if waitCalls != 0 || restartCalls != 0 {
+		t.Fatalf("fallback transition must not probe/restart old SmartDNS: waits=%d restarts=%d", waitCalls, restartCalls)
+	}
+}
+
 func TestConfigTransactionSkipsSmartDNSHealthWhenExplicitlyDisabled(t *testing.T) {
 	_, _ = setupConfigTransactionFixture(t)
 	oldDisabledPath := smartDNSDisabledPath
