@@ -2525,8 +2525,13 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				return message, commandConfig, commandErr
 			})
 			if journalErr != nil {
-				commandStatus = "failed"
-				message = journalErr.Error()
+				// A journal error is not an executed command result. ACKing it as
+				// "failed" would make the controller delete the pending command,
+				// even when intent/result persistence failed before or after the
+				// side effect. Keep the command pending and reconnect so the same
+				// command ID can be safely replayed from the durable journal.
+				diagnostic := safeMihomoValidationDiagnostic([]byte(journalErr.Error()))
+				return fmt.Errorf("Agent 命令执行记录无法可靠持久化，未发送 ACK，等待主控重投: %s", diagnostic)
 			}
 			message = safeMihomoValidationDiagnostic([]byte(message))
 			if len(message) > 2048 {
