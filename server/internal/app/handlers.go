@@ -1205,6 +1205,54 @@ func (a *App) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"logs": strings.Join(result, "\n")})
 }
 
+// copyDatabaseFileAtomic creates a durable, private rollback copy of a
+// closed SQLite database without ever moving the live database out of place.
+func copyDatabaseFileAtomic(source, destination string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".s5m-db-copy-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(info.Mode().Perm() & 0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := io.Copy(tmp, in); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, destination); err != nil {
+		return err
+	}
+	return syncConfigDirectory(destination)
+}
+
+func syncDatabaseFile(path string) error {
+	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
+}
+
 func (a *App) handleDownloadBackup(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	if u == nil || !u.Enabled {
@@ -1332,21 +1380,38 @@ func (a *App) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "准备恢复前备份失败")
 		return
 	}
+	// Flush the WAL before closing the live store. A raw main-database copy
+	// must never omit committed transactions still present in the WAL.
+	if _, err := a.store.db.ExecContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		writeErr(w, http.StatusInternalServerError, "刷新当前数据库 WAL 失败，拒绝恢复")
+		return
+	}
 	if err := a.store.db.Close(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "关闭当前数据库失败；请重启服务后重试")
 		return
 	}
-	if err := os.Rename(a.cfg.DBPath, backupPath); err != nil {
-		writeErr(w, http.StatusInternalServerError, "保留当前数据库失败；请重启服务后检查")
+	if err := syncDatabaseFile(a.cfg.DBPath); err != nil {
+		writeErr(w, http.StatusInternalServerError, "同步当前数据库失败；请重启服务后检查")
+		return
+	}
+	// Preserve the old database with a durable copy. Do not rename the live
+	// database away: a crash at any point must leave DBPath present.
+	if err := copyDatabaseFileAtomic(a.cfg.DBPath, backupPath); err != nil {
+		writeErr(w, http.StatusInternalServerError, "创建恢复前数据库备份失败；原数据库文件保持不变")
 		return
 	}
 	if err := os.Rename(tmpPath, a.cfg.DBPath); err != nil {
-		if rollbackErr := os.Rename(backupPath, a.cfg.DBPath); rollbackErr != nil {
-			slog.Error("数据库恢复失败且回滚失败", "restore_error", err, "rollback_error", rollbackErr, "backup", backupPath)
-			writeErr(w, http.StatusInternalServerError, "恢复失败且自动回滚失败；请保留备份文件并立即检查服务器")
+		writeErr(w, http.StatusInternalServerError, "替换数据库失败；原数据库文件保持不变")
+		return
+	}
+	if err := syncConfigDirectory(a.cfg.DBPath); err != nil {
+		rollbackErr := copyDatabaseFileAtomic(backupPath, a.cfg.DBPath)
+		if rollbackErr != nil {
+			slog.Error("数据库恢复目录同步失败且自动回滚失败", "sync_error", err, "rollback_error", rollbackErr, "backup", backupPath)
+			writeErr(w, http.StatusInternalServerError, "数据库替换持久化失败且自动回滚失败；请保留备份文件并立即检查服务器")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "恢复失败，已恢复原数据库文件；请重启服务")
+		writeErr(w, http.StatusInternalServerError, "数据库替换持久化失败，已恢复原数据库；请重启服务")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
