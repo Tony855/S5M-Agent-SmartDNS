@@ -2540,3 +2540,43 @@ func TestCommitRouteConfigReportsPreRenameFailureAsNotCommitted(t *testing.T) {
 		t.Fatalf("original config changed after pre-rename failure: got=%q err=%v", got, readErr)
 	}
 }
+
+
+func TestEnsureMihomoRuntimeVersionSkipsRestartWhenAlreadyHealthy(t *testing.T) {
+	restarts, healthChecks, rollbacks := 0, 0, 0
+	err := ensureMihomoRuntimeVersion(
+		func() error { return nil },
+		func() error { restarts++; return nil },
+		func() error { healthChecks++; return nil },
+		func() error { rollbacks++; return nil },
+	)
+	if err != nil || restarts != 0 || healthChecks != 0 || rollbacks != 0 {
+		t.Fatalf("already healthy runtime: err=%v restarts=%d health=%d rollbacks=%d", err, restarts, healthChecks, rollbacks)
+	}
+}
+
+func TestEnsureMihomoRuntimeVersionRestartsAfterInterruptedInstall(t *testing.T) {
+	restarts, healthChecks, rollbacks := 0, 0, 0
+	err := ensureMihomoRuntimeVersion(
+		func() error { return fmt.Errorf("running API still reports old version") },
+		func() error { restarts++; return nil },
+		func() error { healthChecks++; return nil },
+		func() error { rollbacks++; return nil },
+	)
+	if err != nil || restarts != 1 || healthChecks != 1 || rollbacks != 0 {
+		t.Fatalf("interrupted install recovery: err=%v restarts=%d health=%d rollbacks=%d", err, restarts, healthChecks, rollbacks)
+	}
+}
+
+func TestEnsureMihomoRuntimeVersionRollsBackWhenRecoveryHealthFails(t *testing.T) {
+	restarts, healthChecks, rollbacks := 0, 0, 0
+	err := ensureMihomoRuntimeVersion(
+		func() error { return fmt.Errorf("running API unavailable") },
+		func() error { restarts++; return nil },
+		func() error { healthChecks++; return fmt.Errorf("target version never became healthy") },
+		func() error { rollbacks++; return nil },
+	)
+	if err == nil || restarts != 1 || healthChecks != 1 || rollbacks != 1 {
+		t.Fatalf("failed recovery: err=%v restarts=%d health=%d rollbacks=%d", err, restarts, healthChecks, rollbacks)
+	}
+}
