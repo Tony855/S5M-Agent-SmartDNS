@@ -44,3 +44,16 @@ func TestAgentRegisterRejectsGlobalTokenAsDedicatedCredential(t *testing.T) {
 		t.Fatalf("registration returned a token for the global credential: %s", rec.Body.String())
 	}
 }
+
+func TestAgentRegisterRejectsOversizedUnauthenticatedRequest(t *testing.T) {
+	app, _, _ := websocketTestApp(t)
+	body := `{"machine_code":"ws_node_01","secret":"` + strings.Repeat("x", 9<<10) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	app.handleAgentRegister(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -2254,13 +2255,17 @@ func validateAgentRegistrationInput(machineCode, secret string) (string, string,
 	return machineCode, secret, ""
 }
 
+func constantTimeSecretEqual(left, right string) bool {
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}
+
 func (a *App) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		MachineCode string `json:"machine_code"`
 		Secret      string `json:"secret"`
 	}
-	if err := decode(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "参数错误")
+	if err := decodeLimited(r, 8<<10, "8 KiB", &in); err != nil {
+		writeErr(w, decodeErrorStatus(err), "参数错误")
 		return
 	}
 	var validationError string
@@ -2289,9 +2294,9 @@ func (a *App) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	// 只允许预先分配的专属 Token 注册对应机器码。
 	machineToken := settings["agent_machine_"+in.MachineCode]
 	if strings.TrimSpace(machineToken) == "" ||
-		machineToken == expectedSecret ||
-		in.Secret == expectedSecret ||
-		in.Secret != machineToken {
+		constantTimeSecretEqual(machineToken, expectedSecret) ||
+		constantTimeSecretEqual(in.Secret, expectedSecret) ||
+		!constantTimeSecretEqual(in.Secret, machineToken) {
 		writeErr(w, 403, "机器码或专属 Token 不匹配")
 		return
 	}
