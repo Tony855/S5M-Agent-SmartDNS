@@ -664,3 +664,42 @@ func TestSmartDNSDisableTransitionFallbackFailureDoesNotPersistMarkerOrStop(t *t
 		t.Fatalf("fallback failure must not persist disabled marker or stop service: marker=%d stop=%d", markerCalls, stopCalls)
 	}
 }
+
+
+func TestRollbackFailedSmartDNSEnableReportsBothCleanupFailures(t *testing.T) {
+	startErr := errors.New("simulated start failure")
+	markerErr := errors.New("simulated disabled-marker fsync failure")
+	stopErr := errors.New("simulated s6 stop failure")
+	markerCalls, stopCalls := 0, 0
+	err := rollbackFailedSmartDNSEnable(
+		startErr,
+		func(disabled bool) error {
+			markerCalls++
+			if !disabled { t.Fatal("rollback must persist disabled=true") }
+			return markerErr
+		},
+		func() error { stopCalls++; return stopErr },
+	)
+	if !errors.Is(err, startErr) || !errors.Is(err, markerErr) || !errors.Is(err, stopErr) {
+		t.Fatalf("initiating and cleanup errors must all be preserved, got %v", err)
+	}
+	if markerCalls != 1 || stopCalls != 1 {
+		t.Fatalf("rollback must attempt both cleanup operations, marker=%d stop=%d", markerCalls, stopCalls)
+	}
+}
+
+func TestRollbackFailedSmartDNSEnableSurfacesMarkerFailureEvenWhenStopSucceeds(t *testing.T) {
+	markerErr := errors.New("simulated marker persistence failure")
+	stopCalls := 0
+	err := rollbackFailedSmartDNSEnable(
+		errors.New("health check failed"),
+		func(bool) error { return markerErr },
+		func() error { stopCalls++; return nil },
+	)
+	if !errors.Is(err, markerErr) {
+		t.Fatalf("marker persistence failure must not be hidden, got %v", err)
+	}
+	if stopCalls != 1 {
+		t.Fatalf("stop must still be attempted after marker failure, got %d calls", stopCalls)
+	}
+}

@@ -303,10 +303,31 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 
 
 
-// applyAgentSmartDNSEnabled changes Mihomo DNS and the SmartDNS daemon as one
-// recoverable operation. Enabling starts and verifies SmartDNS before Mihomo
-// begins using it. Disabling commits the fallback Mihomo config before stopping
-// the daemon, and the marker survives container restarts.
+// rollbackFailedSmartDNSEnable restores the durable disabled intent and asks
+// s6 to stop a service whose first enable attempt did not complete. Cleanup
+// failures are joined with the initiating error: silently ignoring either one
+// can leave SmartDNS running or cause it to be started again after a restart.
+func rollbackFailedSmartDNSEnable(cause error, persistDisabled func(bool) error, stopService func() error) error {
+	if cause == nil {
+		cause = fmt.Errorf("SmartDNS 启用失败")
+	}
+	var cleanupErrors []error
+	if persistDisabled == nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("恢复 SmartDNS 禁用标记操作不可用"))
+	} else if err := persistDisabled(true); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("恢复 SmartDNS 禁用标记失败: %w", err))
+	}
+	if stopService == nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("停止失败的 SmartDNS 服务操作不可用"))
+	} else if err := stopService(); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("停止失败的 SmartDNS 服务失败: %w", err))
+	}
+	if len(cleanupErrors) > 0 {
+		return fmt.Errorf("%w；启用回滚失败: %w", cause, errors.Join(cleanupErrors...))
+	}
+	return cause
+}
+
 func ensureSmartDNSServiceStarted(wasEnabled bool) error {
 	if !wasEnabled {
 		if err := persistSmartDNSDisabled(false); err != nil {
@@ -314,11 +335,11 @@ func ensureSmartDNSServiceStarted(wasEnabled bool) error {
 		}
 	}
 	if err := smartDNSServiceStart(); err != nil {
+		startErr := fmt.Errorf("启动/确认 SmartDNS s6 服务失败: %w", err)
 		if !wasEnabled {
-			_ = persistSmartDNSDisabled(true)
-			_ = smartDNSServiceStop()
+			return rollbackFailedSmartDNSEnable(startErr, persistSmartDNSDisabled, smartDNSServiceStop)
 		}
-		return fmt.Errorf("启动/确认 SmartDNS s6 服务失败: %w", err)
+		return startErr
 	}
 	return nil
 }
@@ -356,6 +377,10 @@ func applyAgentSmartDNSDisableTransition(
 
 var smartDNSRuntimeTransitionMu sync.Mutex
 
+// applyAgentSmartDNSEnabled changes Mihomo DNS and the SmartDNS daemon as one
+// recoverable operation. Enabling starts and verifies SmartDNS before Mihomo
+// begins using it. Disabling commits the fallback Mihomo config before stopping
+// the daemon, and the marker survives container restarts.
 func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string) error {
 	smartDNSRuntimeTransitionMu.Lock()
 	defer smartDNSRuntimeTransitionMu.Unlock()
@@ -390,18 +415,18 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 			return err
 		}
 		if !waitForSmartDNSHealthy(5 * time.Second) {
+			healthErr := fmt.Errorf("SmartDNS 当前未通过 UDP/TCP DNS 健康检查，未切换 Mihomo")
 			if !wasEnabled {
-				_ = persistSmartDNSDisabled(true)
-				_ = smartDNSServiceStop()
+				return rollbackFailedSmartDNSEnable(healthErr, persistSmartDNSDisabled, smartDNSServiceStop)
 			}
-			return fmt.Errorf("SmartDNS 当前未通过 UDP/TCP DNS 健康检查，未切换 Mihomo")
+			return healthErr
 		}
 		if err := applyAgentConfigTransaction(mihomoYAML, smartDNSConfig, true, centralURL); err != nil {
+			transactionErr := fmt.Errorf("启用 SmartDNS 的联合配置事务失败: %w", err)
 			if !wasEnabled {
-				_ = persistSmartDNSDisabled(true)
-				_ = smartDNSServiceStop()
+				return rollbackFailedSmartDNSEnable(transactionErr, persistSmartDNSDisabled, smartDNSServiceStop)
 			}
-			return fmt.Errorf("启用 SmartDNS 的联合配置事务失败: %w", err)
+			return transactionErr
 		}
 		return nil
 	}
