@@ -870,7 +870,7 @@ const (
 )
 
 func parseMihomoVersion(output []byte) string {
-	match := regexp.MustCompile("Mihomo Meta (v[0-9]+\.[0-9]+\.[0-9]+)").FindSubmatch(output)
+	match := regexp.MustCompile("Mihomo Meta (v[0-9]+[.][0-9]+[.][0-9]+)").FindSubmatch(output)
 	if len(match) < 2 {
 		return "unknown"
 	}
@@ -881,7 +881,7 @@ func validateMihomoReleaseAsset(asset mihomoReleaseAsset, version string) error 
 	if asset.Size <= 0 || asset.Size > maxMihomoCompressedAssetBytes {
 		return fmt.Errorf("Mihomo 压缩更新包大小无效或超过 128 MiB")
 	}
-	if !regexp.MustCompile("^mihomo-linux-amd64-compatible-" + regexp.QuoteMeta(version) + "\.gz$").MatchString(asset.Name) {
+	if !regexp.MustCompile("^mihomo-linux-amd64-compatible-" + regexp.QuoteMeta(version) + "[.]gz$").MatchString(asset.Name) {
 		return fmt.Errorf("Mihomo 更新资产名称与目标版本不匹配")
 	}
 	if !strings.HasPrefix(asset.Digest, "sha256:") {
