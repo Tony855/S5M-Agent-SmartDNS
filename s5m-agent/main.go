@@ -2671,6 +2671,11 @@ func runAgentConnectionAttempt(cfg Config, generation uint64, probe func(Config)
 		return false, nil
 	}
 	sessionErr := session(cfg, generation)
+	// A rebind may invalidate the session while its handshake is in flight.
+	// Do not let that stale attempt publish an error for the newly saved binding.
+	if agentBindingGeneration.Load() != generation {
+		return false, nil
+	}
 	if sessionErr != nil && !isAgentAuthorizationRevoked(sessionErr) {
 		// Probe only after the authenticated WebSocket attempt has failed. This
 		// preserves HTTP diagnostics without delaying or gating control-plane recovery.
