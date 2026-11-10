@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,27 @@ import (
 	"strings"
 	"time"
 )
+
+const (
+	maxMihomoAPIResponseBytes      = 64 << 10
+	maxMihomoAPIErrorResponseBytes = 4 << 10
+)
+
+// readMihomoAPIResponse reads at most maxBytes+1 bytes so oversized responses
+// are detected even when the peer omits Content-Length or streams chunked data.
+func readMihomoAPIResponse(body io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("Mihomo API 响应大小限制无效")
+	}
+	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("读取 Mihomo API 响应失败: %w", err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("Mihomo API 响应超过 %d 字节限制", maxBytes)
+	}
+	return data, nil
+}
 
 func (a *App) mihomoReq(method, path string, body io.Reader) (*http.Response, error) {
 	url := strings.TrimRight(a.cfg.MihomoAPI, "/") + path
@@ -32,8 +54,11 @@ func (a *App) ReloadMihomo() error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
+		raw, readErr := readMihomoAPIResponse(resp.Body, maxMihomoAPIErrorResponseBytes)
+		if readErr != nil {
+			return fmt.Errorf("HTTP %d: %w", resp.StatusCode, readErr)
+		}
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
 }
@@ -50,11 +75,18 @@ func (a *App) MihomoInfo() map[string]any {
 		out["error"] = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		return out
 	}
-	var v map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&v); err == nil {
-		out["online"] = true
-		out["version"] = v
+	raw, err := readMihomoAPIResponse(resp.Body, maxMihomoAPIResponseBytes)
+	if err != nil {
+		out["error"] = err.Error()
+		return out
 	}
+	var v map[string]any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		out["error"] = "Mihomo /version 响应格式无效"
+		return out
+	}
+	out["online"] = true
+	out["version"] = v
 	return out
 }
 
@@ -67,13 +99,17 @@ func (a *App) runningMihomoAPIVersion() (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMihomoAPIErrorResponseBytes))
 		return "", fmt.Errorf("Mihomo /version 返回 HTTP %d", resp.StatusCode)
+	}
+	raw, err := readMihomoAPIResponse(resp.Body, 16<<10)
+	if err != nil {
+		return "", fmt.Errorf("读取 Mihomo /version 响应失败: %w", err)
 	}
 	var payload struct {
 		Version string `json:"version"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<10)).Decode(&payload); err != nil {
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &payload); err != nil {
 		return "", fmt.Errorf("解析 Mihomo /version 响应失败: %w", err)
 	}
 	version := strings.TrimPrefix(strings.TrimSpace(payload.Version), "v")

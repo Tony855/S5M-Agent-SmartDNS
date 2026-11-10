@@ -629,10 +629,12 @@ func (a *App) handleOverview(w http.ResponseWriter, r *http.Request) {
 				UploadTotal   uint64 `json:"uploadTotal"`
 				Connections   []any  `json:"connections"`
 			}
-			if json.NewDecoder(resp.Body).Decode(&data) == nil {
-				downloadTotal = data.DownloadTotal
-				uploadTotal = data.UploadTotal
-				connections = data.Connections
+			if raw, readErr := readMihomoAPIResponse(resp.Body, 2<<20); readErr == nil {
+				if json.Unmarshal(raw, &data) == nil {
+					downloadTotal = data.DownloadTotal
+					uploadTotal = data.UploadTotal
+					connections = data.Connections
+				}
 			}
 		}
 	}
@@ -834,8 +836,9 @@ func (a *App) handleMonitorTraffic(w http.ResponseWriter, _ *http.Request) {
 		UploadTotal   uint64 `json:"uploadTotal"`
 		Connections   []any  `json:"connections"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&data); err != nil {
-		writeErr(w, http.StatusBadGateway, "Mihomo 流量数据格式无效")
+	raw, readErr := readMihomoAPIResponse(resp.Body, 2<<20)
+	if readErr != nil || json.Unmarshal(raw, &data) != nil {
+		writeErr(w, http.StatusBadGateway, "Mihomo 流量数据格式无效或超过 2 MiB 限制")
 		return
 	}
 	now := time.Now()
