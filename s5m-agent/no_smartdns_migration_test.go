@@ -294,3 +294,58 @@ func TestCreateNoSmartDNSBackupDoesNotReplaceExistingBackup(t *testing.T) {
 		t.Fatalf("one-time backup must never be overwritten: %q", got)
 	}
 }
+
+func TestNoSmartDNSMigrationEnforcesEncryptedLiteralIPBootstrap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte(`dns:
+  default-nameserver:
+    - udp://8.8.8.8
+    - tcp://9.9.9.9:53
+    - dns.google
+    - tls://dns.cloudflare.com
+  proxy-server-nameserver:
+    - http://1.1.1.1/dns-query
+    - 1.0.0.1
+    - tls://[2606:4700:4700::1111]:853
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateNoSmartDNSConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(got, &root); err != nil {
+		t.Fatalf("parse migrated config: %v", err)
+	}
+	dns := noSmartDNSMapValue(root.Content[0], "dns")
+	for _, key := range []string{"default-nameserver", "proxy-server-nameserver"} {
+		resolvers := noSmartDNSMapValue(dns, key)
+		if resolvers == nil || resolvers.Kind != yaml.SequenceNode || len(resolvers.Content) == 0 {
+			t.Fatalf("%s must retain safe bootstrap resolvers: %#v", key, resolvers)
+		}
+		for _, resolver := range resolvers.Content {
+			if resolver.Kind != yaml.ScalarNode {
+				t.Fatalf("%s contains non-scalar resolver: %#v", key, resolver)
+			}
+			normalized, ok := normalizeNoSmartDNSBootstrapResolver(resolver.Value)
+			if !ok || normalized != resolver.Value {
+				t.Fatalf("%s contains insecure or hostname bootstrap resolver %q", key, resolver.Value)
+			}
+		}
+	}
+	text := string(got)
+	for _, unsafe := range []string{"udp://8.8.8.8", "tcp://9.9.9.9", "dns.google", "tls://dns.cloudflare.com", "http://1.1.1.1"} {
+		if strings.Contains(text, unsafe) {
+			t.Fatalf("insecure or hostname bootstrap resolver survived migration (%s): %s", unsafe, text)
+		}
+	}
+	if !strings.Contains(text, "tls://1.0.0.1") || !strings.Contains(text, "tls://[2606:4700:4700::1111]:853") {
+		t.Fatalf("valid literal-IP DoT bootstrap resolvers were not preserved/normalized: %s", text)
+	}
+}
+

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -102,24 +103,112 @@ func noSmartDNSMapValue(n *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-func secureNoSmartDNSBootstrapResolvers(n *yaml.Node) bool {
-	if n == nil { return false }
-	changed := false
-	if n.Kind == yaml.SequenceNode {
-		for _, child := range n.Content { if secureNoSmartDNSBootstrapResolvers(child) { changed = true } }
-		return changed
+// normalizeNoSmartDNSBootstrapResolver accepts only encrypted DoT endpoints
+// whose destination is a literal IP. Hostnames would require a second bootstrap
+// lookup, while udp/tcp/http schemes would bypass the encrypted-bootstrap policy.
+func normalizeNoSmartDNSBootstrapResolver(raw string) (string, bool) {
+	value := strings.TrimSpace(strings.Trim(raw, "\"'"))
+	if value == "" {
+		return "", false
 	}
-	if n.Kind != yaml.ScalarNode { return false }
-	value := strings.TrimSpace(n.Value)
-	if strings.Contains(value, "://") { return false }
-	ip := net.ParseIP(strings.Trim(value, "[]"))
-	if ip == nil { return false }
+	scheme := ""
+	if i := strings.Index(value, "://"); i >= 0 {
+		scheme = strings.ToLower(value[:i])
+		value = value[i+3:]
+		if scheme != "tls" {
+			return "", false
+		}
+	}
+	if strings.ContainsAny(value, "/?#@") {
+		return "", false
+	}
+	host := value
+	port := ""
+	if strings.HasPrefix(value, "[") {
+		if h, p, err := net.SplitHostPort(value); err == nil {
+			host, port = h, p
+		} else {
+			host = strings.Trim(value, "[]")
+		}
+	} else if strings.Count(value, ":") == 1 {
+		if h, p, err := net.SplitHostPort(value); err == nil {
+			host, port = h, p
+		}
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return "", false
+	}
+	if port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return "", false
+		}
+	}
+	endpoint := ip.String()
 	if ip.To4() == nil {
-		n.Value = "tls://[" + ip.String() + "]"
-	} else {
-		n.Value = "tls://" + ip.String()
+		endpoint = "[" + endpoint + "]"
 	}
-	return true
+	if port != "" {
+		endpoint = net.JoinHostPort(strings.Trim(ip.String(), "[]"), port)
+	}
+	return "tls://" + endpoint, true
+}
+
+func secureNoSmartDNSBootstrapResolvers(n *yaml.Node) bool {
+	if n == nil {
+		return false
+	}
+	defaults := func() []*yaml.Node {
+		return []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.5.5.5"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tls://223.6.6.6"},
+		}
+	}
+	if n.Kind == yaml.ScalarNode {
+		normalized, ok := normalizeNoSmartDNSBootstrapResolver(n.Value)
+		if ok {
+			if n.Value != normalized {
+				n.Value = normalized
+				return true
+			}
+			return false
+		}
+		n.Kind, n.Tag, n.Value = yaml.SequenceNode, "!!seq", ""
+		n.Content = defaults()
+		return true
+	}
+	if n.Kind != yaml.SequenceNode {
+		n.Kind, n.Tag = yaml.SequenceNode, "!!seq"
+		n.Content = defaults()
+		return true
+	}
+	changed := false
+	seen := make(map[string]bool, len(n.Content))
+	kept := make([]*yaml.Node, 0, len(n.Content))
+	for _, child := range n.Content {
+		if child == nil || child.Kind != yaml.ScalarNode {
+			changed = true
+			continue
+		}
+		normalized, ok := normalizeNoSmartDNSBootstrapResolver(child.Value)
+		if !ok || seen[normalized] {
+			changed = true
+			continue
+		}
+		if child.Value != normalized {
+			child.Value = normalized
+			changed = true
+		}
+		seen[normalized] = true
+		kept = append(kept, child)
+	}
+	if len(kept) == 0 {
+		kept = defaults()
+		changed = true
+	}
+	n.Content = kept
+	return changed
 }
 
 func ensureNoSmartDNSProxyAwareDNS(dns *yaml.Node) bool {
