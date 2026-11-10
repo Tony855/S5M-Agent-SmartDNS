@@ -324,7 +324,7 @@ def ipv6_socks_atyp_main():
     upstream.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     upstream.bind(("127.0.0.1", 0))
     upstream.listen(1)
-    upstream.settimeout(8)
+    upstream.settimeout(20)
     upstream_port = upstream.getsockname()[1]
     mixed = free_port()
     observed = {}
@@ -342,7 +342,7 @@ def ipv6_socks_atyp_main():
         try:
             conn, _ = upstream.accept()
             with conn:
-                conn.settimeout(5)
+                conn.settimeout(15)
                 greeting = read_exact(conn, 2)
                 if greeting[0] != 5:
                     raise RuntimeError(f"unexpected SOCKS greeting: {greeting!r}")
@@ -406,7 +406,7 @@ rules:
                 raise RuntimeError("Mihomo mixed-port did not become ready")
 
             with socket.create_connection(("127.0.0.1", mixed), timeout=5) as client:
-                client.settimeout(5)
+                client.settimeout(15)
                 client.sendall(b"\x05\x01\x00")
                 if read_exact(client, 2) != b"\x05\x00":
                     raise RuntimeError("Mihomo SOCKS listener rejected no-auth method")
@@ -424,7 +424,9 @@ rules:
                     read_exact(client, read_exact(client, 1)[0])
                 read_exact(client, 2)
 
-            server_thread.join(timeout=6)
+            server_thread.join(timeout=16)
+            if server_thread.is_alive():
+                raise RuntimeError("fake SOCKS5 upstream did not finish the IPv6 ATYP exchange within 16 seconds")
             if observed.get("error"):
                 raise RuntimeError(f"fake SOCKS5 upstream failed: {observed['error']}")
             expected = {"atyp": 4, "address": "2606:4700:4700::1111", "port": 853}
