@@ -2325,6 +2325,15 @@ func TestRegistrationPageAllowsAllSafeControllerDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRegistrationPageIgnoresStaleBindingStatusResponses(t *testing.T) {
+	page, err := os.ReadFile("index.html")
+	if err != nil { t.Fatalf("read registration page: %v", err) }
+	content := string(page)
+	for _, required := range []string{"let bindingStatusRevision = 0;", "const requestRevision = bindingStatusRevision;", "if (requestRevision !== bindingStatusRevision) return;", "bindingStatusRefreshQueued = true;", "bindingStatusRevision++;"} {
+		if !strings.Contains(content, required) { t.Fatalf("registration page missing stale-response guard %q", required) }
+	}
+}
+
 func TestRegistrationPageShowsConnectingImmediatelyAfterBind(t *testing.T) {
 	page, err := os.ReadFile("index.html")
 	if err != nil {
