@@ -914,7 +914,10 @@ func copyFileAtomic(source, destination string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, destination)
+	if err := os.Rename(tmpPath, destination); err != nil {
+		return err
+	}
+	return syncConfigDirectory(destination)
 }
 
 func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
@@ -1106,6 +1109,20 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 		msg := "替换 Mihomo 二进制失败: " + err.Error()
 		if startErr != nil {
 			msg += "; 旧服务重新启动失败: " + strings.TrimSpace(string(startOutput))
+		}
+		writeErr(w, http.StatusInternalServerError, msg)
+		return
+	}
+	if err := syncConfigDirectory(binaryPath); err != nil {
+		rollbackErr := copyFileAtomic(backupPath, binaryPath)
+		startOutput, startErr := exec.Command("systemctl", "start", "mihomo").CombinedOutput()
+		msg := "同步新 Mihomo 二进制目录项失败: " + err.Error()
+		if rollbackErr != nil {
+			msg += "; 自动恢复旧二进制失败: " + rollbackErr.Error()
+		} else if startErr != nil {
+			msg += "; 已恢复旧二进制，但旧服务启动失败: " + strings.TrimSpace(string(startOutput))
+		} else {
+			msg += "; 已恢复旧二进制并重新启动服务"
 		}
 		writeErr(w, http.StatusInternalServerError, msg)
 		return

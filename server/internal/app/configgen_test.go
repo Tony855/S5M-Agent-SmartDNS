@@ -2592,3 +2592,53 @@ func TestGameModeWithoutEligibleProxyRejectsGameDestinations(t *testing.T) {
 		t.Fatal("game traffic must never fall back to DIRECT when no proxy exists")
 	}
 }
+
+func TestWriteConfigFileAtomicDurable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("old: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigFileAtomic(path, []byte("new: true\n"), 0o640); err != nil {
+		t.Fatalf("writeConfigFileAtomic() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new: true\n" {
+		t.Fatalf("config = %q, want new content", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("config mode = %o, want 640", info.Mode().Perm())
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".s5m-config-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary config files were left behind: %v", matches)
+	}
+}
+
+func TestRemoveConfigFileDurable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("old: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeConfigFileDurable(path); err != nil {
+		t.Fatalf("removeConfigFileDurable() error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("config should be removed, stat error = %v", err)
+	}
+	// Removing an already absent file is intentionally idempotent.
+	if err := removeConfigFileDurable(path); err != nil {
+		t.Fatalf("second removeConfigFileDurable() error = %v", err)
+	}
+}
