@@ -2,10 +2,13 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,4 +174,55 @@ func TestAcquireMihomoServerUpdateSerializesRequests(t *testing.T) {
 		t.Fatal("update lock should be available after the first request releases it")
 	}
 	defer thirdUnlock()
+}
+
+
+func TestDownloadMihomoAssetEnforcesStreamingLimitWithoutContentLength(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Transfer-Encoding", "chunked")
+		_, _ = io.WriteString(w, "123456789")
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "asset.gz")
+	err := downloadMihomoAsset(context.Background(), server.Client(), server.URL, path, 4)
+	if err == nil {
+		t.Fatal("chunked response larger than limit was accepted")
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized partial download was not removed: stat err=%v", statErr)
+	}
+}
+
+func TestDownloadMihomoAssetAcceptsBoundedHTTPSResponse(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4")
+		_, _ = io.WriteString(w, "1234")
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "asset.gz")
+	if err := downloadMihomoAsset(context.Background(), server.Client(), server.URL, path, 4); err != nil {
+		t.Fatalf("bounded HTTPS download failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "1234" {
+		t.Fatalf("downloaded bytes = %q, err=%v", got, err)
+	}
+}
+
+func TestDownloadMihomoAssetRejectsHTTPSDowngradeRedirect(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "1234")
+	}))
+	defer plain.Close()
+	tls := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL, http.StatusFound)
+	}))
+	defer tls.Close()
+	path := filepath.Join(t.TempDir(), "asset.gz")
+	if err := downloadMihomoAsset(context.Background(), tls.Client(), tls.URL, path, 8); err == nil {
+		t.Fatal("HTTPS-to-HTTP redirect was accepted")
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("redirect failure left a partial file: stat err=%v", statErr)
+	}
 }
