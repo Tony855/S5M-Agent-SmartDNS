@@ -303,10 +303,6 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 
 
 
-// applyAgentSmartDNSEnabled changes Mihomo DNS and the SmartDNS daemon as one
-// recoverable operation. Enabling starts and verifies SmartDNS before Mihomo
-// begins using it. Disabling commits the fallback Mihomo config before stopping
-// the daemon, and the marker survives container restarts.
 // rollbackFailedSmartDNSEnable restores the durable disabled intent and asks
 // s6 to stop a service whose first enable attempt did not complete. Cleanup
 // failures are joined with the initiating error: silently ignoring either one
@@ -381,6 +377,10 @@ func applyAgentSmartDNSDisableTransition(
 
 var smartDNSRuntimeTransitionMu sync.Mutex
 
+// applyAgentSmartDNSEnabled changes Mihomo DNS and the SmartDNS daemon as one
+// recoverable operation. Enabling starts and verifies SmartDNS before Mihomo
+// begins using it. Disabling commits the fallback Mihomo config before stopping
+// the daemon, and the marker survives container restarts.
 func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string) error {
 	smartDNSRuntimeTransitionMu.Lock()
 	defer smartDNSRuntimeTransitionMu.Unlock()
