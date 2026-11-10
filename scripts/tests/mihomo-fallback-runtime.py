@@ -376,7 +376,6 @@ def ipv6_socks_atyp_main():
             observed.update(error=str(exc), stage=stage)
 
     server_thread = threading.Thread(target=fake_socks_server, daemon=True)
-    server_thread.start()
     name = NAME + "-ipv6-atyp"
     with tempfile.TemporaryDirectory(prefix="mihomo-ipv6-atyp-") as temp:
         config = f"""\
@@ -412,6 +411,10 @@ rules:
             else:
                 raise RuntimeError("Mihomo mixed-port did not become ready")
 
+            # Start the fake upstream only after the emulated ARM64 container
+            # is ready. Starting it before docker run lets QEMU image startup
+            # consume the listener's accept timeout before Mihomo can connect.
+            server_thread.start()
             with socket.create_connection(("127.0.0.1", mixed), timeout=5) as client:
                 client.settimeout(45)
                 client.sendall(b"\x05\x01\x00")
@@ -452,7 +455,8 @@ rules:
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             upstream.close()
-            server_thread.join(timeout=1)
+            if server_thread.ident is not None:
+                server_thread.join(timeout=1)
 
 
 if __name__ == "__main__":
