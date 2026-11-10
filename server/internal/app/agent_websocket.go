@@ -800,6 +800,16 @@ func sanitizeAgentWebSocketText(value string) string {
 	return detail
 }
 
+// sanitizeAgentStatusDiagnostics prevents Agent-provided error details from
+// leaking credentials or local paths into persisted status, logs, and browser events.
+func sanitizeAgentStatusDiagnostics(status map[string]any) {
+	for _, key := range []string{"last_error", "traffic_error", "connections_error"} {
+		if value, ok := status[key].(string); ok {
+			status[key] = sanitizeAgentWebSocketText(value)
+		}
+	}
+}
+
 func safeAgentWebSocketError(operation string, err error) string {
 	detail := "未知错误"
 	if err != nil && strings.TrimSpace(err.Error()) != "" {
@@ -895,6 +905,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": err.Error()})
 				continue
 			}
+			sanitizeAgentStatusDiagnostics(msg.Status)
 			receivedAt := time.Now()
 			telemetry := map[string]any{
 				"upload_speed": msg.Status["upload_speed"],
@@ -1048,6 +1059,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
+		sanitizeAgentStatusDiagnostics(msg.Status)
 		receivedAt := time.Now()
 		msg.Status["received_at"] = receivedAt.Unix()
 		payload, marshalErr := json.Marshal(msg.Status)

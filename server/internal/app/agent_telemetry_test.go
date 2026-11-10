@@ -23,6 +23,26 @@ func validAgentTelemetry() map[string]any {
 	}
 }
 
+func TestSanitizeAgentWSStatusDiagnosticsRedactsSecretsAndPaths(t *testing.T) {
+	status := map[string]any{
+		"last_error": "token=agent-secret failed at /opt/s5m-agent/data/config.yaml",
+		"traffic_error": "password=proxy-secret",
+		"connections_error": "Authorization: Bearer bearer-secret",
+	}
+	sanitizeAgentStatusDiagnostics(status)
+	for _, key := range []string{"last_error", "traffic_error", "connections_error"} {
+		value, ok := status[key].(string)
+		if !ok {
+			t.Fatalf("%s was not retained as a string: %#v", key, status[key])
+		}
+		for _, secret := range []string{"agent-secret", "proxy-secret", "bearer-secret", "/opt/s5m-agent/data"} {
+			if strings.Contains(value, secret) {
+				t.Fatalf("%s leaked %q after sanitization: %q", key, secret, value)
+			}
+		}
+	}
+}
+
 func TestValidateAgentWSTelemetryRejectsMalformedMetrics(t *testing.T) {
 	if err := validateAgentWSTelemetry(validAgentTelemetry()); err != nil {
 		t.Fatalf("valid telemetry rejected: %v", err)
@@ -50,6 +70,42 @@ func TestValidateAgentWSTelemetryRejectsMalformedMetrics(t *testing.T) {
 	}
 }
 
+func TestHTTPAgentHeartbeatRedactsSensitiveDiagnosticsBeforePersistence(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	status := map[string]any{
+		"mihomo_version": "v1.19.3",
+		"mihomo_healthy": true,
+		"upload_total": float64(1),
+		"download_total": float64(2),
+		"upload_speed": float64(3),
+		"download_speed": float64(4),
+		"connections": float64(1),
+		"config_sha256": "",
+		"last_error": "token=http-secret failed at /opt/s5m-agent/data/config.yaml",
+	}
+	body, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/heartbeat", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	app.handleAgentHeartbeat(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("heartbeat status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	settings, err := app.store.GetSettings()
+	if err != nil { t.Fatal(err) }
+	var persisted map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_"+code]), &persisted); err != nil {
+		t.Fatalf("decode persisted status: %v", err)
+	}
+	got, _ := persisted["last_error"].(string)
+	for _, secret := range []string{"http-secret", "/opt/s5m-agent/data"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("HTTP heartbeat persisted sensitive diagnostic %q: %q", secret, got)
+		}
+	}
+}
+
 func TestAgentWebSocketPersistsThrottledTelemetrySnapshot(t *testing.T) {
 	app, code, token := websocketTestApp(t)
 	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
@@ -65,6 +121,8 @@ func TestAgentWebSocketPersistsThrottledTelemetrySnapshot(t *testing.T) {
 	if err := conn.ReadJSON(&welcome); err != nil { t.Fatalf("read welcome: %v", err) }
 
 	telemetry := validAgentTelemetry()
+	telemetry["traffic_error"] = "token=ws-traffic-secret"
+	telemetry["connections_error"] = "Authorization: Bearer ws-bearer-secret"
 	telemetry["telemetry_stale"] = true
 	telemetry["telemetry_sampled_at_ms"] = float64(1793520000000)
 	if err := conn.WriteJSON(map[string]any{"type": "telemetry", "status": telemetry}); err != nil {
@@ -80,6 +138,12 @@ func TestAgentWebSocketPersistsThrottledTelemetrySnapshot(t *testing.T) {
 			if saved["telemetry_received_at_ms"] == nil { t.Fatal("telemetry timestamp was not persisted") }
 			if saved["telemetry_stale"] != true { t.Fatalf("stale flag was not forwarded: %#v", saved["telemetry_stale"]) }
 			if saved["telemetry_sampled_at_ms"] != float64(1793520000000) { t.Fatalf("sample timestamp was not forwarded: %#v", saved["telemetry_sampled_at_ms"]) }
+			for _, key := range []string{"traffic_error", "connections_error"} {
+				value, _ := saved[key].(string)
+				for _, secret := range []string{"ws-traffic-secret", "ws-bearer-secret"} {
+					if strings.Contains(value, secret) { t.Fatalf("%s leaked %q: %q", key, secret, value) }
+				}
+			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

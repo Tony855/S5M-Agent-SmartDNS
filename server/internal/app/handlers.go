@@ -2411,6 +2411,8 @@ func (a *App) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "心跳数据无效: "+err.Error())
 		return
 	}
+	// HTTP is a fallback transport too; never persist or expose raw Agent diagnostics.
+	sanitizeAgentStatusDiagnostics(in)
 	code, authErr := a.agentMachineFromRequest(r)
 	if authErr != nil {
 		status := http.StatusUnauthorized
