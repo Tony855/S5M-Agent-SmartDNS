@@ -48,6 +48,8 @@ rules:
 	}
 	backup, err := os.ReadFile(path+".pre-no-smartdns"); if err != nil { t.Fatal(err) }
 	if string(backup) != string(original) { t.Fatal("one-time backup does not match original config") }
+	backupInfo, err := os.Stat(path+".pre-no-smartdns"); if err != nil { t.Fatal(err) }
+	if backupInfo.Mode().Perm() != 0600 { t.Fatalf("one-time backup must be private, got mode %o", backupInfo.Mode().Perm()) }
 	var parsed map[string]any
 	if err := yaml.Unmarshal(got, &parsed); err != nil { t.Fatalf("migrated YAML invalid: %v", err) }
 	if parsed["secret"] != "keep-this-secret" { t.Fatal("API secret changed") }
@@ -249,5 +251,46 @@ rules:
 	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
 	if strings.Contains(string(got), "SMARTDNS-PROXY") || strings.Contains(string(got), "PROCESS-NAME,smartdns") {
 		t.Fatalf("routing remnants survived config without DNS section: %s", got)
+	}
+}
+
+func TestMigrateNoSmartDNSConfigRejectsSymlinkedBackupWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	backupPath := path + ".pre-no-smartdns"
+	targetPath := filepath.Join(dir, "external-target")
+	original := []byte("dns:\n  enable: true\n  nameserver: [127.0.0.1:6053]\n")
+	target := []byte("do-not-overwrite")
+	if err := os.WriteFile(path, original, 0600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, target, 0600); err != nil { t.Fatal(err) }
+	if err := os.Symlink(targetPath, backupPath); err != nil { t.Fatal(err) }
+
+	if err := migrateNoSmartDNSConfig(path); err == nil {
+		t.Fatal("expected symlinked one-time backup to be rejected")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil { t.Fatal(err) }
+	if string(got) != string(original) {
+		t.Fatalf("config must remain unchanged when backup path is unsafe: %q", got)
+	}
+	gotTarget, err := os.ReadFile(targetPath)
+	if err != nil { t.Fatal(err) }
+	if string(gotTarget) != string(target) {
+		t.Fatalf("external symlink target was unexpectedly modified: %q", gotTarget)
+	}
+}
+
+func TestCreateNoSmartDNSBackupDoesNotReplaceExistingBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml.pre-no-smartdns")
+	existing := []byte("dns: {}\n")
+	if err := os.WriteFile(path, existing, 0600); err != nil { t.Fatal(err) }
+	if err := createNoSmartDNSBackup(path, []byte("dns: {nameserver: [9.9.9.9]}\n")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil { t.Fatal(err) }
+	if string(got) != string(existing) {
+		t.Fatalf("one-time backup must never be overwritten: %q", got)
 	}
 }
