@@ -2261,7 +2261,7 @@ func constantTimeSecretEqual(left, right string) bool {
 
 func (a *App) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	clientKey := "agent-register:" + loginClientKey(r)
-	if allowed, retryAfter := agentRegistrationLimiter.allow(clientKey, time.Now()); !allowed {
+	if allowed, retryAfter := agentRegistrationLimiter.allowWithLimit(clientKey, time.Now(), agentRegistrationAttemptLimit); !allowed {
 		seconds := int(math.Ceil(retryAfter.Seconds()))
 		if seconds < 1 {
 			seconds = 1
