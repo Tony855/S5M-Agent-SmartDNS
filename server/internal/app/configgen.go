@@ -986,14 +986,15 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	rawRouting, routingSettingExists := settings["smartdns_routing_config"]
 	applySharedFallback := false
 	var routing SmartDNSRoutingConfig
-	if routingSettingExists && strings.TrimSpace(rawRouting) != "" {
+	if routingSettingExists && strings.TrimSpace(rawRouting) != "" &&
+		strings.TrimSpace(machineCode) != "" && !nodeSmartDNSDisabled && !noSmartDNSAgent {
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
 		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
 			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
 		}
-		applySharedFallback = strings.TrimSpace(machineCode) != "" && !nodeSmartDNSDisabled && !noSmartDNSAgent
+		applySharedFallback = true
 	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
 		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") && !noSmartDNSAgent {
 		routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
