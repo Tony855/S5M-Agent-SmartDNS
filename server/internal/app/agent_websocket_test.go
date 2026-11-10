@@ -1914,3 +1914,75 @@ func TestQueueAgentSmartDNSDisableIncludesFallbackMihomoConfig(t *testing.T) {
 		t.Fatalf("disable command must carry a SmartDNS-free fallback config: %s", mihomoConfig)
 	}
 }
+
+
+func TestAgentWebSocketRegistrationWaitsForInFlightCommand(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	dial := func() (*websocket.Conn, error) {
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+		return conn, err
+	}
+	oldConn, err := dial()
+	if err != nil { t.Fatalf("dial original Agent socket: %v", err) }
+	defer oldConn.Close()
+	_ = oldConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var welcome map[string]any
+	if err := oldConn.ReadJSON(&welcome); err != nil { t.Fatalf("read original welcome: %v", err) }
+
+	// Hold the per-Agent command lock to model a command send/ACK already past
+	// its authorization check. A replacement session must wait for that operation.
+	unlockCommand := app.lockAgentWSCommand(code)
+	newConnCh := make(chan *websocket.Conn, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		conn, err := dial()
+		if err != nil { errCh <- err; return }
+		newConnCh <- conn
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	waiting := false
+	for time.Now().Before(deadline) {
+		app.agentWSCommandMu.Lock()
+		lock := app.agentWSCommandLocks[code]
+		waiting = lock != nil && lock.refs >= 2
+		app.agentWSCommandMu.Unlock()
+		if waiting { break }
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !waiting {
+		unlockCommand()
+		t.Fatal("replacement WebSocket did not wait on the in-flight per-Agent command lock")
+	}
+	app.agentWSMu.Lock()
+	generation := app.agentWSGeneration[code]
+	app.agentWSMu.Unlock()
+	if generation != 1 {
+		unlockCommand()
+		t.Fatalf("generation advanced while command operation was locked: got %d want 1", generation)
+	}
+
+	unlockCommand()
+	var newConn *websocket.Conn
+	select {
+	case err := <-errCh:
+		t.Fatalf("dial replacement Agent socket: %v", err)
+	case newConn = <-newConnCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement Agent socket did not register after command lock release")
+	}
+	defer newConn.Close()
+	_ = newConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := newConn.ReadJSON(&welcome); err != nil { t.Fatalf("read replacement welcome: %v", err) }
+	app.agentWSMu.Lock()
+	generation = app.agentWSGeneration[code]
+	app.agentWSMu.Unlock()
+	if generation != 2 {
+		t.Fatalf("replacement generation = %d, want 2", generation)
+	}
+}
