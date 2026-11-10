@@ -1600,9 +1600,9 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 	// After an Agent crash between rename and restart/health-check, reconcile the
 	// runtime version before acknowledging the retried command.
 	stage = "check-current-version"
-	fmt.Printf("mihomo_update: checking current version command_id=%q\\n", cmd.ID)
+	fmt.Printf("mihomo_update: checking current version command_id=%q\n", cmd.ID)
 	if output, err := exec.Command(binaryPath, "-v").CombinedOutput(); err == nil {
-		versionPattern := regexp.MustCompile(`\\bv` + regexp.QuoteMeta(strings.TrimPrefix(cmd.Version, "v")) + `\\b`)
+		versionPattern := regexp.MustCompile(`\bv` + regexp.QuoteMeta(strings.TrimPrefix(cmd.Version, "v")) + `\b`)
 		if versionPattern.Match(output) {
 			configData, readErr := os.ReadFile(configPath)
 			if readErr != nil {
@@ -1641,7 +1641,7 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 			if err := syncDirectoryForFile(binaryPath); err != nil {
 				return "", fmt.Errorf("运行态已确认目标版本，但同步备份清理失败: %w", err)
 			}
-			fmt.Printf("mihomo_update: recovered command_id=%q reason=runtime-version-verified duration_ms=%d\\n", cmd.ID, time.Since(started).Milliseconds())
+			fmt.Printf("mihomo_update: recovered command_id=%q reason=runtime-version-verified duration_ms=%d\n", cmd.ID, time.Since(started).Milliseconds())
 			return "Mihomo 磁盘和运行态均已确认目标版本 " + cmd.Version + "，升级重试已恢复", nil
 		}
 	}
