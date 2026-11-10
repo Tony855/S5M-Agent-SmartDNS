@@ -848,14 +848,15 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	// used by revocation before registering this socket: telemetry intentionally
 	// relies on the registered session generation instead of querying SQLite
 	// for every frame.
-	a.agentWSMu.Lock()
+	// The per-Agent lock fences revocation and replacement while this
+	// credential lookup runs. Keep SQLite reads outside the global session mutex.
 	currentCode, authErr := a.agentMachineFromRequest(r)
 	if authErr != nil || currentCode != machineCode {
-		a.agentWSMu.Unlock()
 		unlockCommand()
 		closeAgentWebSocket(conn, "Agent binding is no longer authorized")
 		return
 	}
+	a.agentWSMu.Lock()
 
 	// A newly authenticated connection supersedes any older connection for the
 	// same Agent. Older sockets may still be blocked in ReadJSON, so every
