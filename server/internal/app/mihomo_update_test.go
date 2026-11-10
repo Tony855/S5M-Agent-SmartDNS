@@ -148,7 +148,7 @@ func TestDecompressMihomoAssetEnforcesOutputLimitAndChecksum(t *testing.T) {
 		t.Fatal("decompressed output exceeding the configured limit was accepted")
 	}
 	valid := makeGzip([]byte("checksum"))
-	valid[len(valid)-1] ^= 0xff
+	valid[len(valid)-8] ^= 0xff
 	if err := decompressMihomoAsset(bytes.NewReader(valid), io.Discard); err == nil {
 		t.Fatal("gzip checksum mismatch was accepted")
 	}
