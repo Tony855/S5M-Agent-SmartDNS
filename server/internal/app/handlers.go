@@ -2260,6 +2260,16 @@ func constantTimeSecretEqual(left, right string) bool {
 }
 
 func (a *App) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
+	clientKey := "agent-register:" + loginClientKey(r)
+	if allowed, retryAfter := agentRegistrationLimiter.allow(clientKey, time.Now()); !allowed {
+		seconds := int(math.Ceil(retryAfter.Seconds()))
+		if seconds < 1 {
+			seconds = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeErr(w, http.StatusTooManyRequests, "Agent 注册请求过于频繁，请稍后重试")
+		return
+	}
 	var in struct {
 		MachineCode string `json:"machine_code"`
 		Secret      string `json:"secret"`
