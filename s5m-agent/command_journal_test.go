@@ -187,3 +187,23 @@ func TestReadAgentCommandJournalAcceptsValidRunningEntry(t *testing.T) {
 		t.Fatalf("journal mismatch: got %+v want %+v", got, entry)
 	}
 }
+
+func TestExecuteAgentCommandWithJournalDoesNotRunWhenJournalIsUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MIHOMO_HOME", home)
+	// A directory at the journal path makes the no-follow reader reject the
+	// journal before the command's side-effect callback can run.
+	if err := os.Mkdir(agentCommandJournalPath(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	executions := 0
+	status, _, _, err := executeAgentCommandWithJournal(agentCommand{
+		ID: "cmd-journal-unavailable", Type: "set_smartdns_enabled",
+	}, func() (string, string, error) {
+		executions++
+		return "unexpected", "", nil
+	})
+	if err == nil || status != "failed" || executions != 0 {
+		t.Fatalf("unavailable journal must prevent execution: status=%q executions=%d err=%v", status, executions, err)
+	}
+}
