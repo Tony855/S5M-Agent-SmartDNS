@@ -425,11 +425,17 @@ rules:
                     read_exact(client, read_exact(client, 1)[0])
                 read_exact(client, 2)
 
-            server_thread.join(timeout=16)
-            if server_thread.is_alive():
-                raise RuntimeError("fake SOCKS5 upstream did not finish the IPv6 ATYP exchange within 16 seconds")
+            # The assertion is about the bytes observed by the fake upstream,
+            # not whether its worker has completed Python socket cleanup. On
+            # emulated ARM64, thread teardown can lag after the exchange succeeds.
+            observation_deadline = time.monotonic() + 20
+            while time.monotonic() < observation_deadline and "atyp" not in observed and not observed.get("error"):
+                time.sleep(0.05)
             if observed.get("error"):
                 raise RuntimeError(f"fake SOCKS5 upstream failed: {observed['error']}")
+            if "atyp" not in observed:
+                raise RuntimeError(f"fake SOCKS5 upstream did not observe the IPv6 ATYP exchange within 20 seconds: {observed!r}")
+            server_thread.join(timeout=0.5)
             expected = {"atyp": 4, "address": "2606:4700:4700::1111", "port": 853}
             if observed != expected:
                 raise RuntimeError(f"IPv6 destination was not preserved as SOCKS5 ATYP=4: {observed!r}")
