@@ -1088,6 +1088,10 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 		// revocation/session replacement, but never hold the global session mutex
 		// while SQLite performs a potentially blocking write.
 		unlockNode := a.lockAgentWSCommand(machineCode)
+		// Revocation and session replacement also take unlockNode first, so
+		// credential lookup can safely happen without holding the global mutex.
+		// This avoids blocking unrelated Agents on a SQLite read.
+		authorizedCode, authErr := a.agentMachineFromRequest(r)
 		a.agentWSMu.Lock()
 		if a.agentWSGeneration[machineCode] != generation {
 			a.agentWSMu.Unlock()
@@ -1100,10 +1104,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Revalidate credentials for heartbeats as well as config/command
-		// operations. This closes the handshake/revocation race where a socket
-		// authenticated just before revocation could register its generation
-		// just after the revocation handler removed the binding.
-		authorizedCode, authErr := a.agentMachineFromRequest(r)
+		// operations. The per-Agent lock fences revocation while this lookup runs.
 		if authErr != nil || authorizedCode != machineCode {
 			a.agentWSMu.Unlock()
 			unlockNode()
