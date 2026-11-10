@@ -931,32 +931,41 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			if sampledAt, ok := msg.Status["telemetry_sampled_at_ms"]; ok {
 				telemetry["telemetry_sampled_at_ms"] = sampledAt
 			}
+			// Serialize persisted state changes per Agent, not globally. Revocation
+			// and session replacement take the same per-Agent lock before agentWSMu.
+			// This keeps a node's heartbeat/telemetry snapshots ordered while allowing
+			// unrelated nodes to proceed during SQLite I/O.
+			unlockNode := a.lockAgentWSCommand(machineCode)
 			a.agentWSMu.Lock()
 			if a.agentWSGeneration[machineCode] != generation || a.agentWSConnections[machineCode] != session {
 				a.agentWSMu.Unlock()
+				unlockNode()
 				return
 			}
 			// The socket was authenticated at upgrade. Its generation/session
 			// identity is the revocation fence; do not hit the credential store
 			// for every 200ms telemetry frame. Heartbeats still revalidate tokens.
 			// Keep the latest snapshot in the existing status record at most once
-			// every 5 seconds. Browser updates remain high-frequency and are never
-			// coupled to SQLite write latency.
+			// every 5 seconds.
 			if a.agentTelemetryPersistAt == nil {
 				a.agentTelemetryPersistAt = make(map[string]time.Time)
 			}
 			if a.agentTelemetryLogAt == nil {
 				a.agentTelemetryLogAt = make(map[string]time.Time)
 			}
+			shouldPersist := receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second
 			if shouldLogAgentTelemetry(receivedAt, a.agentTelemetryLogAt[machineCode], time.Minute) {
 				a.agentTelemetryLogAt[machineCode] = receivedAt
 				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%v download_speed=%v upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\n",
 					machineCode, telemetry["upload_speed"], telemetry["download_speed"], telemetry["upload_total"], telemetry["download_total"], telemetry["connections"], telemetry["telemetry_stale"], telemetry["traffic_error"], telemetry["connections_error"])
 			}
-			if receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second {
+			if shouldPersist {
 				// Throttle failed persistence attempts too; a database outage must
 				// not turn every 200ms frame into another database read/write.
 				a.agentTelemetryPersistAt[machineCode] = receivedAt
+			}
+			a.agentWSMu.Unlock()
+			if shouldPersist {
 				settings, settingsErr := a.store.GetSettings()
 				if settingsErr != nil {
 					fmt.Printf("agent_ws: telemetry snapshot read failed machine_code=%q: %s\n", machineCode, safeAgentWebSocketError("读取统计快照", settingsErr))
@@ -983,7 +992,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			a.agentWSMu.Unlock()
+			unlockNode()
 			a.publishBrowserEvent(map[string]any{"type": "agent.telemetry.updated", "machine_code": machineCode, "received_at_ms": receivedAt.UnixMilli(), "status": telemetry})
 			_ = conn.SetReadDeadline(time.Now().Add(agentWSHeartbeatTTL))
 			continue
@@ -1075,9 +1084,18 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		now := strconv.FormatInt(receivedAt.Unix(), 10)
+		// Serialize this Agent's heartbeat with its telemetry persistence and
+		// revocation/session replacement, but never hold the global session mutex
+		// while SQLite performs a potentially blocking write.
+		unlockNode := a.lockAgentWSCommand(machineCode)
+		// Revocation and session replacement also take unlockNode first, so
+		// credential lookup can safely happen without holding the global mutex.
+		// This avoids blocking unrelated Agents on a SQLite read.
+		authorizedCode, authErr := a.agentMachineFromRequest(r)
 		a.agentWSMu.Lock()
 		if a.agentWSGeneration[machineCode] != generation {
 			a.agentWSMu.Unlock()
+			unlockNode()
 			_ = writeAgentWSJSON(conn, machineCode, map[string]string{
 				"type":    "error",
 				"id":      msg.ID,
@@ -1086,12 +1104,10 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Revalidate credentials for heartbeats as well as config/command
-		// operations. This closes the handshake/revocation race where a socket
-		// authenticated just before revocation could register its generation
-		// just after the revocation handler removed the binding.
-		authorizedCode, authErr := a.agentMachineFromRequest(r)
+		// operations. The per-Agent lock fences revocation while this lookup runs.
 		if authErr != nil || authorizedCode != machineCode {
 			a.agentWSMu.Unlock()
+			unlockNode()
 			_ = writeAgentWSJSON(conn, machineCode, map[string]string{
 				"type":    "error",
 				"id":      msg.ID,
@@ -1104,6 +1120,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		if receivedAt.UnixNano() < a.agentHeartbeatAt[machineCode] {
 			a.agentWSMu.Unlock()
+			unlockNode()
 			_ = writeAgentWSJSON(conn, machineCode, map[string]string{
 				"type":    "error",
 				"id":      msg.ID,
@@ -1111,11 +1128,12 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
+		a.agentWSMu.Unlock()
 		if err := a.store.UpdateSettings(map[string]string{
 			"agent_lastseen_" + machineCode: now,
 			"agent_status_" + machineCode:   string(payload),
 		}); err != nil {
-			a.agentWSMu.Unlock()
+			unlockNode()
 			_ = writeAgentWSJSON(conn, machineCode, map[string]string{
 				"type":    "error",
 				"id":      msg.ID,
@@ -1123,8 +1141,10 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
+		a.agentWSMu.Lock()
 		a.agentHeartbeatAt[machineCode] = receivedAt.UnixNano()
 		a.agentWSMu.Unlock()
+		unlockNode()
 		a.publishBrowserEvent(map[string]any{"type": "agent.status.updated", "machine_code": machineCode, "last_seen": receivedAt.Unix(), "server_time": time.Now().Unix(), "status": msg.Status})
 		_ = conn.SetReadDeadline(time.Now().Add(agentWSHeartbeatTTL))
 		if err := writeAgentWSJSON(conn, machineCode, map[string]any{
