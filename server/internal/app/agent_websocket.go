@@ -1006,46 +1006,32 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if msg.Type == "config.request" || msg.Type == "command.request" || msg.Type == "command.ack" {
-			// Config synchronization can normalize persisted YAML, so retain its
-			// existing revocation lock. Command operations are serialized per node.
-			if msg.Type == "config.request" {
-				a.agentWSMu.Lock()
-				if a.agentWSGeneration[machineCode] != generation {
-					a.agentWSMu.Unlock()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
-					return
-				}
-				authorizedCode, authErr := a.agentMachineFromRequest(r)
-				if authErr != nil || authorizedCode != machineCode {
-					a.agentWSMu.Unlock()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
-					return
-				}
-				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
-				a.agentWSMu.Unlock()
-			} else {
-				unlockCommand := a.lockAgentWSCommand(machineCode)
-				a.agentWSMu.Lock()
-				stale := a.agentWSGeneration[machineCode] != generation
-				authorizedCode, authErr := a.agentMachineFromRequest(r)
-				a.agentWSMu.Unlock()
-				if stale {
-					unlockCommand()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
-					return
-				}
-				if authErr != nil || authorizedCode != machineCode {
-					unlockCommand()
-					_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
-					return
-				}
-				if msg.Type == "command.request" {
-					err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
-				} else {
-					err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
-				}
-				unlockCommand()
+			// Serialize each node's operation with revocation, but never hold the
+			// process-wide session mutex across credential or configuration DB I/O.
+			unlockNode := a.lockAgentWSCommand(machineCode)
+			a.agentWSMu.Lock()
+			stale := a.agentWSGeneration[machineCode] != generation
+			a.agentWSMu.Unlock()
+			if stale {
+				unlockNode()
+				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent WebSocket 连接已被更新连接取代"})
+				return
 			}
+			authorizedCode, authErr := a.agentMachineFromRequest(r)
+			if authErr != nil || authorizedCode != machineCode {
+				unlockNode()
+				_ = writeAgentWSJSON(conn, machineCode, map[string]string{"type": "error", "id": msg.ID, "message": "Agent 未授权或授权已失效"})
+				return
+			}
+			switch msg.Type {
+			case "config.request":
+				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
+			case "command.request":
+				err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
+			case "command.ack":
+				err = a.ackAgentWSCommand(machineCode, msg.ID, msg.CommandStatus, msg.Message, msg.Config)
+			}
+			unlockNode()
 			if err != nil {
 				operation := "处理 Agent WebSocket 请求"
 				if msg.Type == "config.request" {
