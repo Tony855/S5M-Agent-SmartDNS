@@ -1887,8 +1887,8 @@ func restoreMihomoKernel(binaryPath, backupPath, secret string) error {
 // restoreMihomoKernelWithRestart separates file recovery from the controller
 // request so both failure modes can be tested without a live Mihomo API.
 func restoreMihomoKernelWithRestart(binaryPath, backupPath string, restart func() error) error {
-	// Never remove the new binary before attempting replacement: if the rename
-	// fails, keep the currently installed executable available for recovery.
+	// Copy the backup atomically over the new binary and retain the backup until
+	// the caller has completed recovery and health checks.
 	if err := copyFileAtomically(backupPath, binaryPath); err != nil {
 		return fmt.Errorf("恢复旧内核文件失败: %w", err)
 	}
