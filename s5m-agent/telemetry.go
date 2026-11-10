@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultTelemetryPushInterval = 200 * time.Millisecond
+	defaultTelemetryPushInterval = time.Second
 	defaultConnectionsInterval  = 500 * time.Millisecond
 )
 
@@ -37,8 +37,9 @@ type mihomoTelemetryState struct {
 	value mihomoTelemetrySnapshot
 }
 
-// Shared by the heartbeat snapshot and the high-frequency WebSocket publisher.
-// The publisher sends snapshots through the controller's supported telemetry frame.
+// Shared by the heartbeat snapshot and the WebSocket telemetry publisher.
+// One-second publication bounds per-Agent event fanout while retaining interactive
+// dashboard updates; the underlying Mihomo counters are still sampled every 500ms.
 var agentMihomoTelemetry = &mihomoTelemetryState{}
 
 func (s *mihomoTelemetryState) update(fn func(*mihomoTelemetrySnapshot)) {

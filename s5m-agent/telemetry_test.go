@@ -32,15 +32,15 @@ func TestMihomoTelemetryStateSnapshotIsConsistent(t *testing.T) {
 }
 
 func TestTelemetryIntervalsStayWithinInteractiveDefaults(t *testing.T) {
-	if defaultTelemetryPushInterval != 200*time.Millisecond {
-		t.Fatalf("push interval = %v, want 200ms", defaultTelemetryPushInterval)
+	if defaultTelemetryPushInterval != time.Second {
+		t.Fatalf("push interval = %v, want 1s to bound per-Agent fanout", defaultTelemetryPushInterval)
 	}
 	if defaultConnectionsInterval != 500*time.Millisecond {
 		t.Fatalf("connections interval = %v, want 500ms", defaultConnectionsInterval)
 	}
 }
 
-func TestTelemetryPublisherSendsSupportedHighFrequencyFrames(t *testing.T) {
+func TestTelemetryPublisherSendsInteractiveTelemetryFrames(t *testing.T) {
 	t.Setenv("MIHOMO_HOME", t.TempDir())
 
 	previousState := agentMihomoTelemetry
