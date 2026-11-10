@@ -2328,12 +2328,10 @@ func (a *App) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serialize the legacy HTTP config endpoint with Agent revocation, and
-	// revalidate after acquiring the lock. Otherwise a request authenticated
-	// just before revocation could recreate last-seen state or return config
-	// after its binding has been removed.
-	a.agentWSMu.Lock()
-	defer a.agentWSMu.Unlock()
+	// Serialize this node's config fetch with revocation, without blocking
+	// unrelated Agents on the process-wide session mutex during database work.
+	unlockNode := a.lockAgentWSCommand(machineCode)
+	defer unlockNode()
 	currentCode, currentAuthErr := a.agentMachineFromRequest(r)
 	if currentAuthErr != nil || currentCode != machineCode {
 		writeErr(w, http.StatusUnauthorized, "Agent 授权已失效")
@@ -2599,11 +2597,10 @@ func (a *App) handleAgentCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keep command delivery serialized with credential revocation. The second
-	// authorization check closes the gap between the initial JWT validation
-	// and reading the pending command.
-	a.agentWSMu.Lock()
-	defer a.agentWSMu.Unlock()
+	// Serialize this node's command read with revocation, while allowing other
+	// Agents to proceed during credential and settings lookups.
+	unlockNode := a.lockAgentWSCommand(code)
+	defer unlockNode()
 	currentCode, authErr := a.agentMachineFromRequest(r)
 	if authErr != nil || currentCode != code {
 		writeErr(w, http.StatusUnauthorized, "Agent 授权已失效")
@@ -2650,18 +2647,17 @@ func (a *App) handleAgentCommandAck(w http.ResponseWriter, r *http.Request) {
 	// machine-local filesystem paths in command history or browser events.
 	in.Message = sanitizeAgentWebSocketText(in.Message)
 
-	// Serialize ACK persistence with Agent binding revocation, then revalidate
-	// the credential while holding the same mutex used by DeleteAgentBinding.
-	// The initial authentication above can become stale while the request is decoded.
-	a.agentWSMu.Lock()
+	// Serialize ACK persistence with revocation using the per-node lock. Recheck
+	// the credential after decoding the body, but keep SQLite I/O outside the
+	// process-wide session mutex.
+	unlockNode := a.lockAgentWSCommand(code)
+	defer unlockNode()
 	currentCode, authErr := a.agentMachineFromRequest(r)
 	if authErr != nil || currentCode != code {
-		a.agentWSMu.Unlock()
 		writeErr(w, http.StatusUnauthorized, "Agent 授权已失效")
 		return
 	}
 	duplicate, matched, err := a.store.AckAgentCommand(code, in.ID, in.Status, in.Message, time.Now().Unix())
-	a.agentWSMu.Unlock()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "原子保存命令结果失败")
 		return
@@ -2709,15 +2705,17 @@ func (a *App) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "心跳字段无法序列化")
 		return
 	}
-	a.agentWSMu.Lock()
-	// Authorization may have been revoked while this request waited for the
-	// heartbeat lock. Recheck it inside the critical section before persistence.
+	// Serialize the fallback heartbeat with WebSocket heartbeats and revocation
+	// for this node. Credential reads and SQLite writes must not hold agentWSMu,
+	// which protects every Agent's in-memory session state.
+	unlockNode := a.lockAgentWSCommand(code)
+	defer unlockNode()
 	currentCode, currentAuthErr := a.agentMachineFromRequest(r)
 	if currentAuthErr != nil || currentCode != code {
-		a.agentWSMu.Unlock()
 		writeErr(w, http.StatusUnauthorized, "Agent 授权已失效")
 		return
 	}
+	a.agentWSMu.Lock()
 	if a.agentHeartbeatAt == nil {
 		a.agentHeartbeatAt = make(map[string]int64)
 	}
@@ -2726,14 +2724,15 @@ func (a *App) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "message": "已忽略较旧的 Agent 心跳"})
 		return
 	}
+	a.agentWSMu.Unlock()
 	if err := a.store.UpdateSettings(map[string]string{
 		"agent_lastseen_" + code: strconv.FormatInt(receivedAt.Unix(), 10),
 		"agent_status_" + code:   string(payload),
 	}); err != nil {
-		a.agentWSMu.Unlock()
 		writeErr(w, http.StatusInternalServerError, "保存心跳数据失败")
 		return
 	}
+	a.agentWSMu.Lock()
 	a.agentHeartbeatAt[code] = receivedAt.UnixNano()
 	a.agentWSMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "received_at": time.Now().Unix()})
@@ -2756,9 +2755,10 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	defer agentTokenGenerateMu.Unlock()
 	unlockCommand := a.lockAgentWSCommand(code)
 	defer unlockCommand()
-	a.agentWSMu.Lock()
+	// The per-node lock fences concurrent heartbeats, commands, ACKs and
+	// reconnects. Keep the global session mutex free while SQLite revokes the
+	// credential and removes its associated records.
 	if err := a.store.DeleteAgentBinding(code); err != nil {
-		a.agentWSMu.Unlock()
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, "Agent 绑定不存在")
 			return
@@ -2766,6 +2766,7 @@ func (a *App) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "删除失败")
 		return
 	}
+	a.agentWSMu.Lock()
 	if a.agentWSGeneration == nil {
 		a.agentWSGeneration = make(map[string]uint64)
 	}
