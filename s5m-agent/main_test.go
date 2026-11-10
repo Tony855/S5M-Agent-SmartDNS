@@ -1066,6 +1066,56 @@ func TestReplaceFileAtomically(t *testing.T) {
 	})
 }
 
+func TestInstallMihomoKernelFiles(t *testing.T) {
+	t.Run("keeps durable backup while atomically installing new binary", func(t *testing.T) {
+		dir := t.TempDir()
+		binaryPath := filepath.Join(dir, "mihomo")
+		newPath := filepath.Join(dir, "mihomo.new")
+		backupPath := binaryPath + ".previous"
+		if err := os.WriteFile(binaryPath, []byte("old-good-binary"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(newPath, []byte("new-binary"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := installMihomoKernelFiles(newPath, binaryPath, backupPath); err != nil {
+			t.Fatalf("installMihomoKernelFiles() error = %v", err)
+		}
+		got, err := os.ReadFile(binaryPath)
+		if err != nil || string(got) != "new-binary" {
+			t.Fatalf("installed binary = %q, error = %v", got, err)
+		}
+		got, err = os.ReadFile(backupPath)
+		if err != nil || string(got) != "old-good-binary" {
+			t.Fatalf("backup = %q, error = %v", got, err)
+		}
+		if _, err := os.Stat(newPath); !os.IsNotExist(err) {
+			t.Fatalf("new source should be renamed into place, stat error = %v", err)
+		}
+	})
+
+	t.Run("does not remove current binary when new file is missing", func(t *testing.T) {
+		dir := t.TempDir()
+		binaryPath := filepath.Join(dir, "mihomo")
+		backupPath := binaryPath + ".previous"
+		if err := os.WriteFile(binaryPath, []byte("current-good-binary"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		err := installMihomoKernelFiles(filepath.Join(dir, "missing.new"), binaryPath, backupPath)
+		if err == nil {
+			t.Fatal("expected missing new binary error")
+		}
+		got, readErr := os.ReadFile(binaryPath)
+		if readErr != nil || string(got) != "current-good-binary" {
+			t.Fatalf("current binary was not preserved: content=%q error=%v", got, readErr)
+		}
+		got, readErr = os.ReadFile(backupPath)
+		if readErr != nil || string(got) != "current-good-binary" {
+			t.Fatalf("rollback backup was not preserved: content=%q error=%v", got, readErr)
+		}
+	})
+}
+
 func TestRestoreMihomoKernelWithRestart(t *testing.T) {
 	restartFailure := errors.New("controller connection refused")
 

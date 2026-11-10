@@ -1640,17 +1640,23 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 	newPath := newBinary.Name()
 	defer os.Remove(newPath)
 	written, copyErr := io.Copy(newBinary, io.LimitReader(gz, 256<<20))
-	closeErr := newBinary.Close()
 	if copyErr != nil {
+		_ = newBinary.Close()
 		return "", copyErr
 	}
-	if closeErr != nil {
-		return "", closeErr
-	}
 	if written == 0 || written >= 256<<20 {
+		_ = newBinary.Close()
 		return "", fmt.Errorf("解压后的内核为空或超过 256 MiB 限制")
 	}
-	if err := os.Chmod(newPath, 0755); err != nil {
+	if err := newBinary.Chmod(0755); err != nil {
+		_ = newBinary.Close()
+		return "", err
+	}
+	if err := newBinary.Sync(); err != nil {
+		_ = newBinary.Close()
+		return "", fmt.Errorf("同步新 Mihomo 内核失败: %w", err)
+	}
+	if err := newBinary.Close(); err != nil {
 		return "", err
 	}
 	stage = "binary-self-test"
@@ -1679,13 +1685,8 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 	stage = "install-binary"
 	binaryPath := mihomoBinaryPath()
 	backupPath := binaryPath + ".previous"
-	_ = os.Remove(backupPath)
-	if err := os.Rename(binaryPath, backupPath); err != nil {
-		return "", fmt.Errorf("备份现有 Mihomo 内核失败")
-	}
-	if err := os.Rename(newPath, binaryPath); err != nil {
-		_ = os.Rename(backupPath, binaryPath)
-		return "", fmt.Errorf("安装新 Mihomo 内核失败")
+	if err := installMihomoKernelFiles(newPath, binaryPath, backupPath); err != nil {
+		return "", fmt.Errorf("安装新 Mihomo 内核失败: %w", err)
 	}
 	stage = "restart-health-check-rollback"
 	fmt.Printf("mihomo_update: binary installed command_id=%q stage=restart-and-health-check target_version=%q\n", cmd.ID, cmd.Version)
@@ -1703,6 +1704,9 @@ func updateMihomoKernel(cmd agentCommand) (result string, retErr error) {
 	stage = "remove-backup"
 	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("新内核已通过健康检查，但删除旧内核备份失败")
+	}
+	if err := syncDirectoryForFile(binaryPath); err != nil {
+		return "", fmt.Errorf("新内核已通过健康检查，但同步备份清理操作失败: %w", err)
 	}
 	fmt.Printf("mihomo_update: completed command_id=%q version=%q duration_ms=%d\n", cmd.ID, cmd.Version, time.Since(started).Milliseconds())
 	return "Mihomo 内核已更新到 " + cmd.Version, nil
@@ -1797,6 +1801,75 @@ func waitForMihomoVersion(secret, expected string, timeout time.Duration) error 
 	return fmt.Errorf("Mihomo 在 %s 内未通过版本健康检查: %w", timeout, lastErr)
 }
 
+// syncDirectoryForFile makes directory-entry changes durable after rename/remove.
+func syncDirectoryForFile(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+// copyFileAtomically copies source to destination through a same-directory
+// temporary file, syncing file contents before rename and the directory after.
+func copyFileAtomically(sourcePath, destinationPath string) error {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(destinationPath)
+	tmp, err := os.CreateTemp(dir, ".mihomo-copy-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := io.Copy(tmp, source); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, destinationPath); err != nil {
+		return err
+	}
+	return syncDirectoryForFile(destinationPath)
+}
+
+// installMihomoKernelFiles keeps a durable rollback copy before atomically
+// replacing the running binary. The old binary is never renamed out of place.
+func installMihomoKernelFiles(newPath, binaryPath, backupPath string) error {
+	if err := copyFileAtomically(binaryPath, backupPath); err != nil {
+		return fmt.Errorf("备份旧内核失败: %w", err)
+	}
+	if err := os.Rename(newPath, binaryPath); err != nil {
+		return fmt.Errorf("原子替换新内核失败: %w", err)
+	}
+	if err := syncDirectoryForFile(binaryPath); err != nil {
+		restoreErr := copyFileAtomically(backupPath, binaryPath)
+		if restoreErr != nil {
+			return fmt.Errorf("同步新内核目录项失败: %v；自动恢复旧内核失败: %w", err, restoreErr)
+		}
+		return fmt.Errorf("同步新内核目录项失败，已恢复旧内核: %w", err)
+	}
+	return nil
+}
+
 func replaceFileAtomically(sourcePath, destinationPath string) error {
 	// The source and destination must be on the same filesystem for rename to
 	// replace the destination atomically. All Mihomo update files are created
@@ -1814,10 +1887,10 @@ func restoreMihomoKernel(binaryPath, backupPath, secret string) error {
 // restoreMihomoKernelWithRestart separates file recovery from the controller
 // request so both failure modes can be tested without a live Mihomo API.
 func restoreMihomoKernelWithRestart(binaryPath, backupPath string, restart func() error) error {
-	// Never remove the new binary before attempting replacement: if the rename
-	// fails, keep the currently installed executable available for recovery.
-	if err := replaceFileAtomically(backupPath, binaryPath); err != nil {
-		return fmt.Errorf("恢复旧内核文件失败")
+	// Copy the backup atomically over the new binary and retain the backup until
+	// the caller has completed recovery and health checks.
+	if err := copyFileAtomically(backupPath, binaryPath); err != nil {
+		return fmt.Errorf("恢复旧内核文件失败: %w", err)
 	}
 	if err := restart(); err != nil {
 		return fmt.Errorf("旧内核文件已恢复，但请求重启失败: %w", err)
