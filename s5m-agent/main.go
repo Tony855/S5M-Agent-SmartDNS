@@ -2675,7 +2675,7 @@ func runAgentConnectionAttempt(cfg Config, generation uint64, probe func(Config)
 		// Probe only after the authenticated WebSocket attempt has failed. This
 		// preserves HTTP diagnostics without delaying or gating control-plane recovery.
 		if probeErr := probe(cfg); probeErr != nil {
-			fmt.Printf("主控 HTTP 连通性探测失败（仅诊断）: %s\\n", safeMihomoValidationDiagnostic([]byte(probeErr.Error())))
+			fmt.Printf("主控 HTTP 连通性探测失败（仅诊断）: %s\n", safeMihomoValidationDiagnostic([]byte(probeErr.Error())))
 		}
 	}
 	return true, sessionErr
