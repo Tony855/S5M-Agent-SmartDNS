@@ -57,3 +57,30 @@ func TestAgentRegisterRejectsOversizedUnauthenticatedRequest(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
 	}
 }
+
+
+func TestAgentRegisterRateLimitsRepeatedRequestsPerClient(t *testing.T) {
+	app, _, _ := websocketTestApp(t)
+	for i := 0; i < loginAttemptLimit; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register",
+			strings.NewReader(`{"machine_code":"ws_node_01","secret":"wrong-secret"}`))
+		req.RemoteAddr = "198.51.100.77:12345"
+		rec := httptest.NewRecorder()
+		app.handleAgentRegister(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("attempt %d status = %d, want %d; body=%s", i+1, rec.Code, http.StatusForbidden, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register",
+		strings.NewReader(`{"machine_code":"ws_node_01","secret":"wrong-secret"}`))
+	req.RemoteAddr = "198.51.100.77:12345"
+	rec := httptest.NewRecorder()
+	app.handleAgentRegister(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("attempt after limit status = %d, want %d; body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("rate-limited response omitted Retry-After")
+	}
+}
