@@ -376,6 +376,7 @@ def ipv6_socks_atyp_main():
         config = f"""\
 mixed-port: {mixed}
 allow-lan: false
+ipv6: true
 mode: rule
 log-level: debug
 proxies:
