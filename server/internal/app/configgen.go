@@ -634,6 +634,11 @@ func routeAgentDNSFallbackIfSmartDNS(yml string) (string, error) {
 		key, value := dns.Content[i].Value, dns.Content[i+1]
 		switch key {
 		case "nameserver":
+			if value.Kind == yaml.ScalarNode && isSmartDNSLoopbackResolver(value) {
+				dns.Content[i+1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: fallbackResolverNodes(false)}
+				changed = true
+				continue
+			}
 			if value.Kind != yaml.SequenceNode {
 				continue
 			}
@@ -897,6 +902,44 @@ func setAgentDNSRespectRules(yml string) (string, error) {
 	return out.String(), nil
 }
 
+// removeGeneratedSmartDNSProcessRules removes SmartDNS-only process routing
+// from controller configs and Agent nodes where SmartDNS is unavailable/disabled.
+func removeGeneratedSmartDNSProcessRules(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil {
+		return "", fmt.Errorf("解析 SmartDNS 规则清理配置失败: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("SmartDNS 规则清理配置必须是 YAML 对象")
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "rules" { continue }
+		rules := root.Content[i+1]
+		if rules.Kind != yaml.SequenceNode {
+			return "", fmt.Errorf("SmartDNS 规则清理配置的 rules 必须是数组")
+		}
+		kept := make([]*yaml.Node, 0, len(rules.Content))
+		for _, rule := range rules.Content {
+			if rule == nil { continue }
+			if rule.Kind == yaml.ScalarNode {
+				parts := strings.Split(rule.Value, ",")
+				if len(parts) >= 2 &&
+					strings.EqualFold(strings.TrimSpace(parts[0]), "PROCESS-NAME") &&
+					strings.EqualFold(strings.TrimSpace(parts[1]), "smartdns") {
+					continue
+				}
+			}
+			kept = append(kept, rule)
+		}
+		rules.Content = kept
+		break
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil { return "", fmt.Errorf("序列化 SmartDNS 规则清理配置失败: %w", err) }
+	return string(out), nil
+}
+
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
@@ -936,23 +979,28 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 			}
 		}
 	}
-	// An explicitly configured routing value remains authoritative. For upgraded
-	// installations without that global setting, enabling SmartDNS on a node
-	// automatically opts that node into the shared proxy route. This prevents a
-	// running SmartDNS daemon from sending DoT through the terminal MATCH,REJECT
-	// rule merely because the operator has not separately configured a strategy.
-	// An explicitly empty global value still opts out for backward compatibility.
-	// Controller config (machineCode == "") is never changed by this Agent-only policy.
+	// Capability and desired state are per Agent. Global routing strategy must
+	// never leak into the controller config, and an explicit node disable wins
+	// over any stale global strategy or healthy heartbeat.
+	nodeSmartDNSDisabled := strings.TrimSpace(machineCode) != "" &&
+		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false")
+		if strings.TrimSpace(machineCode) == "" || nodeSmartDNSDisabled || noSmartDNSAgent {
+			yml, err = removeGeneratedSmartDNSProcessRules(yml)
+			if err != nil { return "", err }
+		}
 	rawRouting, routingSettingExists := settings["smartdns_routing_config"]
 	applySharedFallback := false
 	var routing SmartDNSRoutingConfig
-	if !noSmartDNSAgent && routingSettingExists && strings.TrimSpace(rawRouting) != "" {
+	if routingSettingExists && strings.TrimSpace(rawRouting) != "" {
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
-		applySharedFallback = true
-	} else if !noSmartDNSAgent && !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
-		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") {
+		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
+		}
+		applySharedFallback = strings.TrimSpace(machineCode) != "" && !nodeSmartDNSDisabled && !noSmartDNSAgent
+	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
+		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") && !noSmartDNSAgent {
 		routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
 		applySharedFallback = true
 	}
@@ -997,13 +1045,13 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if noSmartDNSAgent {
-			// Do not send a SmartDNS image's loopback DNS endpoints to an Agent
-			// whose heartbeat explicitly reports that the daemon is unavailable.
+		if noSmartDNSAgent || nodeSmartDNSDisabled {
+			// An unavailable daemon or an explicit node-level disable must never
+			// receive loopback DNS endpoints; switch to normal Mihomo upstreams.
 			yml, err = routeAgentDNSFallbackIfSmartDNS(yml)
-			if err != nil { return "", fmt.Errorf("清理无 SmartDNS Agent 的 DNS 配置失败: %w", err) }
+			if err != nil { return "", fmt.Errorf("清理不可用 SmartDNS Agent 的 DNS 配置失败: %w", err) }
 			yml, err = setAgentDNSRespectRules(yml)
-			if err != nil { return "", fmt.Errorf("设置无 SmartDNS Agent 的 DNS 规则路由失败: %w", err) }
+			if err != nil { return "", fmt.Errorf("设置普通 Agent DNS 规则路由失败: %w", err) }
 		}
 	}
 	// SmartDNS is applied only to the runtime WebSocket payload. Never persist

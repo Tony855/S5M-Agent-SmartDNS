@@ -2667,3 +2667,21 @@ func TestBuildConfigForNoSmartDNSAgentOmitsSmartDNSRoutingAndResolvers(t *testin
 		if !strings.Contains(got, required) { t.Fatalf("no-SmartDNS Agent config lost required DNS/network setting %q:\n%s", required, got) }
 	}
 }
+
+
+func TestRouteAgentDNSFallbackIfSmartDNSSupportsScalarNameserver(t *testing.T) {
+	input := `dns:
+  enable: true
+  nameserver: 127.0.0.1:6053
+  nameserver-policy:
+    geosite:cn: 127.0.0.1:6054
+`
+	got, err := routeAgentDNSFallbackIfSmartDNS(input)
+	if err != nil { t.Fatalf("routeAgentDNSFallbackIfSmartDNS: %v", err) }
+	for _, stale := range []string{"127.0.0.1:6053", "127.0.0.1:6054"} {
+		if strings.Contains(got, stale) { t.Fatalf("scalar DNS fallback retained %q:\\n%s", stale, got) }
+	}
+	for _, want := range []string{"https://dns.cloudflare.com/dns-query", "https://dns.google/dns-query", "https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"} {
+		if !strings.Contains(got, want) { t.Fatalf("scalar DNS fallback missing %q:\\n%s", want, got) }
+	}
+}

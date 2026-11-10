@@ -81,3 +81,42 @@ func TestBuildConfigForMachineExplicitEmptySmartDNSRoutingPreservesLegacy(t *tes
 		t.Fatalf("explicit empty routing setting must preserve legacy routing:\n%s", got)
 	}
 }
+
+
+func TestBuildConfigForMachineGlobalSmartDNSRoutingIsAgentOnly(t *testing.T) {
+	app := newSmartDNSRoutingTestApp(t, map[string]string{
+		"smartdns_routing_config": `{"mode":"shared","strategy":"url-test"}`,
+	})
+	if err := app.store.CreateProxy(&Proxy{
+		Name: "global-out", Mode: "rule", Type: "socks5",
+		Server: "192.0.2.20", Port: 1080, MachineCode: "__GLOBAL__",
+		SourceCIDR: "0.0.0.0/0", Enabled: true,
+	}); err != nil { t.Fatalf("CreateProxy: %v", err) }
+
+	got, err := app.BuildConfigForMachine("")
+	if err != nil { t.Fatalf("BuildConfigForMachine(controller): %v", err) }
+	if strings.Contains(got, SmartDNSGroupName) || strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("Agent-only SmartDNS routing leaked into controller config:\\n%s", got)
+	}
+}
+
+func TestBuildConfigForMachineExplicitDisableRemovesSmartDNSRoutingAndDNSListeners(t *testing.T) {
+	app := newSmartDNSRoutingTestApp(t, map[string]string{
+		"smartdns_routing_config": `{"mode":"shared","strategy":"url-test"}`,
+		"smartdns_enabled_node-a": "false",
+	})
+	if err := app.store.CreateProxy(&Proxy{
+		Name: "node-a-out", Mode: "rule", Type: "socks5",
+		Server: "192.0.2.10", Port: 1080, MachineCode: "node-a",
+		SourceCIDR: "0.0.0.0/0", Enabled: true,
+	}); err != nil { t.Fatalf("CreateProxy: %v", err) }
+
+	got, err := app.BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine(node-a): %v", err) }
+	for _, forbidden := range []string{SmartDNSGroupName, "PROCESS-NAME,smartdns,", "127.0.0.1:6053", "127.0.0.1:6054"} {
+		if strings.Contains(got, forbidden) { t.Fatalf("disabled node config contains %q:\\n%s", forbidden, got) }
+	}
+	for _, required := range []string{"https://dns.cloudflare.com/dns-query", "https://dns.google/dns-query", "respect-rules: true"} {
+		if !strings.Contains(got, required) { t.Fatalf("disabled node config lost fallback setting %q:\\n%s", required, got) }
+	}
+}
