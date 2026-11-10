@@ -837,6 +837,13 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// Serialize session replacement with per-Agent command delivery/ACK. Without
+	// this fence, a new socket could supersede the old generation after the old
+	// socket passed its generation check but before it sent a command or persisted
+	// an ACK. Keep lock ordering consistent: command lock, then agentWSMu.
+	unlockCommand := a.lockAgentWSCommand(machineCode)
+	defer unlockCommand()
+
 	// The credential may have been revoked after the initial JWT check but
 	// before the WebSocket upgrade completed. Revalidate under the same lock
 	// used by revocation before registering this socket: telemetry intentionally
