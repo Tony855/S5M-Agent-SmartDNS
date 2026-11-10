@@ -544,6 +544,23 @@ func addCentralRouteExclusions(cfg map[string]interface{}, centralURL string) (b
 	return changed, err
 }
 
+// commitRouteConfig reports whether the candidate became visible even when
+// the atomic writer returns an error after rename (for example, directory
+// fsync failure). Callers must roll back any visible candidate before returning.
+func commitRouteConfig(path string, candidate []byte, write func(string, []byte, os.FileMode) error) (bool, error) {
+	if write == nil {
+		write = atomicWriteFile
+	}
+	if err := write(path, candidate, 0600); err != nil {
+		current, readErr := os.ReadFile(path)
+		if readErr == nil && bytes.Equal(current, candidate) {
+			return true, err
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func refreshCentralRouteExclusions(centralURL string) (bool, error) {
 	path := mihomoConfigPath()
 	data, err := os.ReadFile(path)
@@ -610,8 +627,9 @@ func refreshCentralRouteExclusions(centralURL string) (bool, error) {
 	if err := atomicWriteFile(path+".previous", data, 0600); err != nil {
 		return false, fmt.Errorf("备份旧 Mihomo 配置失败: %w", err)
 	}
-	if err := atomicWriteFile(path, normalized, 0600); err != nil {
-		return false, err
+	committed, writeErr := commitRouteConfig(path, normalized, atomicWriteFile)
+	if writeErr != nil {
+		return committed, writeErr
 	}
 	_ = os.Remove(tmpPath)
 	if err := writeManagedRouteCIDRs(cidrs); err != nil {

@@ -2498,3 +2498,45 @@ func TestLoadOrCreateMachineIDFallbackConcurrentCallersShareIdentity(t *testing.
 		t.Fatalf("returned ID %q does not match persisted identity %q", ids[0], data)
 	}
 }
+
+
+func TestCommitRouteConfigDetectsPostRenameDurabilityFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	candidate := []byte("tun:\\n  route-exclude-address: [198.51.100.20/32]\\n")
+	injected := errors.New("injected directory fsync failure after rename")
+	committed, err := commitRouteConfig(path, candidate, func(path string, data []byte, mode os.FileMode) error {
+		if err := os.WriteFile(path, data, mode); err != nil {
+			return err
+		}
+		return injected
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected durability error, got %v", err)
+	}
+	if !committed {
+		t.Fatal("visible candidate after rename must be reported as committed so caller can roll back")
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != string(candidate) {
+		t.Fatalf("candidate file = %q, err=%v", got, readErr)
+	}
+}
+
+func TestCommitRouteConfigReportsPreRenameFailureAsNotCommitted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	old := []byte("old-config")
+	candidate := []byte("new-config")
+	if err := os.WriteFile(path, old, 0600); err != nil { t.Fatal(err) }
+	injected := errors.New("injected temporary-file write failure")
+	committed, err := commitRouteConfig(path, candidate, func(string, []byte, os.FileMode) error {
+		return injected
+	})
+	if !errors.Is(err, injected) { t.Fatalf("expected injected error, got %v", err) }
+	if committed { t.Fatal("candidate must not be reported committed when old file remains visible") }
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != string(old) {
+		t.Fatalf("original config changed after pre-rename failure: got=%q err=%v", got, readErr)
+	}
+}
