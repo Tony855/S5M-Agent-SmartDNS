@@ -69,6 +69,8 @@ func safeAgentRegistrationFailure(status int, body []byte) string {
 		return "主控端注册服务内部错误（HTTP 500），请管理员检查主控端日志。"
 	case http.StatusNotFound:
 		return "主控端没有找到 Agent 注册接口（HTTP 404），请检查服务器地址和部署版本。"
+	case http.StatusTooManyRequests:
+		return "主控端注册请求过于频繁，请等待 Retry-After 指定时间后重试。"
 	default:
 		return fmt.Sprintf("主控端注册失败（HTTP %d），请管理员检查主控端日志。", status)
 	}
@@ -2795,7 +2797,14 @@ func main() {
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 				status := http.StatusBadGateway
-				if resp.StatusCode >= 400 && resp.StatusCode < 500 { status = http.StatusUnauthorized }
+				if resp.StatusCode == http.StatusTooManyRequests {
+					status = http.StatusTooManyRequests
+					if retryAfter := strings.TrimSpace(resp.Header.Get("Retry-After")); retryAfter != "" {
+						w.Header().Set("Retry-After", retryAfter)
+					}
+				} else if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+					status = http.StatusUnauthorized
+				}
 				http.Error(w, safeAgentRegistrationFailure(resp.StatusCode, body), status)
 				return
 			}
