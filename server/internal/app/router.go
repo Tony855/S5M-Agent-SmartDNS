@@ -36,6 +36,8 @@ type App struct {
 	browserTickets     map[string]browserWSTicket
 	configPublishMu    sync.Mutex
 	mihomoUpdateMu     sync.Mutex
+	// Serializes the legacy HTTP endpoint and the WebSocket-triggered update task.
+	mihomoUpdateExecMu sync.Mutex
 	mihomoUpdateTask   *mihomoUpdateTask
 	mihomoUpdateTasks  map[string]*mihomoUpdateTask
 	mihomoUpdateOrder  []string
