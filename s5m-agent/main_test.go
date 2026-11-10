@@ -2463,6 +2463,7 @@ func TestRunAgentConnectionAttemptStillDialsWebSocketWhenProbeFails(t *testing.T
 func TestMarkAgentBindingCommittedClearsStaleConnectionFailure(t *testing.T) {
 	previousGeneration := agentBindingGeneration.Load()
 	previousFailed := agentConnectionFailed.Load()
+	previousConnected := agentConnected.Load()
 	agentActiveWSMu.Lock()
 	previousConn := agentActiveWSConn
 	agentActiveWSConn = nil
@@ -2471,6 +2472,7 @@ func TestMarkAgentBindingCommittedClearsStaleConnectionFailure(t *testing.T) {
 	t.Cleanup(func() {
 		agentBindingGeneration.Store(previousGeneration)
 		agentConnectionFailed.Store(previousFailed)
+		agentConnected.Store(previousConnected)
 		agentActiveWSMu.Lock()
 		agentActiveWSConn = previousConn
 		agentActiveWSMu.Unlock()
