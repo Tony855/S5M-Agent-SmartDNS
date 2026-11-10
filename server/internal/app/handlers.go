@@ -941,17 +941,24 @@ func verifyMihomoDownloadedAsset(path string, asset mihomoReleaseAsset) error {
 }
 
 func decompressMihomoAsset(source io.Reader, destination io.Writer) error {
+	return decompressMihomoAssetWithLimit(source, destination, maxMihomoBinaryBytes)
+}
+
+func decompressMihomoAssetWithLimit(source io.Reader, destination io.Writer, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return fmt.Errorf("Mihomo 解压大小限制无效")
+	}
 	reader, err := gzip.NewReader(source)
 	if err != nil {
 		return fmt.Errorf("更新包不是有效的 gzip 文件: %w", err)
 	}
-	written, copyErr := io.Copy(destination, io.LimitReader(reader, maxMihomoBinaryBytes+1))
+	written, copyErr := io.Copy(destination, io.LimitReader(reader, maxBytes+1))
 	closeErr := reader.Close()
 	if copyErr != nil {
 		return copyErr
 	}
-	if written > maxMihomoBinaryBytes {
-		return fmt.Errorf("Mihomo 解压后二进制超过 256 MiB")
+	if written > maxBytes {
+		return fmt.Errorf("Mihomo 解压后二进制超过允许大小")
 	}
 	if closeErr != nil {
 		return closeErr
