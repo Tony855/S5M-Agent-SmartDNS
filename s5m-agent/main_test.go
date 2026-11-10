@@ -2469,6 +2469,33 @@ func TestRunAgentConnectionAttemptDoesNotGateWebSocketOnHTTPProbe(t *testing.T) 
 }
 
 
+func TestRunAgentConnectionAttemptIgnoresFailureFromSupersededBinding(t *testing.T) {
+	previousGeneration := agentBindingGeneration.Load()
+	agentBindingGeneration.Store(previousGeneration + 1)
+	generation := agentBindingGeneration.Load()
+	t.Cleanup(func() { agentBindingGeneration.Store(previousGeneration) })
+	probeCalled := false
+	attempted, err := runAgentConnectionAttempt(
+		Config{CentralURL: "https://old-controller.example", Token: "old-token"},
+		generation,
+		func(Config) error {
+			probeCalled = true
+			return fmt.Errorf("old binding probe failure")
+		},
+		func(Config, uint64) error {
+			// Simulate a rebind closing this in-flight session.
+			agentBindingGeneration.Add(1)
+			return fmt.Errorf("old WebSocket session closed during rebind")
+		},
+	)
+	if attempted || err != nil {
+		t.Fatalf("superseded session result = attempted:%v err:%v, want false,nil", attempted, err)
+	}
+	if probeCalled {
+		t.Fatal("superseded session must not run diagnostics against old credentials")
+	}
+}
+
 func TestMarkAgentBindingCommittedClearsStaleConnectionFailure(t *testing.T) {
 	previousGeneration := agentBindingGeneration.Load()
 	previousFailed := agentConnectionFailed.Load()
