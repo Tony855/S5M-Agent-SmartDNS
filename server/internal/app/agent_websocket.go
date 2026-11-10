@@ -959,10 +959,9 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				a.agentTelemetryLogAt = make(map[string]time.Time)
 			}
 			shouldPersist := receivedAt.Sub(a.agentTelemetryPersistAt[machineCode]) >= 5*time.Second
-			if shouldLogAgentTelemetry(receivedAt, a.agentTelemetryLogAt[machineCode], time.Minute) {
+			shouldLog := shouldLogAgentTelemetry(receivedAt, a.agentTelemetryLogAt[machineCode], time.Minute)
+			if shouldLog {
 				a.agentTelemetryLogAt[machineCode] = receivedAt
-				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%v download_speed=%v upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\n",
-					machineCode, telemetry["upload_speed"], telemetry["download_speed"], telemetry["upload_total"], telemetry["download_total"], telemetry["connections"], telemetry["telemetry_stale"], telemetry["traffic_error"], telemetry["connections_error"])
 			}
 			if shouldPersist {
 				// Throttle failed persistence attempts too; a database outage must
@@ -970,6 +969,10 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 				a.agentTelemetryPersistAt[machineCode] = receivedAt
 			}
 			a.agentWSMu.Unlock()
+			if shouldLog {
+				fmt.Printf("agent_ws: telemetry received machine_code=%q upload_speed=%v download_speed=%v upload_total=%v download_total=%v connections=%v stale=%v traffic_error=%q connections_error=%q\n",
+					machineCode, telemetry["upload_speed"], telemetry["download_speed"], telemetry["upload_total"], telemetry["download_total"], telemetry["connections"], telemetry["telemetry_stale"], telemetry["traffic_error"], telemetry["connections_error"])
+			}
 			if shouldPersist {
 				settings, settingsErr := a.store.GetSettings()
 				if settingsErr != nil {
