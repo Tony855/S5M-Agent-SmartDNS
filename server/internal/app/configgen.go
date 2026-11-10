@@ -864,6 +864,39 @@ func routeAgentDNSViaSmartDNSWithDomestic(yml string) (string, error) {
 	return string(out), nil
 }
 
+
+func setAgentDNSRespectRules(yml string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yml), &doc); err != nil { return "", fmt.Errorf("解析 Agent DNS 配置失败: %w", err) }
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode { return "", fmt.Errorf("Agent DNS 配置必须是 YAML 对象") }
+	root := doc.Content[0]
+	var dns *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dns" { dns = root.Content[i+1]; break }
+	}
+	if dns == nil {
+		dns = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "dns"}, dns)
+	}
+	if dns.Kind != yaml.MappingNode { return "", fmt.Errorf("Agent dns 配置必须是 YAML 对象") }
+	for i := 0; i+1 < len(dns.Content); i += 2 {
+		if dns.Content[i].Value == "respect-rules" {
+			dns.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}
+			var out strings.Builder
+			enc := yaml.NewEncoder(&out); enc.SetIndent(2)
+			if err := enc.Encode(&doc); err != nil { return "", err }
+			if err := enc.Close(); err != nil { return "", err }
+			return out.String(), nil
+		}
+	}
+	dns.Content = append(dns.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "respect-rules"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"})
+	var out strings.Builder
+	enc := yaml.NewEncoder(&out); enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil { return "", err }
+	if err := enc.Close(); err != nil { return "", err }
+	return out.String(), nil
+}
+
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
@@ -969,6 +1002,8 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 			// whose heartbeat explicitly reports that the daemon is unavailable.
 			yml, err = routeAgentDNSFallbackIfSmartDNS(yml)
 			if err != nil { return "", fmt.Errorf("清理无 SmartDNS Agent 的 DNS 配置失败: %w", err) }
+			yml, err = setAgentDNSRespectRules(yml)
+			if err != nil { return "", fmt.Errorf("设置无 SmartDNS Agent 的 DNS 规则路由失败: %w", err) }
 		}
 	}
 	// SmartDNS is applied only to the runtime WebSocket payload. Never persist
