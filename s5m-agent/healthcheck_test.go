@@ -12,11 +12,20 @@ func TestHealthcheckSupportsSmartDNSDisabledMode(t *testing.T) {
 	runHealthcheckFixture(t, true, false)
 }
 
+func TestHealthcheckRejectsRunningSmartDNSWhenDisabled(t *testing.T) {
+	runHealthcheckFixtureExpected(t, true, true, false)
+}
+
 func TestHealthcheckRequiresSmartDNSWhenEnabled(t *testing.T) {
 	runHealthcheckFixture(t, false, true)
 }
 
 func runHealthcheckFixture(t *testing.T, disabled, smartDNSRunning bool) {
+	t.Helper()
+	runHealthcheckFixtureExpected(t, disabled, smartDNSRunning, true)
+}
+
+func runHealthcheckFixtureExpected(t *testing.T, disabled, smartDNSRunning, wantSuccess bool) {
 	t.Helper()
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
@@ -46,20 +55,28 @@ func runHealthcheckFixture(t *testing.T, disabled, smartDNSRunning bool) {
 		if err := os.WriteFile(path, []byte(content), 0700); err != nil { t.Fatal(err) }
 	}
 
-	script, err := os.ReadFile("healthcheck.sh")
-	if err != nil { t.Fatal(err) }
-	body := strings.ReplaceAll(string(script), "/data/smartdns.disabled", markerPath)
-	body = strings.ReplaceAll(body, "/data/config.yaml", configPath)
-	body = strings.ReplaceAll(body, "/data/smartdns.conf", smartConfigPath)
-	scriptPath := filepath.Join(root, "healthcheck.sh")
-	if err := os.WriteFile(scriptPath, []byte(body), 0700); err != nil { t.Fatal(err) }
+	for _, scriptName := range []string{"healthcheck.sh", filepath.Join("smartdns", "healthcheck.sh")} {
+		t.Run(scriptName, func(t *testing.T) {
+			script, err := os.ReadFile(scriptName)
+			if err != nil { t.Fatal(err) }
+			body := strings.ReplaceAll(string(script), "/data/smartdns.disabled", markerPath)
+			body = strings.ReplaceAll(body, "/data/config.yaml", configPath)
+			body = strings.ReplaceAll(body, "/data/smartdns.conf", smartConfigPath)
+			scriptPath := filepath.Join(root, "healthcheck.sh")
+			if err := os.WriteFile(scriptPath, []byte(body), 0700); err != nil { t.Fatal(err) }
 
-	cmd := exec.Command("sh", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"PATH="+binDir+":"+os.Getenv("PATH"),
-		"MOCK_SMARTDNS="+map[bool]string{true:"1", false:"0"}[smartDNSRunning],
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v failed: %v\n%s", disabled, smartDNSRunning, err, output)
+			cmd := exec.Command("sh", scriptPath)
+			cmd.Env = append(os.Environ(),
+				"PATH="+binDir+":"+os.Getenv("PATH"),
+				"MOCK_SMARTDNS="+map[bool]string{true:"1", false:"0"}[smartDNSRunning],
+			)
+			output, err := cmd.CombinedOutput()
+			if wantSuccess && err != nil {
+				t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v failed: %v\n%s", disabled, smartDNSRunning, err, output)
+			}
+			if !wantSuccess && err == nil {
+				t.Fatalf("healthcheck disabled=%v smartDNSRunning=%v unexpectedly succeeded:\n%s", disabled, smartDNSRunning, output)
+			}
+		})
 	}
 }
