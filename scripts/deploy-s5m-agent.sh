@@ -429,7 +429,7 @@ do_recreate() {
       return 1
     fi
     if container_exists; then
-      backup_container="${CONTAINER_NAME}-rollback-$(date +%s)-$"
+      backup_container="${CONTAINER_NAME}-rollback-$(date +%s)-${BASHPID}"
       log "停止旧容器并保留回滚副本：${backup_container}"
       if ! stop_container_checked "${CONTAINER_NAME}"; then
         err "无法确认旧容器已停止，已取消部署且保留原容器"
