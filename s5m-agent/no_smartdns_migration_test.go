@@ -185,3 +185,69 @@ func TestNoSmartDNSImageDefaultConfigFailsClosedForTransparentProxy(t *testing.T
 	tun, ok := root["tun"].(map[string]any)
 	if !ok || tun["enable"] != true { t.Fatalf("TUN must remain enabled by default: %#v", root["tun"]) }
 }
+
+func TestMigrateNoSmartDNSConfigRemovesSmartDNSOnlyRouting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte(`dns:
+  enable: true
+  nameserver: [127.0.0.1:6053, 109.178.19.70]
+  nameserver-policy:
+    "geosite:cn": 127.0.0.1:6054
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [node-a]
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [node-a]
+    url: https://www.gstatic.com/generate_204
+    interval: 30
+rules:
+  - DOMAIN-SUFFIX,v2net.cc,DIRECT
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,PROXY
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil { t.Fatal(err) }
+	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
+	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
+	text := string(got)
+	for _, stale := range []string{"127.0.0.1:6053", "127.0.0.1:6054", "PROCESS-NAME,smartdns", "SMARTDNS-PROXY", "type: fallback", "generate_204"} {
+		if strings.Contains(text, stale) { t.Fatalf("no-SmartDNS config retained SmartDNS-only setting %q:\n%s", stale, text) }
+	}
+	for _, keep := range []string{"109.178.19.70", "name: PROXY", "MATCH,PROXY", "DOMAIN-SUFFIX,v2net.cc,DIRECT", "respect-rules: true"} {
+		if !strings.Contains(text, keep) { t.Fatalf("migration removed required normal Mihomo config %q:\n%s", keep, text) }
+	}
+}
+
+func TestMigrateNoSmartDNSConfigKeepsReservedGroupWhenStillReferenced(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte(`proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: select
+    proxies: [node-a]
+rules:
+  - MATCH,SMARTDNS-PROXY
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil { t.Fatal(err) }
+	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
+	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
+	if !strings.Contains(string(got), "name: SMARTDNS-PROXY") { t.Fatalf("group still referenced by an operator rule was removed: %s", got) }
+}
+
+func TestMigrateNoSmartDNSConfigRemovesRoutingWithoutDNSSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte(`proxy-groups:
+  - name: SMARTDNS-PROXY
+    type: fallback
+    proxies: [node-a]
+rules:
+  - PROCESS-NAME,smartdns,SMARTDNS-PROXY
+  - MATCH,PROXY
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil { t.Fatal(err) }
+	if err := migrateNoSmartDNSConfig(path); err != nil { t.Fatal(err) }
+	got, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
+	if strings.Contains(string(got), "SMARTDNS-PROXY") || strings.Contains(string(got), "PROCESS-NAME,smartdns") {
+		t.Fatalf("routing remnants survived config without DNS section: %s", got)
+	}
+}
