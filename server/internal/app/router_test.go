@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 func TestEnsureAdminRequiresExplicitPassword(t *testing.T) {
@@ -380,5 +381,42 @@ func TestAgentRuntimeEndpointsUseWebSocketOnly(t *testing.T) {
 				t.Fatalf("required Agent endpoint missing: %s", tc.path)
 			}
 		})
+	}
+}
+
+
+type readDeadlineTestResponseWriter struct {
+	header   http.Header
+	body     strings.Builder
+	status   int
+	deadline time.Time
+}
+
+func (w *readDeadlineTestResponseWriter) Header() http.Header {
+	if w.header == nil { w.header = make(http.Header) }
+	return w.header
+}
+func (w *readDeadlineTestResponseWriter) WriteHeader(status int) { w.status = status }
+func (w *readDeadlineTestResponseWriter) Write(p []byte) (int, error) { return w.body.Write(p) }
+func (w *readDeadlineTestResponseWriter) SetReadDeadline(deadline time.Time) error {
+	w.deadline = deadline
+	return nil
+}
+
+func TestWithRecoverBoundsRequestBodyReadAndClearsDeadline(t *testing.T) {
+	writer := &readDeadlineTestResponseWriter{}
+	called := false
+	handler := withRecover(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if writer.deadline.IsZero() || time.Until(writer.deadline) <= 0 ||
+			time.Until(writer.deadline) > httpRequestBodyReadTimeout {
+			t.Fatalf("request body read deadline not set to a bounded future time: %v", writer.deadline)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	handler.ServeHTTP(writer, httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", strings.NewReader("{}")))
+	if !called { t.Fatal("handler was not invoked") }
+	if !writer.deadline.IsZero() {
+		t.Fatalf("request read deadline was not cleared after handler completion: %v", writer.deadline)
 	}
 }
