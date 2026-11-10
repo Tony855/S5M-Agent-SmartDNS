@@ -113,9 +113,12 @@ fi
 # running container and persistent data.
 mkdir -p "$TMP/stop-failure-data"
 printf 'preserve-me\n' > "$TMP/stop-failure-data/identity"
+cat > "$TMP/stop-failure.conf" <<EOF
+DATA_DIR="$TMP/stop-failure-data"
+EOF
 printf 's5m-agent|running\n' > "$TMP/state"
 : > "$TMP/docker.log"
-if run_deploy FAIL_STOP=true DATA_DIR="$TMP/stop-failure-data"; then
+if run_deploy CONFIG_FILE="$TMP/stop-failure.conf" FAIL_STOP=true; then
   echo "deploy unexpectedly proceeded after docker stop failure" >&2
   exit 1
 fi
@@ -131,9 +134,12 @@ fi
 # directory, even though the old container has already stopped.
 mkdir -p "$TMP/rm-failure-data"
 printf 'preserve-me-too\n' > "$TMP/rm-failure-data/identity"
+cat > "$TMP/rm-failure.conf" <<EOF
+DATA_DIR="$TMP/rm-failure-data"
+EOF
 printf 's5m-agent|running\n' > "$TMP/state"
 : > "$TMP/docker.log"
-if run_deploy FAIL_RM=true DATA_DIR="$TMP/rm-failure-data" FULL_RESET=true \
+if run_deploy CONFIG_FILE="$TMP/rm-failure.conf" FAIL_RM=true FULL_RESET=true \
   WIPE_DATA=true ALLOW_DATA_WIPE=true CONFIRM_DATA_WIPE="DELETE:$TMP/rm-failure-data"; then
   echo "data wipe unexpectedly proceeded after docker rm failure" >&2
   exit 1
