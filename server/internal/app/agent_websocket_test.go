@@ -2016,6 +2016,7 @@ func TestAgentWebSocketConfigRequestDoesNotHoldGlobalLockDuringDatabaseIO(t *tes
 
 	// Occupy SQLite's single connection so the config request blocks in its
 	// credential/config read after entering the per-Agent critical section.
+	waitCountBefore := app.store.db.Stats().WaitCount
 	tx, err := app.store.db.Begin()
 	if err != nil { t.Fatalf("begin blocking transaction: %v", err) }
 	if err := conn.WriteJSON(map[string]any{"type":"config.request", "id":"blocked-config", "config_sha256":""}); err != nil {
@@ -2029,8 +2030,8 @@ func TestAgentWebSocketConfigRequestDoesNotHoldGlobalLockDuringDatabaseIO(t *tes
 		refs := 0
 		if lock != nil { refs = lock.refs }
 		app.agentWSCommandMu.Unlock()
-		if refs > 0 { break }
-		if time.Now().After(deadline) { _ = tx.Rollback(); t.Fatal("config request did not enter per-Agent critical section") }
+		if refs > 0 && app.store.db.Stats().WaitCount > waitCountBefore { break }
+		if time.Now().After(deadline) { _ = tx.Rollback(); t.Fatal("config request did not block on SQLite inside per-Agent critical section") }
 		time.Sleep(time.Millisecond)
 	}
 
