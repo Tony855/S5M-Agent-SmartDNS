@@ -1946,22 +1946,35 @@ func readSystemMachineID(path string) (string, error) {
 	return id[:11], nil
 }
 
+var machineIDPersistenceMu sync.Mutex
+
 // loadOrCreateMachineID prefers /etc/machine-id. If unavailable, it generates
 // a random ID and persists it under /data, which survives container recreation
 // when the configured volume is retained. Storage errors are never ignored.
 func loadOrCreateMachineID(systemPath, storagePath string) (string, error) {
+	// Startup registration, the machine-id endpoint, and the public bind
+	// handler can race. Serialize fallback creation so every caller observes
+	// the same persisted identity rather than returning competing random IDs.
+	machineIDPersistenceMu.Lock()
+	defer machineIDPersistenceMu.Unlock()
+
 	if id, err := readSystemMachineID(systemPath); err == nil {
 		return id, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(storagePath), 0700); err != nil {
 		return "", fmt.Errorf("创建机器标识持久化目录失败")
 	}
-	if data, err := os.ReadFile(storagePath); err == nil {
+	if data, err := readTransactionFileNoFollow(storagePath, 128); err == nil {
 		if id := validStoredFallbackMachineID(data); id != "" {
+			// Also complete a directory sync after a prior startup may have
+			// observed the file following an interrupted durability commit.
+			if err := syncDirectoryForFile(storagePath); err != nil {
+				return "", fmt.Errorf("同步备用机器标识目录失败: %w", err)
+			}
 			return id[:11], nil
 		}
 	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("读取备用机器标识失败")
+		return "", fmt.Errorf("读取备用机器标识失败: %w", err)
 	}
 	randomID := make([]byte, 16)
 	if _, err := cryptorand.Read(randomID); err != nil {
@@ -1990,12 +2003,17 @@ func loadOrCreateMachineID(systemPath, storagePath string) (string, error) {
 		return "", fmt.Errorf("关闭机器标识临时文件失败: %w", err)
 	}
 	if err := os.Rename(tmpPath, storagePath); err != nil {
-		if data, readErr := os.ReadFile(storagePath); readErr == nil {
+		if data, readErr := readTransactionFileNoFollow(storagePath, 128); readErr == nil {
 			if id := validStoredFallbackMachineID(data); id != "" {
-				return id[:11], nil
+				if syncErr := syncDirectoryForFile(storagePath); syncErr == nil {
+					return id[:11], nil
+				}
 			}
 		}
-		return "", fmt.Errorf("持久化备用机器标识失败")
+		return "", fmt.Errorf("持久化备用机器标识失败: %w", err)
+	}
+	if err := syncDirectoryForFile(storagePath); err != nil {
+		return "", fmt.Errorf("同步备用机器标识目录失败: %w", err)
 	}
 	return fullID[:11], nil
 }

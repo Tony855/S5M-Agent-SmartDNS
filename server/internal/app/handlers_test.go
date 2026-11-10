@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"mime/multipart"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1762,5 +1764,147 @@ func TestHandleUpdateSettingsAcceptsSmartDNSUpstreamStrategies(t *testing.T) {
 				t.Fatalf("stored SmartDNS routing config = %#v, want strategy %s", got, strategy)
 			}
 		})
+	}
+}
+
+func TestCopyDatabaseFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.db")
+	destination := filepath.Join(dir, "backup.db")
+	if err := os.WriteFile(source, []byte("sqlite-database-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("stale-backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyDatabaseFileAtomic(source, destination); err != nil {
+		t.Fatalf("copyDatabaseFileAtomic() error = %v", err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "sqlite-database-content" {
+		t.Fatalf("backup content = %q", got)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("backup permissions = %o, want 600", info.Mode().Perm())
+	}
+	live, err := os.ReadFile(source)
+	if err != nil || string(live) != "sqlite-database-content" {
+		t.Fatalf("live database changed during backup: content=%q error=%v", live, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".s5m-db-copy-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary database copies left behind: %v", matches)
+	}
+}
+
+func TestCopyDatabaseFileAtomicMissingSourcePreservesDestination(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "backup.db")
+	if err := os.WriteFile(destination, []byte("known-good-backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := copyDatabaseFileAtomic(filepath.Join(dir, "missing.db"), destination)
+	if err == nil {
+		t.Fatal("expected missing source error")
+	}
+	got, readErr := os.ReadFile(destination)
+	if readErr != nil || string(got) != "known-good-backup" {
+		t.Fatalf("existing backup was not preserved: content=%q error=%v", got, readErr)
+	}
+}
+
+func TestHandleRestoreBackupKeepsDurablePreviousDatabase(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "s5m.db")
+	candidatePath := filepath.Join(dir, "candidate.db")
+
+	liveStore, err := OpenStore(livePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := liveStore.CreateUser("old-admin", "test-hash", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	candidateStore, err := OpenStore(candidatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := candidateStore.CreateUser("new-admin", "test-hash", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := candidateStore.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "backup.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateBytes, err := os.ReadFile(candidatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(candidateBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{cfg: Config{DBPath: livePath}, store: liveStore}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/restore", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	app.handleRestoreBackup(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := response["backup"]
+	if backupPath == "" {
+		t.Fatalf("restore response omitted previous database path: %s", rec.Body.String())
+	}
+	backupInfo, err := os.Stat(backupPath)
+	if err != nil {
+		t.Fatalf("previous database backup missing: %v", err)
+	}
+	if backupInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("previous database backup permissions=%o, want 600", backupInfo.Mode().Perm())
+	}
+
+	restored, err := OpenStore(livePath)
+	if err != nil {
+		t.Fatalf("open restored database: %v", err)
+	}
+	defer restored.db.Close()
+	if user, err := restored.UserByUsername("new-admin"); err != nil || user == nil {
+		t.Fatalf("restored database does not contain candidate admin: user=%v error=%v", user, err)
+	}
+	if user, err := restored.UserByUsername("old-admin"); err == nil && user != nil {
+		t.Fatalf("restored database unexpectedly retained old admin: user=%v", user)
+	}
+	previous, err := OpenStore(backupPath)
+	if err != nil {
+		t.Fatalf("open previous database backup: %v", err)
+	}
+	defer previous.db.Close()
+	if user, err := previous.UserByUsername("old-admin"); err != nil || user == nil {
+		t.Fatalf("previous database backup lost old admin: user=%v error=%v", user, err)
 	}
 }
