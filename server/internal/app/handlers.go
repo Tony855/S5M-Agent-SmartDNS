@@ -916,6 +916,72 @@ func findMihomoCompatibleAsset(assets []mihomoReleaseAsset, version string) (mih
 	return mihomoReleaseAsset{}, fmt.Errorf("未找到匹配目标版本的 linux-amd64-compatible 更新包")
 }
 
+// downloadMihomoAsset enforces the compressed-size limit while streaming,
+// including chunked responses that do not declare Content-Length.
+func downloadMihomoAsset(ctx context.Context, client *http.Client, sourceURL, destination string, maxBytes int64) error {
+	if client == nil || maxBytes <= 0 {
+		return fmt.Errorf("Mihomo 下载客户端或大小限制无效")
+	}
+	u, err := url.Parse(sourceURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return fmt.Errorf("Mihomo 下载地址必须使用 HTTPS")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("User-Agent", "S5M-Next")
+	// Do not allow a trusted HTTPS endpoint to downgrade the asset transfer.
+	safeClient := *client
+	previousRedirectCheck := safeClient.CheckRedirect
+	safeClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" || req.URL.User != nil {
+			return fmt.Errorf("Mihomo 下载重定向必须保持 HTTPS")
+		}
+		if len(via) > 5 {
+			return fmt.Errorf("Mihomo 下载重定向次数过多")
+		}
+		if previousRedirectCheck != nil {
+			return previousRedirectCheck(req, via)
+		}
+		return nil
+	}
+	response, err := safeClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("请求 Mihomo 更新资产失败: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("Mihomo 更新资产返回 HTTP %d", response.StatusCode)
+	}
+	if response.ContentLength > maxBytes {
+		return fmt.Errorf("Mihomo 更新资产声明大小超过 %d 字节", maxBytes)
+	}
+	file, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	written, copyErr := io.Copy(file, io.LimitReader(response.Body, maxBytes+1))
+	closeErr := file.Close()
+	if copyErr != nil {
+		_ = os.Remove(destination)
+		return copyErr
+	}
+	if written > maxBytes {
+		_ = os.Remove(destination)
+		return fmt.Errorf("Mihomo 更新资产超过 %d 字节限制", maxBytes)
+	}
+	if closeErr != nil {
+		_ = os.Remove(destination)
+		return closeErr
+	}
+	if response.ContentLength >= 0 && written != response.ContentLength {
+		_ = os.Remove(destination)
+		return fmt.Errorf("Mihomo 更新资产长度与 HTTP 声明不一致")
+	}
+	return nil
+}
+
 func verifyMihomoDownloadedAsset(path string, asset mihomoReleaseAsset) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -1120,12 +1186,10 @@ func (a *App) handleUpdateMihomo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.Remove(gzPath)
 
+	downloadClient := &http.Client{Timeout: 4 * time.Minute}
 	download := func(url string) error {
-		cmd := exec.CommandContext(r.Context(), "curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
-			"--max-filesize", strconv.FormatInt(asset.Size, 10), "--retry", "2",
-			"--connect-timeout", "15", "--max-time", "240", "--output", gzPath, url)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		if err := downloadMihomoAsset(r.Context(), downloadClient, url, gzPath, maxMihomoCompressedAssetBytes); err != nil {
+			return err
 		}
 		info, err := os.Stat(gzPath)
 		if err != nil {
