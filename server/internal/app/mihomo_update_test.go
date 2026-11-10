@@ -1,6 +1,19 @@
 package app
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseMihomoVersion(t *testing.T) {
 	tests := []struct {
@@ -21,18 +34,86 @@ func TestParseMihomoVersion(t *testing.T) {
 	}
 }
 
-func TestFindMihomoCompatibleAsset(t *testing.T) {
-	assets := []mihomoReleaseAsset{
-		{Name: "mihomo-linux-amd64-compatible.tar.gz", BrowserDownloadURL: "https://example.com/wrong.tar.gz"},
-		{Name: "mihomo-linux-amd64-compatible-v1.gz", BrowserDownloadURL: "http://example.com/insecure.gz"},
-		{Name: "mihomo-linux-amd64-compatible-v1.gz", BrowserDownloadURL: "https://example.com/mihomo.gz"},
-		{Name: "mihomo-linux-arm64-compatible-v1.gz", BrowserDownloadURL: "https://example.com/arm.gz"},
+func TestFindMihomoCompatibleAssetRequiresOfficialDigestAndURL(t *testing.T) {
+	const version = "v1.19.33"
+	const digest = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	asset := mihomoReleaseAsset{
+		Name: "mihomo-linux-amd64-compatible-" + version + ".gz",
+		BrowserDownloadURL: "https://github.com/MetaCubeX/mihomo/releases/download/" + version + "/mihomo-linux-amd64-compatible-" + version + ".gz",
+		Size: 3,
+		Digest: digest,
 	}
-	if got := findMihomoCompatibleAsset(assets); got != "https://example.com/mihomo.gz" {
-		t.Fatalf("findMihomoCompatibleAsset() = %q", got)
+	got, err := findMihomoCompatibleAsset([]mihomoReleaseAsset{asset}, version)
+	if err != nil || got != asset {
+		t.Fatalf("findMihomoCompatibleAsset() = %+v, %v; want %+v", got, err, asset)
 	}
-	if got := findMihomoCompatibleAsset(nil); got != "" {
-		t.Fatalf("findMihomoCompatibleAsset(nil) = %q, want empty", got)
+	if _, err := findMihomoCompatibleAsset(nil, version); err == nil {
+		t.Fatal("missing release asset must be rejected")
+	}
+
+	tests := []struct {
+		name string
+		mutate func(*mihomoReleaseAsset)
+	}{
+		{name: "missing digest", mutate: func(a *mihomoReleaseAsset) { a.Digest = "" }},
+		{name: "invalid digest", mutate: func(a *mihomoReleaseAsset) { a.Digest = "sha256:bad" }},
+		{name: "wrong host", mutate: func(a *mihomoReleaseAsset) { a.BrowserDownloadURL = strings.Replace(a.BrowserDownloadURL, "github.com", "example.com", 1) }},
+		{name: "wrong repository path", mutate: func(a *mihomoReleaseAsset) { a.BrowserDownloadURL = strings.Replace(a.BrowserDownloadURL, "MetaCubeX/mihomo", "attacker/mihomo", 1) }},
+		{name: "query string", mutate: func(a *mihomoReleaseAsset) { a.BrowserDownloadURL += "?redirect=1" }},
+		{name: "version mismatch", mutate: func(a *mihomoReleaseAsset) { a.Name = "mihomo-linux-amd64-compatible-v1.19.32.gz" }},
+		{name: "oversized compressed asset", mutate: func(a *mihomoReleaseAsset) { a.Size = maxMihomoCompressedAssetBytes + 1 }},
+		{name: "empty compressed asset", mutate: func(a *mihomoReleaseAsset) { a.Size = 0 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := asset
+			tt.mutate(&candidate)
+			if err := validateMihomoReleaseAsset(candidate, version); err == nil {
+				t.Fatal("invalid release asset was accepted")
+			}
+		})
+	}
+}
+
+func TestVerifyMihomoDownloadedAssetChecksSizeAndDigest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihomo.gz")
+	data := []byte("abc")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	asset := mihomoReleaseAsset{Size: int64(len(data)), Digest: "sha256:" + hex.EncodeToString(sum[:])}
+	if err := verifyMihomoDownloadedAsset(path, asset); err != nil {
+		t.Fatalf("valid downloaded asset rejected: %v", err)
+	}
+	asset.Digest = "sha256:" + strings.Repeat("0", sha256.Size*2)
+	if err := verifyMihomoDownloadedAsset(path, asset); err == nil {
+		t.Fatal("digest mismatch was accepted")
+	}
+	asset.Size++
+	if err := verifyMihomoDownloadedAsset(path, asset); err == nil {
+		t.Fatal("size mismatch was accepted")
+	}
+}
+
+func TestDecompressMihomoAssetValidatesGzipAndOutput(t *testing.T) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte("mihomo-binary")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := decompressMihomoAsset(bytes.NewReader(compressed.Bytes()), &output); err != nil {
+		t.Fatalf("valid gzip asset rejected: %v", err)
+	}
+	if output.String() != "mihomo-binary" {
+		t.Fatalf("decompressed output = %q", output.String())
+	}
+	if err := decompressMihomoAsset(strings.NewReader("not gzip"), io.Discard); err == nil {
+		t.Fatal("invalid gzip stream was accepted")
 	}
 }
 
@@ -53,5 +134,95 @@ func TestIsGzipHeader(t *testing.T) {
 				t.Fatalf("isGzipHeader() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+
+func TestDecompressMihomoAssetEnforcesOutputLimitAndChecksum(t *testing.T) {
+	makeGzip := func(data []byte) []byte {
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		if _, err := writer.Write(data); err != nil { t.Fatal(err) }
+		if err := writer.Close(); err != nil { t.Fatal(err) }
+		return compressed.Bytes()
+	}
+	var limited bytes.Buffer
+	if err := decompressMihomoAssetWithLimit(bytes.NewReader(makeGzip([]byte("12345"))), &limited, 4); err == nil {
+		t.Fatal("decompressed output exceeding the configured limit was accepted")
+	}
+	valid := makeGzip([]byte("checksum"))
+	valid[len(valid)-8] ^= 0xff
+	if err := decompressMihomoAsset(bytes.NewReader(valid), io.Discard); err == nil {
+		t.Fatal("gzip checksum mismatch was accepted")
+	}
+}
+
+
+func TestAcquireMihomoServerUpdateSerializesRequests(t *testing.T) {
+	unlock, ok := acquireMihomoServerUpdate()
+	if !ok || unlock == nil {
+		t.Fatal("first update request should acquire the update lock")
+	}
+	defer func() { if unlock != nil { unlock() } }()
+	if secondUnlock, secondOK := acquireMihomoServerUpdate(); secondOK || secondUnlock != nil {
+		t.Fatal("concurrent update request must be rejected while an update is active")
+	}
+	unlock()
+	unlock = nil
+	thirdUnlock, thirdOK := acquireMihomoServerUpdate()
+	if !thirdOK || thirdUnlock == nil {
+		t.Fatal("update lock should be available after the first request releases it")
+	}
+	defer thirdUnlock()
+}
+
+
+func TestDownloadMihomoAssetEnforcesStreamingLimitWithoutContentLength(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Transfer-Encoding", "chunked")
+		_, _ = io.WriteString(w, "123456789")
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "asset.gz")
+	err := downloadMihomoAsset(context.Background(), server.Client(), server.URL, path, 4)
+	if err == nil {
+		t.Fatal("chunked response larger than limit was accepted")
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized partial download was not removed: stat err=%v", statErr)
+	}
+}
+
+func TestDownloadMihomoAssetAcceptsBoundedHTTPSResponse(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4")
+		_, _ = io.WriteString(w, "1234")
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "asset.gz")
+	if err := downloadMihomoAsset(context.Background(), server.Client(), server.URL, path, 4); err != nil {
+		t.Fatalf("bounded HTTPS download failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "1234" {
+		t.Fatalf("downloaded bytes = %q, err=%v", got, err)
+	}
+}
+
+func TestDownloadMihomoAssetRejectsHTTPSDowngradeRedirect(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "1234")
+	}))
+	defer plain.Close()
+	tls := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL, http.StatusFound)
+	}))
+	defer tls.Close()
+	path := filepath.Join(t.TempDir(), "asset.gz")
+	if err := downloadMihomoAsset(context.Background(), tls.Client(), tls.URL, path, 8); err == nil {
+		t.Fatal("HTTPS-to-HTTP redirect was accepted")
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("redirect failure left a partial file: stat err=%v", statErr)
 	}
 }
