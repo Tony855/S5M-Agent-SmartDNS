@@ -408,6 +408,16 @@ func (s *Store) CountUsers() (int, error) {
 	return n, err
 }
 
+// CountEnabledAdmins verifies that a restored database retains at least one
+// account that can pass the application's current admin authorization gate.
+func (s *Store) CountEnabledAdmins() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users
+		WHERE role='admin' AND enabled=1
+			AND trim(username) <> '' AND trim(password_hash) <> ''`).Scan(&n)
+	return n, err
+}
+
 func (s *Store) CreateUser(username, hash, role string) error {
 	_, err := s.db.Exec(`INSERT INTO users(username,password_hash,role) VALUES(?,?,?)`, username, hash, role)
 	return err
