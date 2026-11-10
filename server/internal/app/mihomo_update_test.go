@@ -133,3 +133,23 @@ func TestIsGzipHeader(t *testing.T) {
 		})
 	}
 }
+
+
+func TestDecompressMihomoAssetEnforcesOutputLimitAndChecksum(t *testing.T) {
+	makeGzip := func(data []byte) []byte {
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		if _, err := writer.Write(data); err != nil { t.Fatal(err) }
+		if err := writer.Close(); err != nil { t.Fatal(err) }
+		return compressed.Bytes()
+	}
+	var limited bytes.Buffer
+	if err := decompressMihomoAssetWithLimit(bytes.NewReader(makeGzip([]byte("12345"))), &limited, 4); err == nil {
+		t.Fatal("decompressed output exceeding the configured limit was accepted")
+	}
+	valid := makeGzip([]byte("checksum"))
+	valid[len(valid)-1] ^= 0xff
+	if err := decompressMihomoAsset(bytes.NewReader(valid), io.Discard); err == nil {
+		t.Fatal("gzip checksum mismatch was accepted")
+	}
+}
