@@ -160,6 +160,7 @@ func TestAcquireMihomoServerUpdateSerializesRequests(t *testing.T) {
 	if !ok || unlock == nil {
 		t.Fatal("first update request should acquire the update lock")
 	}
+	defer unlock()
 	if secondUnlock, secondOK := acquireMihomoServerUpdate(); secondOK || secondUnlock != nil {
 		t.Fatal("concurrent update request must be rejected while an update is active")
 	}
@@ -168,5 +169,5 @@ func TestAcquireMihomoServerUpdateSerializesRequests(t *testing.T) {
 	if !thirdOK || thirdUnlock == nil {
 		t.Fatal("update lock should be available after the first request releases it")
 	}
-	thirdUnlock()
+	defer thirdUnlock()
 }
