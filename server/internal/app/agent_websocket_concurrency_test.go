@@ -74,3 +74,47 @@ func TestAgentWSCommandLocksScaleAcrossNodes(t *testing.T) {
 		}
 	}
 }
+
+
+func TestAgentWSCommandLocksAreEvictedAfterUse(t *testing.T) {
+	app := &App{}
+	for i := 0; i < 1000; i++ {
+		code := fmt.Sprintf("transient-node-%d", i)
+		unlock := app.lockAgentWSCommand(code)
+		unlock()
+	}
+	app.agentWSCommandMu.Lock()
+	defer app.agentWSCommandMu.Unlock()
+	if got := len(app.agentWSCommandLocks); got != 0 {
+		t.Fatalf("idle per-agent lock map retained %d entries after 1000 distinct nodes; want 0", got)
+	}
+}
+
+func TestAgentWSCommandLockWaitersKeepSharedLockUntilReleased(t *testing.T) {
+	app := &App{}
+	unlockFirst := app.lockAgentWSCommand("same-node")
+	waiting := make(chan func(), 1)
+	go func() { waiting <- app.lockAgentWSCommand("same-node") }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		app.agentWSCommandMu.Lock()
+		lock := app.agentWSCommandLocks["same-node"]
+		refs := 0
+		if lock != nil { refs = lock.refs }
+		app.agentWSCommandMu.Unlock()
+		if refs == 2 { break }
+		if time.Now().After(deadline) {
+			unlockFirst()
+			t.Fatal("waiting command did not register its lock reference")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	unlockFirst()
+	unlockSecond := <-waiting
+	unlockSecond()
+	app.agentWSCommandMu.Lock()
+	defer app.agentWSCommandMu.Unlock()
+	if _, ok := app.agentWSCommandLocks["same-node"]; ok {
+		t.Fatal("lock entry remained after holder and waiter released it")
+	}
+}

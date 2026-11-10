@@ -1217,19 +1217,37 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 // sendAgentWSCommand redelivers the persisted pending command until an ACK is stored.
 // lockAgentWSCommand serializes commands for one Agent while allowing
 // unrelated nodes to execute and acknowledge commands concurrently.
+type agentWSCommandLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockAgentWSCommand serializes commands for one Agent while allowing unrelated
+// Agents to proceed independently. References include both holders and waiters,
+// so an idle lock can be safely removed without splitting a node's lock domain.
 func (a *App) lockAgentWSCommand(machineCode string) func() {
 	a.agentWSCommandMu.Lock()
 	if a.agentWSCommandLocks == nil {
-		a.agentWSCommandLocks = make(map[string]*sync.Mutex)
+		a.agentWSCommandLocks = make(map[string]*agentWSCommandLock)
 	}
 	lock := a.agentWSCommandLocks[machineCode]
 	if lock == nil {
-		lock = &sync.Mutex{}
+		lock = &agentWSCommandLock{}
 		a.agentWSCommandLocks[machineCode] = lock
 	}
+	lock.refs++
 	a.agentWSCommandMu.Unlock()
-	lock.Lock()
-	return lock.Unlock
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		a.agentWSCommandMu.Lock()
+		lock.refs--
+		if lock.refs == 0 && a.agentWSCommandLocks[machineCode] == lock {
+			delete(a.agentWSCommandLocks, machineCode)
+		}
+		a.agentWSCommandMu.Unlock()
+	}
 }
 
 func (a *App) sendAgentWSCommand(conn *websocket.Conn, machineCode, requestID string) error {
