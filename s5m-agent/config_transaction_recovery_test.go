@@ -123,3 +123,39 @@ func TestReadConfigTransactionRecoveryRecordRejectsSymlink(t *testing.T) {
 		t.Fatal("symlink recovery journal must be rejected")
 	}
 }
+
+
+func TestPreServiceRecoveryRestoresFilesWithoutRuntimeReload(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	transactionReloadMihomo = func() error { t.Fatal("Mihomo is not started during cont-init"); return nil }
+	transactionRestartSmartDNS = func() error { t.Fatal("SmartDNS is not started during cont-init"); return nil }
+	record := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Data: []byte("old-smartdns"), Existed: true},
+		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
+		Controller: transactionRecoveryFile{Data: []byte("old-controller-hash"), Existed: true},
+	}
+	writeRecoveryFixtureFile(t, filepath.Join(dir, "config.yaml"), []byte("candidate-mihomo"))
+	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("candidate-smartdns"))
+	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverInterruptedConfigTransactionBeforeServices(); err != nil {
+		t.Fatalf("pre-service recovery: %v", err)
+	}
+	for name, want := range map[string]string{
+		"config.yaml": "old-mihomo",
+		"smartdns.conf": "old-smartdns",
+		"controller-route-cidrs.json": "old-routes",
+		"controller-config.yaml": "old-controller-hash",
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, err=%v; want %q", name, got, err, want)
+		}
+	}
+	if _, err := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(err) {
+		t.Fatalf("journal should be removed after durable pre-service restore: %v", err)
+	}
+}
