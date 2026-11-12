@@ -755,3 +755,87 @@ func TestRollbackFailedSmartDNSEnableSurfacesMarkerFailureEvenWhenStopSucceeds(t
 		t.Fatalf("stop must still be attempted after marker failure, got %d calls", stopCalls)
 	}
 }
+
+
+func TestConfigTransactionDoesNotMutateWhenRecoveryJournalCannotBePrepared(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldWriter := transactionWriteRecoveryRecord
+	t.Cleanup(func() { transactionWriteRecoveryRecord = oldWriter })
+	journalErr := errors.New("injected recovery journal fsync failure")
+	transactionWriteRecoveryRecord = func(configTransactionRecoveryRecord) error { return journalErr }
+	mergeCalls := 0
+	transactionMergeMihomo = func([]byte, string) (bool, error) { mergeCalls++; return true, nil }
+
+	err := applyAgentConfigTransaction([]byte("candidate-controller"), nil, false, "")
+	if !errors.Is(err, journalErr) {
+		t.Fatalf("expected recovery journal error, got %v", err)
+	}
+	if mergeCalls != 0 {
+		t.Fatalf("Mihomo must not be mutated before durable journal exists, merge calls=%d", mergeCalls)
+	}
+	for name, want := range map[string][]byte{
+		"config.yaml": []byte("old-mihomo"),
+		"controller-route-cidrs.json": []byte("[\\"192.0.2.10/32\\"]"),
+		"controller-config.yaml": []byte("old-controller-hash"),
+		"smartdns.conf": []byte("old-smartdns"),
+	} {
+		got, readErr := os.ReadFile(filepath.Join(dir, name))
+		if readErr != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%s changed before journal preparation: got=%q err=%v want=%q", name, got, readErr, want)
+		}
+	}
+	if _, statErr := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(statErr) {
+		t.Fatalf("failed journal preparation must not leave an active journal: %v", statErr)
+	}
+}
+
+func TestConfigTransactionRollsBackWhenCommitMarkerCannotBePersisted(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldWriter := transactionWriteRecoveryRecord
+	t.Cleanup(func() { transactionWriteRecoveryRecord = oldWriter })
+	commitErr := errors.New("injected commit-marker directory fsync failure")
+	transactionWriteRecoveryRecord = func(record configTransactionRecoveryRecord) error {
+		if record.Phase == "committed" {
+			return commitErr
+		}
+		return writeConfigTransactionRecoveryRecord(record)
+	}
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
+		if err := atomicWriteFile(mihomoConfigPath(), []byte("candidate-mihomo"), 0600); err != nil {
+			return false, err
+		}
+		if err := atomicWriteFile(managedRouteCIDRsPath(), []byte("[\\"198.51.100.44/32\\"]"), 0600); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	reloadCalls := 0
+	transactionReloadMihomo = func() error { reloadCalls++; return nil }
+	transactionWriteControllerConfig = func(data []byte) error {
+		return atomicWriteFile(controllerConfigPath(), data, 0600)
+	}
+	transactionRestartSmartDNS = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { return true }
+
+	err := applyAgentConfigTransaction([]byte("candidate-controller"), nil, false, "")
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("expected commit-marker error, got %v", err)
+	}
+	for name, want := range map[string][]byte{
+		"config.yaml": []byte("old-mihomo"),
+		"controller-route-cidrs.json": []byte("[\\"192.0.2.10/32\\"]"),
+		"controller-config.yaml": []byte("old-controller-hash"),
+		"smartdns.conf": []byte("old-smartdns"),
+	} {
+		got, readErr := os.ReadFile(filepath.Join(dir, name))
+		if readErr != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%s not restored after commit-marker failure: got=%q err=%v want=%q", name, got, readErr, want)
+		}
+	}
+	if reloadCalls != 2 {
+		t.Fatalf("expected candidate and rollback reloads, got %d", reloadCalls)
+	}
+	if _, statErr := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(statErr) {
+		t.Fatalf("successful rollback must clear recovery journal: %v", statErr)
+	}
+}
