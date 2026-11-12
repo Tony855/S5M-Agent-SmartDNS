@@ -110,3 +110,8 @@ if grep -Eq '^secret:[[:space:]]*"?(__S5M_GENERATED_SECRET__|__S5M_MIHOMO_SECRET
   sed -i "s|^secret:.*|secret: \\"$secret\\"|" "$CONFIG_PATH"
   chmod 0600 "$CONFIG_PATH"
 fi
+
+# Restore an interrupted multi-file config transaction before s6 starts
+# Mihomo or SmartDNS. The old config was previously healthy; supervised
+# services will start from these restored bytes after cont-init completes.
+/app/s5m-agent --recover-config-transaction-before-services
