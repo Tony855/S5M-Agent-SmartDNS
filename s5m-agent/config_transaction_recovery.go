@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,7 +93,6 @@ func recoverInterruptedConfigTransaction() error {
 	configTransactionRecoveryMu.Lock()
 	defer configTransactionRecoveryMu.Unlock()
 
-	path := configTransactionRecoveryPath()
 	record, err := readConfigTransactionRecoveryRecord()
 	if os.IsNotExist(err) {
 		return nil
@@ -127,7 +127,7 @@ func recoverInterruptedConfigTransaction() error {
 			restoreErrors = append(restoreErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", smartErr))
 		}
 		if len(restoreErrors) > 0 {
-			return fmt.Errorf("联合配置事务启动恢复未完成，恢复记录保留: %w", errorsJoin(restoreErrors))
+			return fmt.Errorf("联合配置事务启动恢复未完成，恢复记录保留: %w", errors.Join(restoreErrors...))
 		}
 
 		if record.SmartDNS.Existed && smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
@@ -154,13 +154,5 @@ func recoverInterruptedConfigTransaction() error {
 	if err := removeConfigTransactionRecoveryRecord(); err != nil {
 		return fmt.Errorf("清理联合配置事务恢复记录失败: %w", err)
 	}
-	_ = path
 	return nil
-}
-
-func errorsJoin(errs []error) error {
-	if len(errs) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%v", errs)
 }
