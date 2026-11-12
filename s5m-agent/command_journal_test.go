@@ -260,3 +260,48 @@ func TestExecuteAgentCommandWithJournalConcurrentDuplicateDeliveryExecutesOnce(t
 		t.Fatalf("final journal does not contain completed ACK result: %+v", entry)
 	}
 }
+
+
+func TestExecuteAgentCommandWithJournalBlocksStaleDuplicateAfterNewerCommand(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	first := agentCommand{ID: "cmd-old", Type: "set_smartdns_enabled"}
+	second := agentCommand{ID: "cmd-new", Type: "set_smartdns_enabled"}
+	var firstRuns, secondRuns int
+	runFirst := func() (string, string, error) { firstRuns++; return "old-result", "", nil }
+	runSecond := func() (string, string, error) { secondRuns++; return "new-result", "", nil }
+	if _, _, _, err := executeAgentCommandWithJournal(first, runFirst); err != nil { t.Fatal(err) }
+	if _, _, _, err := executeAgentCommandWithJournal(second, runSecond); err != nil { t.Fatal(err) }
+	status, message, _, err := executeAgentCommandWithJournal(first, runFirst)
+	if err != nil || status != "failed" || !strings.Contains(message, "重复投递") {
+		t.Fatalf("stale duplicate must be rejected: status=%q message=%q err=%v", status, message, err)
+	}
+	if firstRuns != 1 || secondRuns != 1 {
+		t.Fatalf("side effects repeated: old=%d new=%d", firstRuns, secondRuns)
+	}
+}
+
+func TestExecuteAgentCommandWithJournalDoesNotOverwriteInterruptedCommand(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	first := agentCommand{ID: "cmd-running", Type: "configure_smartdns"}
+	payload, err := json.Marshal(first)
+	if err != nil { t.Fatal(err) }
+	sum := sha256.Sum256(payload)
+	if err := writeAgentCommandJournal(agentCommandJournalEntry{ID:first.ID, PayloadHash:hex.EncodeToString(sum[:]), State:"running"}); err != nil { t.Fatal(err) }
+	executions := 0
+	status, _, _, err := executeAgentCommandWithJournal(agentCommand{ID:"cmd-next", Type:"set_smartdns_enabled"}, func() (string,string,error) { executions++; return "bad","",nil })
+	if err == nil || status != "failed" || executions != 0 { t.Fatalf("new command overwrote running journal: status=%q executions=%d err=%v",status,executions,err) }
+	entry, readErr := readAgentCommandJournal()
+	if readErr != nil || entry.ID != first.ID || entry.State != "running" { t.Fatalf("running journal changed: entry=%+v err=%v",entry,readErr) }
+}
+
+func TestExecuteAgentCommandWithJournalRejectsHistoricalIDPayloadReuse(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	first := agentCommand{ID:"cmd-history", Type:"set_smartdns_enabled"}
+	second := agentCommand{ID:"cmd-later", Type:"set_smartdns_enabled"}
+	if _,_,_,err:=executeAgentCommandWithJournal(first,func()(string,string,error){return "done","",nil}); err!=nil { t.Fatal(err) }
+	if _,_,_,err:=executeAgentCommandWithJournal(second,func()(string,string,error){return "done","",nil}); err!=nil { t.Fatal(err) }
+	reused := agentCommand{ID:first.ID,Type:"restart"}
+	executions:=0
+	status,_,_,err:=executeAgentCommandWithJournal(reused,func()(string,string,error){executions++;return "bad","",nil})
+	if err==nil || status!="failed" || executions!=0 { t.Fatalf("historical ID payload reuse was not rejected: status=%q executions=%d err=%v",status,executions,err) }
+}

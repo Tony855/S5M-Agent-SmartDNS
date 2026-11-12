@@ -13,9 +13,18 @@ import (
 	"syscall"
 )
 
-const agentCommandJournalMaxBytes = 16 << 10
+const (
+	agentCommandJournalMaxBytes = 64 << 10
+	agentCommandJournalHistoryLimit = 64
+)
+
+type agentCommandJournalSeen struct {
+	ID          string `json:"id"`
+	PayloadHash string `json:"payload_hash"`
+}
 
 type agentCommandJournalEntry struct {
+	History     []agentCommandJournalSeen `json:"history,omitempty"`
 	ID          string `json:"id"`
 	PayloadHash string `json:"payload_hash"`
 	State       string `json:"state"`
@@ -57,7 +66,7 @@ func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 		return entry, fmt.Errorf("Agent 命令执行记录权限过宽，必须限制为仅所有者可访问")
 	}
 	if info.Size() <= 0 || info.Size() > agentCommandJournalMaxBytes {
-		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 16 KiB")
+		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 64 KiB")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, agentCommandJournalMaxBytes+1))
 	if err != nil {
@@ -79,6 +88,17 @@ func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	if entry.State == "completed" && entry.Status != "success" && entry.Status != "failed" {
 		return entry, fmt.Errorf("Agent 命令执行记录完成状态无效，拒绝覆盖")
 	}
+	if len(entry.History) > agentCommandJournalHistoryLimit {
+		return entry, fmt.Errorf("Agent 命令执行记录历史超过允许数量，拒绝读取")
+	}
+	for _, seen := range entry.History {
+		if strings.TrimSpace(seen.ID) == "" || len(seen.ID) > 256 || len(seen.PayloadHash) != 64 {
+			return entry, fmt.Errorf("Agent 命令执行记录历史字段无效，拒绝读取")
+		}
+		if _, err := hex.DecodeString(seen.PayloadHash); err != nil {
+			return entry, fmt.Errorf("Agent 命令执行记录历史 hash 无效，拒绝读取")
+		}
+	}
 	if len(entry.Message) > 2048 || len(entry.Config) > 8<<10 {
 		return entry, fmt.Errorf("Agent 命令执行记录结果超过允许大小，拒绝读取")
 	}
@@ -91,7 +111,7 @@ func writeAgentCommandJournal(entry agentCommandJournalEntry) error {
 		return err
 	}
 	if len(data) == 0 || len(data) > agentCommandJournalMaxBytes {
-		return fmt.Errorf("Agent 命令执行记录超过 16 KiB，拒绝写入")
+		return fmt.Errorf("Agent 命令执行记录超过 64 KiB，拒绝写入")
 	}
 	dir := filepath.Dir(agentCommandJournalPath())
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -172,7 +192,31 @@ func executeAgentCommandWithJournal(cmd agentCommand, execute func() (string, st
 			return entry.Status, entry.Message, entry.Config, nil
 		}
 	} else {
-		entry = agentCommandJournalEntry{ID: cmd.ID, PayloadHash: hash, State: "running"}
+		// A different command must never overwrite an interrupted running
+		// command. The Master allows only one pending command per Agent, so
+		// seeing this state means recovery/reconciliation is required first.
+		if entry.ID != "" && entry.State == "running" {
+			return "failed", "", "", fmt.Errorf("上一条 Agent 命令仍处于未完成状态，拒绝覆盖执行记录")
+		}
+		for _, seen := range entry.History {
+			if seen.ID == cmd.ID {
+				if seen.PayloadHash != hash {
+					return "failed", "", "", fmt.Errorf("历史命令 ID 重复但命令内容不一致，拒绝执行")
+				}
+				// The original result may have been evicted from the single-result
+				// slot, but the ID/hash tombstone still prevents stale redelivery
+				// from repeating its side effects.
+				return "failed", "检测到已完成旧命令的重复投递，已阻止再次执行", "", nil
+			}
+		}
+		if entry.ID != "" {
+			entry.History = append(entry.History, agentCommandJournalSeen{ID: entry.ID, PayloadHash: entry.PayloadHash})
+			if len(entry.History) > agentCommandJournalHistoryLimit {
+				entry.History = append([]agentCommandJournalSeen(nil), entry.History[len(entry.History)-agentCommandJournalHistoryLimit:]...)
+			}
+		}
+		entry.ID, entry.PayloadHash = cmd.ID, hash
+		entry.State, entry.Status, entry.Message, entry.Config = "running", "", "", ""
 	}
 	entry.State = "running"
 	entry.Status, entry.Message, entry.Config = "", "", ""
