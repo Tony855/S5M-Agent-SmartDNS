@@ -148,6 +148,42 @@ func TestSmartDNSResponseRequiresRequestedAddressRecord(t *testing.T) {
 	})
 }
 
+
+func TestSmartDNSResponseRejectsMalformedTrailingAnswerAfterMatchingRecord(t *testing.T) {
+	makeResponse := func() []byte {
+		message := make([]byte, 12)
+		binary.BigEndian.PutUint16(message[0:2], 0x534d)
+		binary.BigEndian.PutUint16(message[2:4], 0x8180)
+		binary.BigEndian.PutUint16(message[4:6], 1)
+		binary.BigEndian.PutUint16(message[6:8], 2)
+		message = append(message, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+		message = append(message, 0, 1, 0, 1)
+		// A valid first A answer must not mask a truncated second answer.
+		message = append(message, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+		message = append(message, 0xc0, 0x0c, 0, 1)
+		return message
+	}
+	if smartDNSResponseHasAnswer(makeResponse(), 0x534d, 1) {
+		t.Fatal("valid early A answer must not hide a malformed trailing answer RR")
+	}
+}
+
+func TestSmartDNSResponseValidatesAllAnswersBeforeAcceptingMatch(t *testing.T) {
+	message := make([]byte, 12)
+	binary.BigEndian.PutUint16(message[0:2], 0x534d)
+	binary.BigEndian.PutUint16(message[2:4], 0x8180)
+	binary.BigEndian.PutUint16(message[4:6], 1)
+	binary.BigEndian.PutUint16(message[6:8], 2)
+	message = append(message, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+	message = append(message, 0, 1, 0, 1)
+	// A complete unrelated CNAME RR followed by the requested A RR.
+	message = append(message, 0xc0, 0x0c, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 0xc0, 0x0c)
+	message = append(message, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+	if !smartDNSResponseHasAnswer(message, 0x534d, 1) {
+		t.Fatal("complete answer section containing requested A RR should pass")
+	}
+}
+
 func TestProbeSmartDNSDNSAtQueriesAAAAAfterA(t *testing.T) {
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
