@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 # Build only SmartDNS core; do not compile the optional Web UI.
-ARG ALPINE_VERSION=3.22
+# Official Docker Library multi-architecture manifest-list digest.
+ARG ALPINE_IMAGE=alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
 
-FROM alpine:${ALPINE_VERSION} AS build
+FROM ${ALPINE_IMAGE} AS build
 ARG SMARTDNS_COMMIT=21c940edc65520849ba03544c5cf8d9cf326e680
 RUN apk add --no-cache --virtual .build-deps \
       build-base git linux-headers openssl-dev zlib-dev
@@ -18,7 +19,7 @@ RUN git init /src \
     && install -D -m 0644 /tmp/SMARTDNS_SOURCE_COMMIT /out/usr/share/licenses/smartdns/SOURCE_COMMIT \
     && printf '%s\n' 'https://github.com/pymumu/smartdns' > /out/usr/share/licenses/smartdns/SOURCE_URL
 
-FROM alpine:${ALPINE_VERSION} AS runtime
+FROM ${ALPINE_IMAGE} AS runtime
 ARG SMARTDNS_COMMIT=21c940edc65520849ba03544c5cf8d9cf326e680
 LABEL org.opencontainers.image.title="SmartDNS (core only)" \
       org.opencontainers.image.description="Lightweight SmartDNS DNS resolver without Web UI" \
