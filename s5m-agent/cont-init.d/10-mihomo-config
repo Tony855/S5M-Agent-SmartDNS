@@ -114,4 +114,5 @@ fi
 # Restore an interrupted multi-file config transaction before s6 starts
 # Mihomo or SmartDNS. The old config was previously healthy; supervised
 # services will start from these restored bytes after cont-init completes.
-/app/s5m-agent --recover-config-transaction-before-services
+S5M_AGENT_BINARY="${S5M_AGENT_BINARY:-/app/s5m-agent}"
+"$S5M_AGENT_BINARY" --recover-config-transaction-before-services
