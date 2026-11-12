@@ -26,7 +26,10 @@ type configTransactionRecoveryRecord struct {
 	Controller    transactionRecoveryFile `json:"controller"`
 }
 
-var configTransactionRecoveryMu sync.Mutex
+var (
+	configTransactionRecoveryMu sync.Mutex
+	transactionWriteRecoveryRecord = writeConfigTransactionRecoveryRecord
+)
 
 func configTransactionRecoveryPath() string {
 	return filepath.Join(mihomoHome(), ".s5m-config-transaction.json")
