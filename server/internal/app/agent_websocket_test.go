@@ -2053,3 +2053,84 @@ func TestAgentWebSocketConfigRequestDoesNotHoldGlobalLockDuringDatabaseIO(t *tes
 		t.Fatalf("unexpected config response: %#v", response)
 	}
 }
+
+
+func TestAgentWebSocketRedeliversUnacknowledgedCommandAfterReconnect(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	pending := map[string]any{
+		"id": "cmd-reconnect-1", "type": "set_smartdns_enabled", "enabled": true,
+	}
+	raw, err := json.Marshal(pending)
+	if err != nil {
+		t.Fatalf("marshal pending command: %v", err)
+	}
+	if err := app.store.UpdateSettings(map[string]string{"agent_command_" + code: string(raw)}); err != nil {
+		t.Fatalf("queue pending command: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	dial := func() *websocket.Conn {
+		t.Helper()
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+		if err != nil {
+			t.Fatalf("dial authenticated WebSocket: %v", err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var welcome map[string]any
+		if err := conn.ReadJSON(&welcome); err != nil {
+			_ = conn.Close()
+			t.Fatalf("read welcome: %v", err)
+		}
+		if welcome["type"] != "welcome" {
+			_ = conn.Close()
+			t.Fatalf("unexpected welcome: %#v", welcome)
+		}
+		return conn
+	}
+
+	first := dial()
+	if err := first.WriteJSON(map[string]any{"type": "command.request", "id": "poll-before-disconnect"}); err != nil {
+		_ = first.Close()
+		t.Fatalf("request command before disconnect: %v", err)
+	}
+	var firstDelivery map[string]any
+	if err := first.ReadJSON(&firstDelivery); err != nil {
+		_ = first.Close()
+		t.Fatalf("read first command delivery: %v", err)
+	}
+	firstCommand, ok := firstDelivery["command"].(map[string]any)
+	if firstDelivery["type"] != "command.deliver" || !ok || firstCommand["id"] != pending["id"] {
+		_ = first.Close()
+		t.Fatalf("unexpected first delivery: %#v", firstDelivery)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first connection: %v", err)
+	}
+
+	// The command remains durable because no command.ack was received.
+	second := dial()
+	defer second.Close()
+	if err := second.WriteJSON(map[string]any{"type": "command.request", "id": "poll-after-reconnect"}); err != nil {
+		t.Fatalf("request command after reconnect: %v", err)
+	}
+	var secondDelivery map[string]any
+	if err := second.ReadJSON(&secondDelivery); err != nil {
+		t.Fatalf("read redelivered command: %v", err)
+	}
+	secondCommand, ok := secondDelivery["command"].(map[string]any)
+	if secondDelivery["type"] != "command.deliver" || secondDelivery["id"] != "poll-after-reconnect" ||
+		!ok || secondCommand["id"] != pending["id"] || secondCommand["type"] != pending["type"] ||
+		secondCommand["enabled"] != true {
+		t.Fatalf("unacknowledged command was not redelivered unchanged: %#v", secondDelivery)
+	}
+	settings, err := app.store.GetSettings()
+	if err != nil {
+		t.Fatalf("read pending command after reconnect: %v", err)
+	}
+	if settings["agent_command_"+code] != string(raw) {
+		t.Fatalf("reconnect changed durable pending command: %q", settings["agent_command_"+code])
+	}
+}
