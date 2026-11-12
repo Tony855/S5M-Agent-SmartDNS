@@ -2779,11 +2779,11 @@ func serveAgentRegistrationPage(w http.ResponseWriter, r *http.Request) {
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--recover-config-transaction-before-services" {
 		if err := os.MkdirAll(mihomoHome(), 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "创建 Agent 数据目录失败: %v\\n", err)
+			fmt.Fprintf(os.Stderr, "创建 Agent 数据目录失败: %v\n", err)
 			os.Exit(1)
 		}
 		if err := recoverInterruptedConfigTransactionBeforeServices(); err != nil {
-			fmt.Fprintf(os.Stderr, "Agent 联合配置事务启动前恢复失败: %v\\n", err)
+			fmt.Fprintf(os.Stderr, "Agent 联合配置事务启动前恢复失败: %v\n", err)
 			os.Exit(1)
 		}
 		return
