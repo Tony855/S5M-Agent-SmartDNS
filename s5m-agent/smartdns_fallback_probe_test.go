@@ -136,3 +136,52 @@ func TestProbeMihomoDNSFallbackRejectsNilRunnerAndInvalidYAML(t *testing.T) {
 	}
 }
 
+
+
+func TestSmartDNSCombinedHealthRequiresEveryDomesticDNSTransport(t *testing.T) {
+	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nbind 127.0.0.1:6054 -group china-dot\nbind-tcp 127.0.0.1:6054 -group china-dot\n")
+	tests := []struct {
+		name string
+		fail string
+		want bool
+	}{
+		{name: "all listeners healthy", want: true},
+		{name: "primary UDP failed", fail: "udp:127.0.0.1:6053"},
+		{name: "primary TCP failed", fail: "tcp:127.0.0.1:6053"},
+		{name: "domestic UDP failed", fail: "udp:127.0.0.1:6054"},
+		{name: "domestic TCP failed", fail: "tcp:127.0.0.1:6054"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls []string
+			probe := func(transport string) func(string) bool {
+				return func(address string) bool {
+					key := transport + ":" + address
+					calls = append(calls, key)
+					return key != tt.fail
+				}
+			}
+			got := probeSmartDNSDNSWithConfigAndProbes(config, probe("udp"), probe("tcp"))
+			if got != tt.want {
+				t.Fatalf("combined SmartDNS health = %v, want %v (calls=%v)", got, tt.want, calls)
+			}
+			if tt.fail != "" {
+				if len(calls) >= 8 {
+					t.Fatalf("health probe did not short-circuit after a failed dataplane: %v", calls)
+				}
+			} else if len(calls) != 4 {
+				t.Fatalf("healthy domestic setup should probe primary and domestic UDP/TCP exactly once: %v", calls)
+			}
+		})
+	}
+}
+
+func TestSmartDNSCombinedHealthRejectsMissingProbeFunctions(t *testing.T) {
+	config := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n")
+	if probeSmartDNSDNSWithConfigAndProbes(config, nil, func(string) bool { return true }) {
+		t.Fatal("missing UDP probe must fail closed")
+	}
+	if probeSmartDNSDNSWithConfigAndProbes(config, func(string) bool { return true }, nil) {
+		t.Fatal("missing TCP probe must fail closed")
+	}
+}
