@@ -21,13 +21,13 @@ func TestRecoverInterruptedConfigTransactionRestoresAllSnapshots(t *testing.T) {
 		Version: 1, Phase: "prepared",
 		SmartDNS: transactionRecoveryFile{Data: []byte("old-smartdns"), Existed: true},
 		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
-		ManagedRoutes: transactionRecoveryFile{Data: []byte("[\\"192.0.2.10/32\\"]"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
 		Controller: transactionRecoveryFile{Data: []byte("old-controller-hash"), Existed: true},
 	}
 	for name, data := range map[string][]byte{
 		"smartdns.conf": []byte("candidate-smartdns"),
 		"config.yaml": []byte("candidate-mihomo"),
-		"controller-route-cidrs.json": []byte("[\\"198.51.100.20/32\\"]"),
+		"controller-route-cidrs.json": []byte("old-routes"),
 		"controller-config.yaml": []byte("candidate-controller-hash"),
 	} {
 		writeRecoveryFixtureFile(t, filepath.Join(dir, name), data)
@@ -42,7 +42,7 @@ func TestRecoverInterruptedConfigTransactionRestoresAllSnapshots(t *testing.T) {
 	for name, want := range map[string][]byte{
 		"smartdns.conf": []byte("old-smartdns"),
 		"config.yaml": []byte("old-mihomo"),
-		"controller-route-cidrs.json": []byte("[\\"192.0.2.10/32\\"]"),
+		"controller-route-cidrs.json": []byte("old-routes"),
 		"controller-config.yaml": []byte("old-controller-hash"),
 	} {
 		got, err := os.ReadFile(filepath.Join(dir, name))
@@ -62,7 +62,7 @@ func TestRecoverCommittedConfigTransactionKeepsNewStateAndCleansJournal(t *testi
 		Version: 1, Phase: "committed",
 		SmartDNS: transactionRecoveryFile{},
 		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
-		ManagedRoutes: transactionRecoveryFile{Data: []byte("[\\"192.0.2.10/32\\"]"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
 		Controller: transactionRecoveryFile{Data: []byte("old-controller-hash"), Existed: true},
 	}
 	writeRecoveryFixtureFile(t, filepath.Join(dir, "config.yaml"), []byte("committed-mihomo"))
@@ -94,7 +94,7 @@ func TestRecoverInterruptedConfigTransactionRetainsJournalOnRestoreFailure(t *te
 		Version: 1, Phase: "prepared",
 		SmartDNS: transactionRecoveryFile{},
 		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
-		ManagedRoutes: transactionRecoveryFile{Data: []byte("[\\"192.0.2.10/32\\"]"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
 		Controller: transactionRecoveryFile{Data: []byte("old-controller-hash"), Existed: true},
 	}
 	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
