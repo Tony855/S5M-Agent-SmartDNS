@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeRecoveryFixtureFile(t *testing.T, path string, data []byte) {
