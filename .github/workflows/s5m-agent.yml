@@ -17,6 +17,7 @@ on:
       - "s5m-agent/no_smartdns_migration.go"
       - "s5m-agent/services/**"
       - "s5m-agent/cont-init.d/**"
+      - "s5m-agent/tests/**"
       - ".github/workflows/s5m-agent.yml"
   push:
     branches: [main]
@@ -30,6 +31,7 @@ on:
       - "s5m-agent/no_smartdns_migration.go"
       - "s5m-agent/services/**"
       - "s5m-agent/cont-init.d/**"
+      - "s5m-agent/tests/**"
       - ".github/workflows/s5m-agent.yml"
   workflow_dispatch:
     inputs:
