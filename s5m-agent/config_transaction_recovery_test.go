@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -205,5 +206,59 @@ func TestRecoverInterruptedConfigTransactionRetainsJournalWhenSmartDNSDirectoryS
 	got, readErr := os.ReadFile(filepath.Join(dir, "smartdns.conf"))
 	if readErr != nil || string(got) != "old-smartdns" {
 		t.Fatalf("SmartDNS bytes were not restored: %q err=%v", got, readErr)
+	}
+}
+
+
+func TestConfigTransactionRecoverySubprocessHelper(t *testing.T) {
+	if os.Getenv("S5M_TEST_CONFIG_RECOVERY_CHILD") != "1" {
+		return
+	}
+	smartDNSConfigPath = filepath.Join(mihomoHome(), "smartdns.conf")
+	if err := recoverInterruptedConfigTransactionBeforeServices(); err != nil {
+		t.Fatalf("subprocess startup recovery: %v", err)
+	}
+}
+
+func TestConfigTransactionRecoverySurvivesAgentProcessRestart(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	record := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Data: []byte("pre-crash-smartdns"), Existed: true},
+		Mihomo: transactionRecoveryFile{Data: []byte("pre-crash-mihomo"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("pre-crash-routes"), Existed: true},
+		Controller: transactionRecoveryFile{Data: []byte("pre-crash-controller"), Existed: true},
+	}
+	for name, data := range map[string][]byte{
+		"smartdns.conf": []byte("partially-applied-smartdns"),
+		"config.yaml": []byte("partially-applied-mihomo"),
+		"controller-route-cidrs.json": []byte("partially-applied-routes"),
+		"controller-config.yaml": []byte("partially-applied-controller"),
+	} {
+		writeRecoveryFixtureFile(t, filepath.Join(dir, name), data)
+	}
+	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestConfigTransactionRecoverySubprocessHelper$")
+	cmd.Env = append(os.Environ(), "S5M_TEST_CONFIG_RECOVERY_CHILD=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("new Agent process failed recovery: %v; output=%s", err, output)
+	}
+	for name, want := range map[string]string{
+		"smartdns.conf": "pre-crash-smartdns",
+		"config.yaml": "pre-crash-mihomo",
+		"controller-route-cidrs.json": "pre-crash-routes",
+		"controller-config.yaml": "pre-crash-controller",
+	} {
+		got, readErr := os.ReadFile(filepath.Join(dir, name))
+		if readErr != nil || string(got) != want {
+			t.Fatalf("%s after subprocess recovery = %q, err=%v; want %q", name, got, readErr, want)
+		}
+	}
+	if _, err := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(err) {
+		t.Fatalf("subprocess recovery must clear journal after durable restore: %v", err)
 	}
 }
