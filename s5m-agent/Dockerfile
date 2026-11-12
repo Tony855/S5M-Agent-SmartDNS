@@ -1,6 +1,7 @@
 # CI revalidation after rebasing current main
 # syntax=docker/dockerfile:1
-ARG ALPINE_VERSION=3.24
+# Official Docker Library multi-architecture manifest-list digest.
+ARG ALPINE_IMAGE=alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 ARG MIHOMO_VERSION=v1.19.31
 ARG S6_OVERLAY_VERSION=3.2.3.2
 # SHA-256 asset digests from the official s6-overlay v3.2.3.2 GitHub release API.
@@ -22,7 +23,7 @@ RUN go mod download
 COPY s5m-agent/*.go ./
 RUN mkdir -p /out && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.agentSupportsSmartDNS=false" -o /out/s5m-agent .
 
-FROM alpine:${ALPINE_VERSION} AS mihomo-fetch
+FROM ${ALPINE_IMAGE} AS mihomo-fetch
 ARG TARGETARCH
 ARG MIHOMO_VERSION
 ARG MIHOMO_AMD64_SHA256
@@ -41,7 +42,7 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/mihomo; \
     /usr/local/bin/mihomo -v
 
-FROM alpine:${ALPINE_VERSION} AS s6-overlay-fetch
+FROM ${ALPINE_IMAGE} AS s6-overlay-fetch
 ARG TARGETARCH
 ARG S6_OVERLAY_VERSION
 ARG S6_OVERLAY_NOARCH_SHA256
@@ -63,7 +64,7 @@ RUN set -eux; \
     tar -Jxpf /tmp/s6-overlay-noarch.tar.xz -C /out; \
     tar -Jxpf /tmp/s6-overlay-${s6_arch}.tar.xz -C /out
 
-FROM alpine:${ALPINE_VERSION} AS runtime
+FROM ${ALPINE_IMAGE} AS runtime
 LABEL org.opencontainers.image.source="https://github.com/Tony855/S5M-Agent-SmartDNS"
 RUN apk add --no-cache ca-certificates tzdata bind-tools \
     && addgroup -S s5m && adduser -S -D -H -G s5m s5m \
