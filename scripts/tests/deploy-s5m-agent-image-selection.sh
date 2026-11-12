@@ -75,6 +75,17 @@ cmp -s "$TMP/inspect-failure.expected" "$TMP/inspect-failure.conf"
 echo "No-SmartDNS image pull selection and failure-path tests passed."
 
 
+# Explicit data wipe must create and verify an external archive before removing
+# either the old container or its persistent data directory.
+grep -Fq '破坏性清理前备份持久化数据到' "$SCRIPT"
+grep -Fq '数据备份失败，拒绝删除数据' "$SCRIPT"
+grep -Fq 'tar -tzf "${backup_path}"' "$SCRIPT"
+backup_line="$(grep -nF 'tar -C "$(dirname "${DATA_DIR}")" -czf "${backup_path}" "$(basename "${DATA_DIR}")"' "$SCRIPT" | cut -d: -f1)"
+container_remove_line="$(grep -nF 'docker rm "${CONTAINER_NAME}"' "$SCRIPT" | head -n1 | cut -d: -f1)"
+data_remove_line="$(grep -nF 'rm -rf -- "${DATA_DIR}"' "$SCRIPT" | head -n1 | cut -d: -f1)"
+[[ -n "$backup_line" && -n "$container_remove_line" && -n "$data_remove_line" ]]
+(( backup_line < container_remove_line && backup_line < data_remove_line ))
+
 # The legacy automatic deploy entry point must preserve data by default.
 grep -Fqx 'FULL_RESET="${FULL_RESET:-false}"' "$SCRIPT"
 grep -Fqx 'WIPE_DATA="${WIPE_DATA:-false}"' "$SCRIPT"
