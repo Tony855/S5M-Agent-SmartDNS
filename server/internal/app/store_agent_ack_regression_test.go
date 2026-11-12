@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 )
@@ -97,5 +98,71 @@ func TestAckAgentCommandDoesNotAcceptDuplicateWhenPendingRecordIsMalformed(t *te
 	}
 	if duplicate || matched {
 		t.Fatalf("ACK with malformed pending record = duplicate %v, matched %v; want both false", duplicate, matched)
+	}
+}
+
+
+func TestPendingAgentCommandSurvivesStoreRestartAndACKCommitsDesiredState(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		wantState  string
+		wantResult string
+	}{
+		{name: "successful desired state", status: "success", wantState: "true", wantResult: "success"},
+		{name: "failed desired state", status: "failed", wantState: "false", wantResult: "failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "restart-command.db")
+			store, err := OpenStore(path)
+			if err != nil {
+				t.Fatalf("OpenStore before restart: %v", err)
+			}
+			const machineCode = "restart_node"
+			const commandID = "cmd-restart-smartdns"
+			pending := `{"id":"cmd-restart-smartdns","type":"set_smartdns_enabled","enabled":true}`
+			if err := store.UpdateSettings(map[string]string{
+				"agent_command_" + machineCode: pending,
+				"smartdns_enabled_" + machineCode: "false",
+			}); err != nil {
+				t.Fatalf("persist pending command: %v", err)
+			}
+			if err := store.db.Close(); err != nil {
+				t.Fatalf("close store to simulate master restart: %v", err)
+			}
+
+			restarted, err := OpenStore(path)
+			if err != nil {
+				t.Fatalf("OpenStore after restart: %v", err)
+			}
+			defer restarted.db.Close()
+
+			duplicate, matched, err := restarted.AckAgentCommandWithConfig(machineCode, commandID, tt.status, "result after restart", "", 1234)
+			if err != nil {
+				t.Fatalf("ACK after restart: %v", err)
+			}
+			if duplicate || !matched {
+				t.Fatalf("ACK after restart = duplicate %v, matched %v; want false, true", duplicate, matched)
+			}
+
+			settings, err := restarted.GetSettings()
+			if err != nil {
+				t.Fatalf("read settings after restart ACK: %v", err)
+			}
+			if _, exists := settings["agent_command_"+machineCode]; exists {
+				t.Fatal("pending command remained after successful ACK transaction")
+			}
+			if got := settings["smartdns_enabled_"+machineCode]; got != tt.wantState {
+				t.Fatalf("SmartDNS desired state = %q, want %q", got, tt.wantState)
+			}
+			var result map[string]any
+			if err := json.Unmarshal([]byte(settings["agent_command_result_"+machineCode]), &result); err != nil {
+				t.Fatalf("decode persisted ACK result: %v", err)
+			}
+			if result["id"] != commandID || result["status"] != tt.wantResult {
+				t.Fatalf("persisted ACK result = %#v", result)
+			}
+		})
 	}
 }
