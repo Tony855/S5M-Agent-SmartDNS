@@ -2784,6 +2784,17 @@ func main() {
 		}
 		return
 	}
+	// Recover an interrupted multi-file config transaction before the Agent
+	// reconnects to the controller or accepts another config update.
+	if err := os.MkdirAll(mihomoHome(), 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "创建 Agent 数据目录失败: %v\\n", err)
+		os.Exit(1)
+	}
+	if err := recoverInterruptedConfigTransaction(); err != nil {
+		fmt.Fprintf(os.Stderr, "Agent 联合配置事务恢复失败，停止启动以避免使用不一致配置: %v\\n", err)
+		os.Exit(1)
+	}
+
 	// 启动 80 端口提供 Web 注册界面
 	go func() {
 		http.HandleFunc("/", serveAgentRegistrationPage)
