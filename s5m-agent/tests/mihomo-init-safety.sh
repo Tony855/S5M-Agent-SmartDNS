@@ -10,6 +10,9 @@ printf 'secret: test-secret\n' > "$TMP/default.yaml"
 chmod 0644 "$TMP/default.yaml"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/mihomo"
 chmod 0755 "$TMP/mihomo"
+printf '#!/bin/sh\n[ "$1" = "--recover-config-transaction-before-services" ] || exit 2\nexit 0\n' > "$TMP/s5m-agent-stub"
+chmod 0755 "$TMP/s5m-agent-stub"
+export S5M_AGENT_BINARY="$TMP/s5m-agent-stub"
 
 run_init() {
   MIHOMO_HOME="$1" \

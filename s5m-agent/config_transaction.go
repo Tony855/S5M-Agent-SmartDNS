@@ -275,6 +275,9 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 		if err := transactionReloadMihomo(); err != nil {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 Mihomo 未通过运行规则验证: %w", err))
 		}
+		if restored && restoreErr != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("SmartDNS 配置内容已恢复但目录持久化未确认: %w", restoreErr))
+		}
 		if len(rollbackErrors) > 0 {
 			return fmt.Errorf("%w；联合回滚存在错误，恢复记录保留供下次启动重试: %w", cause, errors.Join(rollbackErrors...))
 		}

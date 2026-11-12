@@ -93,6 +93,18 @@ func readConfigTransactionRecoveryRecord() (configTransactionRecoveryRecord, err
 // record means the new config set was accepted; only stale recovery files are
 // cleaned. The journal is retained on every recovery error for the next boot.
 func recoverInterruptedConfigTransaction() error {
+	return recoverInterruptedConfigTransactionWithRuntimeChecks(true)
+}
+
+// recoverInterruptedConfigTransactionBeforeServices is invoked by s6 cont-init
+// before Mihomo/SmartDNS long-running services are started. It restores files
+// durably; the supervised services will then start directly from the recovered
+// configuration, so no runtime reload/restart is needed here.
+func recoverInterruptedConfigTransactionBeforeServices() error {
+	return recoverInterruptedConfigTransactionWithRuntimeChecks(false)
+}
+
+func recoverInterruptedConfigTransactionWithRuntimeChecks(checkRuntime bool) error {
 	configTransactionRecoveryMu.Lock()
 	defer configTransactionRecoveryMu.Unlock()
 
@@ -116,6 +128,7 @@ func recoverInterruptedConfigTransaction() error {
 		defer mihomoConfigApplyMu.Unlock()
 
 		var restoreErrors []error
+		var durabilityWarnings []error
 		if err := restoreFileSnapshot(mihomoPath, record.Mihomo.Data, record.Mihomo.Existed); err != nil {
 			restoreErrors = append(restoreErrors, fmt.Errorf("恢复 Mihomo 配置失败: %w", err))
 		}
@@ -128,12 +141,14 @@ func recoverInterruptedConfigTransaction() error {
 		restoredSmartDNS, smartErr := restoreSmartDNSConfigVerified(smartPath, record.SmartDNS.Data, record.SmartDNS.Existed)
 		if !restoredSmartDNS {
 			restoreErrors = append(restoreErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", smartErr))
+		} else if smartErr != nil {
+			durabilityWarnings = append(durabilityWarnings, fmt.Errorf("SmartDNS 配置内容已恢复但目录持久化未确认: %w", smartErr))
 		}
 		if len(restoreErrors) > 0 {
 			return fmt.Errorf("联合配置事务启动恢复未完成，恢复记录保留: %w", errors.Join(restoreErrors...))
 		}
 
-		if record.SmartDNS.Existed && smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
+		if checkRuntime && record.SmartDNS.Existed && smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
 			if err := transactionRestartSmartDNS(); err != nil {
 				return fmt.Errorf("重启恢复后的 SmartDNS 失败，恢复记录保留: %w", err)
 			}
@@ -141,8 +156,13 @@ func recoverInterruptedConfigTransaction() error {
 				return fmt.Errorf("恢复后的 SmartDNS 未通过 UDP/TCP DNS 健康检查，恢复记录保留")
 			}
 		}
-		if err := transactionReloadMihomo(); err != nil {
-			return fmt.Errorf("恢复后的 Mihomo 未通过运行规则验证，恢复记录保留: %w", err)
+		if checkRuntime {
+			if err := transactionReloadMihomo(); err != nil {
+				return fmt.Errorf("恢复后的 Mihomo 未通过运行规则验证，恢复记录保留: %w", err)
+			}
+		}
+		if len(durabilityWarnings) > 0 {
+			return fmt.Errorf("联合配置已恢复，但持久化确认失败，保留恢复记录等待重试: %w", errors.Join(durabilityWarnings...))
 		}
 		fmt.Println("检测到未完成的联合配置事务，已恢复上一次有效配置")
 	}
