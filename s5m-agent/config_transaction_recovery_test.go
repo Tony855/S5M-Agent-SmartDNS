@@ -17,6 +17,8 @@ func writeRecoveryFixtureFile(t *testing.T, path string, data []byte) {
 func TestRecoverInterruptedConfigTransactionRestoresAllSnapshots(t *testing.T) {
 	dir, _ := setupConfigTransactionFixture(t)
 	transactionReloadMihomo = func() error { return nil }
+	transactionRestartSmartDNS = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { return true }
 	old := configTransactionRecoveryRecord{
 		Version: 1, Phase: "prepared",
 		SmartDNS: transactionRecoveryFile{Data: []byte("old-smartdns"), Existed: true},
