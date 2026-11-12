@@ -6,6 +6,7 @@ on:
     paths:
       - "docker/smartdns/**"
       - "scripts/tests/verify-smartdns-source-pin.sh"
+      - "scripts/tests/verify-base-image-pins.sh"
       - ".github/workflows/smartdns-image.yml"
   push:
     branches: [main]
@@ -14,6 +15,7 @@ on:
     paths:
       - "docker/smartdns/**"
       - "scripts/tests/verify-smartdns-source-pin.sh"
+      - "scripts/tests/verify-base-image-pins.sh"
       - ".github/workflows/smartdns-image.yml"
   workflow_dispatch:
     inputs:
