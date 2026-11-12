@@ -1178,6 +1178,7 @@ func smartDNSResponseHasAnswer(message []byte, transactionID, qtype uint16) bool
 	}
 	offset += 4
 
+	foundRequestedAnswer := false
 	for i := 0; i < int(answerCount); i++ {
 		offset, ok = skipSmartDNSName(message, offset)
 		if !ok || offset+10 > len(message) {
@@ -1194,11 +1195,13 @@ func smartDNSResponseHasAnswer(message []byte, transactionID, qtype uint16) bool
 			(qtype == 1 && rdataLength == net.IPv4len) ||
 			(qtype == 28 && rdataLength == net.IPv6len)
 		if rrType == qtype && rrClass == 1 && validLength {
-			return true
+			foundRequestedAnswer = true
 		}
 		offset += rdataLength
 	}
-	return false
+	// Do not accept a DNS response merely because an early answer matched:
+	// every answer RR declared by ANCOUNT must have a complete, valid envelope.
+	return foundRequestedAnswer
 }
 
 // skipSmartDNSName advances over a DNS name, including compressed names.
