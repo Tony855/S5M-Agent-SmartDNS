@@ -755,3 +755,81 @@ func TestRollbackFailedSmartDNSEnableSurfacesMarkerFailureEvenWhenStopSucceeds(t
 		t.Fatalf("stop must still be attempted after marker failure, got %d calls", stopCalls)
 	}
 }
+
+
+func TestSmartDNSDisableTransitionTreatsAlreadyStoppedProcessAsSuccess(t *testing.T) {
+	stopErr := errors.New("s6 stop raced with process exit")
+	stopCalls, waitCalls := 0, 0
+	err := applyAgentSmartDNSDisableTransition(
+		func() error { return nil },
+		func(disabled bool) error {
+			if !disabled { t.Fatal("expected disabled marker") }
+			return nil
+		},
+		func() error { stopCalls++; return stopErr },
+		func() bool { return false },
+		func(time.Duration) bool { waitCalls++; return false },
+	)
+	if err != nil {
+		t.Fatalf("already-exited SmartDNS process should make disable successful: %v", err)
+	}
+	if stopCalls != 1 || waitCalls != 0 {
+		t.Fatalf("expected one stop attempt and no wait after process already exited; stop=%d wait=%d", stopCalls, waitCalls)
+	}
+}
+
+func TestSmartDNSDisableTransitionReportsStopFailureWhileProcessStillRuns(t *testing.T) {
+	stopErr := errors.New("s6 stop command failed")
+	waitCalls := 0
+	err := applyAgentSmartDNSDisableTransition(
+		func() error { return nil },
+		func(bool) error { return nil },
+		func() error { return stopErr },
+		func() bool { return true },
+		func(time.Duration) bool { waitCalls++; return true },
+	)
+	if !errors.Is(err, stopErr) || !strings.Contains(err.Error(), "进程仍在运行") {
+		t.Fatalf("must report stop failure while SmartDNS remains alive, got %v", err)
+	}
+	if waitCalls != 0 {
+		t.Fatalf("must not wait after stop command itself failed, got %d waits", waitCalls)
+	}
+}
+
+func TestSmartDNSDisableTransitionReportsStopTimeoutAfterSuccessfulStopRequest(t *testing.T) {
+	waitCalls := 0
+	err := applyAgentSmartDNSDisableTransition(
+		func() error { return nil },
+		func(bool) error { return nil },
+		func() error { return nil },
+		func() bool { return true },
+		func(timeout time.Duration) bool {
+			waitCalls++
+			if timeout != 5*time.Second { t.Fatalf("stop timeout = %s, want 5s", timeout) }
+			return false
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "5 秒内仍未退出") {
+		t.Fatalf("must report process that survives stop timeout, got %v", err)
+	}
+	if waitCalls != 1 {
+		t.Fatalf("expected exactly one bounded stop wait, got %d", waitCalls)
+	}
+}
+
+func TestSmartDNSDisableTransitionRejectsMissingDependenciesBeforeMutation(t *testing.T) {
+	markerCalls, stopCalls := 0, 0
+	err := applyAgentSmartDNSDisableTransition(
+		nil,
+		func(bool) error { markerCalls++; return nil },
+		func() error { stopCalls++; return nil },
+		func() bool { return true },
+		func(time.Duration) bool { return true },
+	)
+	if err == nil || !strings.Contains(err.Error(), "缺少必要操作") {
+		t.Fatalf("expected missing-dependency error, got %v", err)
+	}
+	if markerCalls != 0 || stopCalls != 0 {
+		t.Fatalf("missing dependency must fail before mutation: marker=%d stop=%d", markerCalls, stopCalls)
+	}
+}
