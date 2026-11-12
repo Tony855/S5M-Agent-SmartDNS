@@ -27,7 +27,7 @@ func TestRecoverInterruptedConfigTransactionRestoresAllSnapshots(t *testing.T) {
 	for name, data := range map[string][]byte{
 		"smartdns.conf": []byte("candidate-smartdns"),
 		"config.yaml": []byte("candidate-mihomo"),
-		"controller-route-cidrs.json": []byte("old-routes"),
+		"controller-route-cidrs.json": []byte("candidate-routes"),
 		"controller-config.yaml": []byte("candidate-controller-hash"),
 	} {
 		writeRecoveryFixtureFile(t, filepath.Join(dir, name), data)
@@ -110,7 +110,6 @@ func TestRecoverInterruptedConfigTransactionRetainsJournalOnRestoreFailure(t *te
 
 func TestReadConfigTransactionRecoveryRecordRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
-	oldHome := os.Getenv("MIHOMO_HOME")
 	t.Setenv("MIHOMO_HOME", dir)
 	target := filepath.Join(dir, "operator-state")
 	writeRecoveryFixtureFile(t, target, []byte("{\\"version\\":1,\\"phase\\":\\"prepared\\"}"))
@@ -120,5 +119,4 @@ func TestReadConfigTransactionRecoveryRecordRejectsSymlink(t *testing.T) {
 	if _, err := readConfigTransactionRecoveryRecord(); err == nil {
 		t.Fatal("symlink recovery journal must be rejected")
 	}
-	_ = oldHome
 }
