@@ -240,6 +240,14 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 
 	rollback := func(cause error) error {
 		var rollbackErrors []error
+		// If the commit-marker rename reached disk but its directory fsync
+		// returned an error, force the recovery record back to prepared before
+		// attempting rollback. Otherwise a later boot could mistake old state
+		// restoration for a committed transaction.
+		journal.Phase = "prepared"
+		if err := writeConfigTransactionRecoveryRecord(journal); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("重置事务恢复阶段失败: %w", err))
+		}
 		// Keep the old Mihomo bytes in .previous while restoring the live file:
 		// reloadMihomo uses both secrets during an ambiguous reload transition.
 		if err := atomicWriteFile(mihomoPath+".previous", oldMihomo, 0600); err != nil {
