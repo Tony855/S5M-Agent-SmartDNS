@@ -114,7 +114,7 @@ func TestReadConfigTransactionRecoveryRecordRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("MIHOMO_HOME", dir)
 	target := filepath.Join(dir, "operator-state")
-	writeRecoveryFixtureFile(t, target, []byte("{\\"version\\":1,\\"phase\\":\\"prepared\\"}"))
+	writeRecoveryFixtureFile(t, target, []byte("malformed"))
 	if err := os.Symlink(target, configTransactionRecoveryPath()); err != nil {
 		t.Fatal(err)
 	}
