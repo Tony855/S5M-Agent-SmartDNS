@@ -93,6 +93,18 @@ func readConfigTransactionRecoveryRecord() (configTransactionRecoveryRecord, err
 // record means the new config set was accepted; only stale recovery files are
 // cleaned. The journal is retained on every recovery error for the next boot.
 func recoverInterruptedConfigTransaction() error {
+	return recoverInterruptedConfigTransactionWithRuntimeChecks(true)
+}
+
+// recoverInterruptedConfigTransactionBeforeServices is invoked by s6 cont-init
+// before Mihomo/SmartDNS long-running services are started. It restores files
+// durably; the supervised services will then start directly from the recovered
+// configuration, so no runtime reload/restart is needed here.
+func recoverInterruptedConfigTransactionBeforeServices() error {
+	return recoverInterruptedConfigTransactionWithRuntimeChecks(false)
+}
+
+func recoverInterruptedConfigTransactionWithRuntimeChecks(checkRuntime bool) error {
 	configTransactionRecoveryMu.Lock()
 	defer configTransactionRecoveryMu.Unlock()
 
@@ -133,7 +145,7 @@ func recoverInterruptedConfigTransaction() error {
 			return fmt.Errorf("联合配置事务启动恢复未完成，恢复记录保留: %w", errors.Join(restoreErrors...))
 		}
 
-		if record.SmartDNS.Existed && smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
+		if checkRuntime && record.SmartDNS.Existed && smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
 			if err := transactionRestartSmartDNS(); err != nil {
 				return fmt.Errorf("重启恢复后的 SmartDNS 失败，恢复记录保留: %w", err)
 			}
@@ -141,7 +153,8 @@ func recoverInterruptedConfigTransaction() error {
 				return fmt.Errorf("恢复后的 SmartDNS 未通过 UDP/TCP DNS 健康检查，恢复记录保留")
 			}
 		}
-		if err := transactionReloadMihomo(); err != nil {
+		if checkRuntime {
+			if err := transactionReloadMihomo(); err != nil {
 			return fmt.Errorf("恢复后的 Mihomo 未通过运行规则验证，恢复记录保留: %w", err)
 		}
 		fmt.Println("检测到未完成的联合配置事务，已恢复上一次有效配置")
