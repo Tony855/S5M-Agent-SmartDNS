@@ -763,7 +763,7 @@ func TestConfigTransactionRestoresAllSnapshotsWhenControllerHashCommitPartiallyF
 		if err := atomicWriteFile(mihomoConfigPath(), []byte("candidate-mihomo"), 0600); err != nil {
 			return false, err
 		}
-		if err := atomicWriteFile(managedRouteCIDRsPath(), []byte("[\\"198.51.100.44/32\\"]"), 0600); err != nil {
+		if err := atomicWriteFile(managedRouteCIDRsPath(), []byte("[\"198.51.100.44/32\"]"), 0600); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -792,7 +792,7 @@ func TestConfigTransactionRestoresAllSnapshotsWhenControllerHashCommitPartiallyF
 	}
 	for name, want := range map[string][]byte{
 		"config.yaml":                 []byte("old-mihomo"),
-		"controller-route-cidrs.json": []byte("[\\"192.0.2.10/32\\"]"),
+		"controller-route-cidrs.json": []byte("[\"192.0.2.10/32\"]"),
 		"controller-config.yaml":      []byte("old-controller-hash"),
 		"smartdns.conf":               []byte("old-smartdns"),
 	} {
