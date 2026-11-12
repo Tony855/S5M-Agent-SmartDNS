@@ -755,3 +755,59 @@ func TestRollbackFailedSmartDNSEnableSurfacesMarkerFailureEvenWhenStopSucceeds(t
 		t.Fatalf("stop must still be attempted after marker failure, got %d calls", stopCalls)
 	}
 }
+
+
+func TestConfigTransactionRestoresAllSnapshotsWhenControllerHashCommitPartiallyFails(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) {
+		if err := atomicWriteFile(mihomoConfigPath(), []byte("candidate-mihomo"), 0600); err != nil {
+			return false, err
+		}
+		if err := atomicWriteFile(managedRouteCIDRsPath(), []byte("[\\"198.51.100.44/32\\"]"), 0600); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	transactionReloadMihomo = func() error { return nil }
+	transactionApplySmartDNS = func(data []byte, _ bool) (string, error) {
+		if err := atomicWriteFile(smartDNSConfigPath, data, 0600); err != nil {
+			return "", err
+		}
+		return "candidate-sha", nil
+	}
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { return true }
+	restartCalls := 0
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	controllerErr := errors.New("injected controller hash fsync failure after partial write")
+	transactionWriteControllerConfig = func(data []byte) error {
+		if err := atomicWriteFile(controllerConfigPath(), []byte("partially-written-controller-state"), 0600); err != nil {
+			return err
+		}
+		return controllerErr
+	}
+
+	err := applyAgentConfigTransaction([]byte("candidate-controller-payload"), []byte("candidate-smartdns"), true, "")
+	if !errors.Is(err, controllerErr) {
+		t.Fatalf("expected controller commit failure to be preserved, got %v", err)
+	}
+	for name, want := range map[string][]byte{
+		"config.yaml":                 []byte("old-mihomo"),
+		"controller-route-cidrs.json": []byte("[\\"192.0.2.10/32\\"]"),
+		"controller-config.yaml":      []byte("old-controller-hash"),
+		"smartdns.conf":               []byte("old-smartdns"),
+	} {
+		got, readErr := os.ReadFile(filepath.Join(dir, name))
+		if readErr != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%s not restored after controller commit failure: got=%q err=%v want=%q", name, got, readErr, want)
+		}
+	}
+	if restartCalls != 1 {
+		t.Fatalf("rollback must restart SmartDNS exactly once after restoring its config, got %d", restartCalls)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "smartdns.conf.previous")); statErr != nil {
+		t.Fatalf("SmartDNS recovery sidecar should remain available after rollback: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "config.yaml.previous")); statErr != nil {
+		t.Fatalf("Mihomo recovery sidecar should remain available after rollback: %v", statErr)
+	}
+}
