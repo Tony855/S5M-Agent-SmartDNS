@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,5 +158,52 @@ func TestPreServiceRecoveryRestoresFilesWithoutRuntimeReload(t *testing.T) {
 	}
 	if _, err := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(err) {
 		t.Fatalf("journal should be removed after durable pre-service restore: %v", err)
+	}
+}
+
+func TestRecoverInterruptedConfigTransactionRetainsJournalWhenSmartDNSDirectorySyncFails(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldSync := smartDNSDirectorySync
+	oldReload := transactionReloadMihomo
+	oldRestart := transactionRestartSmartDNS
+	oldWait := transactionWaitSmartDNSHealthy
+	t.Cleanup(func() {
+		smartDNSDirectorySync = oldSync
+		transactionReloadMihomo = oldReload
+		transactionRestartSmartDNS = oldRestart
+		transactionWaitSmartDNSHealthy = oldWait
+	})
+	syncErr := errors.New("injected SmartDNS directory fsync failure")
+	smartDNSDirectorySync = func(string) error { return syncErr }
+	restartCalls := 0
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool { return true }
+	transactionReloadMihomo = func() error { return nil }
+
+	record := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Data: []byte("old-smartdns"), Existed: true},
+		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
+		Controller: transactionRecoveryFile{Data: []byte("old-controller-hash"), Existed: true},
+	}
+	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("candidate-smartdns"))
+	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
+		t.Fatal(err)
+	}
+
+	err := recoverInterruptedConfigTransaction()
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("expected durability warning, got %v", err)
+	}
+	if restartCalls != 1 {
+		t.Fatalf("restored SmartDNS bytes must be restarted and health-checked, calls=%d", restartCalls)
+	}
+	if _, statErr := os.Stat(configTransactionRecoveryPath()); statErr != nil {
+		t.Fatalf("journal must remain until directory sync succeeds: %v", statErr)
+	}
+	got, readErr := os.ReadFile(filepath.Join(dir, "smartdns.conf"))
+	if readErr != nil || string(got) != "old-smartdns" {
+		t.Fatalf("SmartDNS bytes were not restored: %q err=%v", got, readErr)
 	}
 }
