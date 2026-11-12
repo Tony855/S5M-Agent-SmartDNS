@@ -4,10 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestExecuteAgentCommandWithJournalReplaysCompletedResult(t *testing.T) {
@@ -206,5 +210,53 @@ func TestExecuteAgentCommandWithJournalDoesNotRunWhenJournalIsUnavailable(t *tes
 	})
 	if err == nil || status != "failed" || executions != 0 {
 		t.Fatalf("unavailable journal must prevent execution: status=%q executions=%d err=%v", status, executions, err)
+	}
+}
+
+
+func TestExecuteAgentCommandWithJournalConcurrentDuplicateDeliveryExecutesOnce(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	enabled := true
+	cmd := agentCommand{ID: "cmd-concurrent-replay", Type: "set_smartdns_enabled", Enabled: &enabled}
+
+	const deliveries = 64
+	start := make(chan struct{})
+	var executions atomic.Int32
+	var wg sync.WaitGroup
+	errs := make(chan error, deliveries)
+	for i := 0; i < deliveries; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			status, message, _, err := executeAgentCommandWithJournal(cmd, func() (string, string, error) {
+				executions.Add(1)
+				time.Sleep(10 * time.Millisecond)
+				return "enabled", "", nil
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if status != "success" || message != "enabled" {
+				errs <- fmt.Errorf("unexpected replay result: status=%q message=%q", status, message)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if got := executions.Load(); got != 1 {
+		t.Fatalf("concurrent duplicate deliveries executed side effects %d times; want exactly once", got)
+	}
+	entry, err := readAgentCommandJournal()
+	if err != nil {
+		t.Fatalf("read final command journal: %v", err)
+	}
+	if entry.ID != cmd.ID || entry.State != "completed" || entry.Status != "success" {
+		t.Fatalf("final journal does not contain completed ACK result: %+v", entry)
 	}
 }

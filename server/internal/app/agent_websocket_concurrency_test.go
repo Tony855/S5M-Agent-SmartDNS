@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -116,5 +118,41 @@ func TestAgentWSCommandLockWaitersKeepSharedLockUntilReleased(t *testing.T) {
 	defer app.agentWSCommandMu.Unlock()
 	if _, ok := app.agentWSCommandLocks["same-node"]; ok {
 		t.Fatal("lock entry remained after holder and waiter released it")
+	}
+}
+
+
+func TestAgentWSCommandLocksPreservePerNodeIsolationAt500Nodes(t *testing.T) {
+	const nodes = 500
+	app := &App{}
+	var active [nodes]atomic.Int32
+	var violations atomic.Int32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for node := 0; node < nodes; node++ {
+		for duplicate := 0; duplicate < 2; duplicate++ {
+			wg.Add(1)
+			go func(node int) {
+				defer wg.Done()
+				<-start
+				unlock := app.lockAgentWSCommand(fmt.Sprintf("soak-node-%d", node))
+				defer unlock()
+				if active[node].Add(1) != 1 {
+					violations.Add(1)
+				}
+				time.Sleep(time.Millisecond)
+				active[node].Add(-1)
+			}(node)
+		}
+	}
+	close(start)
+	wg.Wait()
+	if got := violations.Load(); got != 0 {
+		t.Fatalf("same-node commands overlapped %d times across %d nodes", got, nodes)
+	}
+	app.agentWSCommandMu.Lock()
+	defer app.agentWSCommandMu.Unlock()
+	if got := len(app.agentWSCommandLocks); got != 0 {
+		t.Fatalf("500-node command soak retained %d idle locks", got)
 	}
 }
