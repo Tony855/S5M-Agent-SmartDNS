@@ -226,8 +226,28 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 		preparedBackups = append(preparedBackups, controllerPath)
 	}
 
+	// Persist the complete pre-transaction state before the first live mutation.
+	journal := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Data: oldSmartDNS, Existed: hadSmartDNS},
+		Mihomo: transactionRecoveryFile{Data: oldMihomo, Existed: hadMihomo},
+		ManagedRoutes: transactionRecoveryFile{Data: oldManaged, Existed: hadManaged},
+		Controller: transactionRecoveryFile{Data: oldController, Existed: hadController},
+	}
+	if err := transactionWriteRecoveryRecord(journal); err != nil {
+		return cleanupPrepared(fmt.Errorf("持久化联合配置事务恢复记录失败，拒绝修改运行配置: %w", err))
+	}
+
 	rollback := func(cause error) error {
 		var rollbackErrors []error
+		// If the commit-marker rename reached disk but its directory fsync
+		// returned an error, force the recovery record back to prepared before
+		// attempting rollback. Otherwise a later boot could mistake old state
+		// restoration for a committed transaction.
+		journal.Phase = "prepared"
+		if err := transactionWriteRecoveryRecord(journal); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("重置事务恢复阶段失败: %w", err))
+		}
 		// Keep the old Mihomo bytes in .previous while restoring the live file:
 		// reloadMihomo uses both secrets during an ambiguous reload transition.
 		if err := atomicWriteFile(mihomoPath+".previous", oldMihomo, 0600); err != nil {
@@ -256,7 +276,10 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 Mihomo 未通过运行规则验证: %w", err))
 		}
 		if len(rollbackErrors) > 0 {
-			return fmt.Errorf("%w；联合回滚存在错误: %w", cause, errors.Join(rollbackErrors...))
+			return fmt.Errorf("%w；联合回滚存在错误，恢复记录保留供下次启动重试: %w", cause, errors.Join(rollbackErrors...))
+		}
+		if err := removeConfigTransactionRecoveryRecord(); err != nil {
+			return fmt.Errorf("%w；联合回滚已恢复，但清理事务恢复记录失败: %w", cause, err)
 		}
 		return cause
 	}
@@ -285,6 +308,13 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 		return rollback(fmt.Errorf("提交主控配置哈希失败: %w", err))
 	}
 
+	// The durable commit marker separates accepted new state from a transaction
+	// that must be rolled back after an unclean process exit.
+	journal.Phase = "committed"
+	if err := transactionWriteRecoveryRecord(journal); err != nil {
+		return rollback(fmt.Errorf("提交联合配置事务恢复记录失败: %w", err))
+	}
+
 	// Both services and the controller hash are now committed. Only this point
 	// is allowed to remove either service's rollback copy.
 	var cleanupErrors []error
@@ -297,6 +327,9 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 		// The joint apply is already healthy. Retain any sidecar that could not
 		// be removed and report a warning without misreporting the apply itself.
 		fmt.Printf("联合配置已健康应用，但部分事务备份清理失败: %v\n", errors.Join(cleanupErrors...))
+	}
+	if err := removeConfigTransactionRecoveryRecord(); err != nil {
+		fmt.Printf("联合配置已健康提交，但清理事务恢复记录失败: %v\n", err)
 	}
 	return nil
 }
