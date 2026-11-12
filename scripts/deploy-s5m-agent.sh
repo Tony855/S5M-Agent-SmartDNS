@@ -402,18 +402,53 @@ do_recreate() {
   fi
 
   if [[ "${wipe_data}" == "true" ]]; then
+    local wipe_container_stopped="false"
+    local backup_path=""
+
+    # Stop the Agent before archiving its SQLite database and runtime state,
+    # but keep the old container available until the backup is verified.
     if container_exists; then
-      log "停止并删除旧容器（已明确确认数据清除）"
+      log "停止旧容器，准备备份后再执行数据清理"
       if ! stop_container_checked "${CONTAINER_NAME}"; then
         err "无法确认旧容器已停止；为保护数据，取消清理"
         return 1
       fi
+      wipe_container_stopped="true"
+    fi
+
+    if [[ -d "${DATA_DIR}" ]]; then
+      backup_path="${DATA_DIR}.backup.$(date -u +%Y%m%dT%H%M%SZ).${BASHPID}.tar.gz"
+      if ! command -v tar >/dev/null 2>&1; then
+        err "找不到 tar，拒绝删除持久化数据"
+        [[ "${wipe_container_stopped}" != "true" ]] || docker start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+        return 1
+      fi
+      log "破坏性清理前备份持久化数据到 ${backup_path}"
+      if ! tar -C "$(dirname "${DATA_DIR}")" -czf "${backup_path}" "$(basename "${DATA_DIR}")"; then
+        err "数据备份失败，拒绝删除数据"
+        rm -f -- "${backup_path}"
+        [[ "${wipe_container_stopped}" != "true" ]] || docker start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+        return 1
+      fi
+      if ! tar -tzf "${backup_path}" >/dev/null 2>&1; then
+        err "备份完整性校验失败，拒绝删除数据"
+        rm -f -- "${backup_path}"
+        [[ "${wipe_container_stopped}" != "true" ]] || docker start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+        return 1
+      fi
+      log "数据备份及完整性校验通过"
+    fi
+
+    # Only remove the old container after a verified archive exists.
+    if container_exists; then
       if ! docker rm "${CONTAINER_NAME}" >/dev/null 2>&1; then
         err "删除旧容器失败；为保护数据，保留数据目录并取消清理"
+        docker start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
         return 1
       fi
       if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
         err "旧容器删除后仍可被检查到；为保护数据，保留数据目录并取消清理"
+        docker start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
         return 1
       fi
     fi
