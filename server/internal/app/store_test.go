@@ -3,7 +3,10 @@ package app
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"strings"
 	"testing"
 )
@@ -552,5 +555,134 @@ func TestDeleteAgentBindingRejectsMissingCredential(t *testing.T) {
 	}
 	if _, err := store.GetSetting("agent_status_known-node"); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("status after revoke error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+
+func TestQueueAuthorizedAgentCommandSerializesConcurrentSameNodeCommands(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "same-node-command-race.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.UpdateSettings(map[string]string{
+		"agent_token": "global-token",
+		"agent_machine_node-race": "dedicated-token",
+	}); err != nil { t.Fatalf("seed Agent binding: %v", err) }
+
+	const contenders = 64
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var accepted atomic.Int32
+	var rejected atomic.Int32
+	errs := make(chan error, contenders)
+	for i := 0; i < contenders; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			command := fmt.Sprintf(`{"id":"same-node-%d","type":"restart"}`, i)
+			err := store.QueueAuthorizedAgentCommand("node-race", command)
+			switch {
+			case err == nil:
+				accepted.Add(1)
+			case errors.Is(err, ErrAgentCommandPending):
+				rejected.Add(1)
+			default:
+				errs <- fmt.Errorf("queue contender %d: %w", i, err)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs { t.Error(err) }
+	if accepted.Load() != 1 || rejected.Load() != contenders-1 {
+		t.Fatalf("same-node queue accepted=%d rejected=%d; want 1 and %d", accepted.Load(), rejected.Load(), contenders-1)
+	}
+	settings, err := store.GetSettings()
+	if err != nil { t.Fatal(err) }
+	if strings.TrimSpace(settings["agent_command_node-race"]) == "" {
+		t.Fatal("the single accepted command was not persisted")
+	}
+}
+
+func TestQueueAuthorizedAgentCommandScalesAcross500Nodes(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "500-node-command-queue.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	seed := map[string]string{"agent_token": "global-token"}
+	const nodes = 500
+	for i := 0; i < nodes; i++ {
+		seed[fmt.Sprintf("agent_machine_node-%03d", i)] = fmt.Sprintf("dedicated-token-%03d", i)
+	}
+	if err := store.UpdateSettings(seed); err != nil { t.Fatalf("seed 500 Agent bindings: %v", err) }
+
+	var wg sync.WaitGroup
+	var accepted atomic.Int32
+	errs := make(chan error, nodes)
+	for i := 0; i < nodes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			code := fmt.Sprintf("node-%03d", i)
+			command := fmt.Sprintf(`{"id":"cmd-%03d","type":"restart"}`, i)
+			if err := store.QueueAuthorizedAgentCommand(code, command); err != nil {
+				errs <- fmt.Errorf("queue %s: %w", code, err)
+				return
+			}
+			accepted.Add(1)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs { t.Error(err) }
+	if accepted.Load() != nodes {
+		t.Fatalf("queued commands for %d nodes; want %d", accepted.Load(), nodes)
+	}
+	settings, err := store.GetSettings()
+	if err != nil { t.Fatal(err) }
+	for i := 0; i < nodes; i++ {
+		code := fmt.Sprintf("node-%03d", i)
+		if got := settings["agent_command_"+code]; got == "" {
+			t.Errorf("node %s has no persisted pending command", code)
+		}
+	}
+}
+
+func TestQueueAuthorizedAgentCommandCannotSurviveConcurrentBindingRevocation(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "revoke-command-race.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.UpdateSettings(map[string]string{
+		"agent_token": "global-token",
+		"agent_machine_node-revoke-race": "dedicated-token",
+	}); err != nil { t.Fatalf("seed Agent binding: %v", err) }
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var queueErr, revokeErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		queueErr = store.QueueAuthorizedAgentCommand("node-revoke-race", `{"id":"race-command","type":"restart"}`)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		revokeErr = store.DeleteAgentBinding("node-revoke-race")
+	}()
+	close(start)
+	wg.Wait()
+	if revokeErr != nil { t.Fatalf("revoke Agent binding: %v", revokeErr) }
+	if queueErr != nil && !strings.Contains(queueErr.Error(), "no longer authorized") {
+		t.Fatalf("unexpected queue error during revoke: %v", queueErr)
+	}
+	settings, err := store.GetSettings()
+	if err != nil { t.Fatal(err) }
+	if settings["agent_machine_node-revoke-race"] != "" {
+		t.Fatal("Agent credential survived revocation")
+	}
+	if settings["agent_command_node-revoke-race"] != "" {
+		t.Fatal("pending command survived concurrent Agent revocation")
 	}
 }
