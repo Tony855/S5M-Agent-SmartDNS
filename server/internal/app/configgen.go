@@ -988,6 +988,12 @@ func removeGeneratedSmartDNSProcessRules(yml string) (string, error) {
 }
 
 func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
+	return a.buildConfigForMachineWithSmartDNSOverride(machineCode, nil)
+}
+
+// buildConfigForMachineWithSmartDNSOverride evaluates a requested node SmartDNS
+// state without committing that desired state before the Agent acknowledges it.
+func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smartDNSEnabled *bool) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
 		return "", err
@@ -1003,6 +1009,9 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 	settings, err := a.store.GetSettings()
 	if err != nil {
 		return "", fmt.Errorf("读取 Mihomo 设置失败: %w", err)
+	}
+	if smartDNSEnabled != nil && strings.TrimSpace(machineCode) != "" {
+		settings["smartdns_enabled_"+machineCode] = fmt.Sprint(*smartDNSEnabled)
 	}
 	mode := "rule"
 	if strings.TrimSpace(machineCode) != "" {
