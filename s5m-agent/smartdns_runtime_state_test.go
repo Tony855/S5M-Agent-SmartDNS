@@ -3,9 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
-	"time"
 )
 
 func TestPersistSmartDNSDisabledIsIdempotentAndDurable(t *testing.T) {
