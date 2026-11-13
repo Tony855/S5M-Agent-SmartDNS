@@ -179,7 +179,7 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 // applyAgentConfigTransactionWithIngress validates per-client configuration
 // against the explicit Master-provided ingress contract, then uses the same
 // durable Mihomo+SmartDNS transaction and rollback journal as shared mode.
-func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, centralURL string, contract smartDNSPerClientIngressContract) error {
+func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, contract smartDNSPerClientIngressContract) error {
 	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
 	if err := validator(smartDNSConfig); err != nil {
 		return fmt.Errorf("per-client SmartDNS ingress contract validation failed: %w", err)
@@ -187,7 +187,7 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, c
 	apply := func(data []byte, cleanupBackup bool) (string, error) {
 		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
 	}
-	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, true, centralURL, false, mihomoYAML, false, apply)
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, false, apply)
 }
 
 func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error)) error {
