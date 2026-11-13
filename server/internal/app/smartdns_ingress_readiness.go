@@ -47,6 +47,7 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		"dns_ingress_firewall_persistent",
 		"dns_ingress_udp_ready",
 		"dns_ingress_tcp_ready",
+		"dns_ingress_smartdns_listener_ready",
 	} {
 		if status[key] != true {
 			return fmt.Errorf("Agent DNS ingress 未满足就绪条件: %s", key)
@@ -97,13 +98,13 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		}
 	}
 
-	validateAddress := func(key string) error {
+	validateAddress := func(key string, wantIPv4 bool) error {
 		value, ok := status[key].(string)
 		if !ok {
 			return fmt.Errorf("Agent DNS ingress 地址缺失: %s", key)
 		}
 		ip := net.ParseIP(strings.TrimSpace(value))
-		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() {
+		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
 			return fmt.Errorf("Agent DNS ingress 地址无效: %s", key)
 		}
 		return nil
@@ -112,16 +113,22 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		if status["dns_ingress_ipv4_ready"] != true {
 			return fmt.Errorf("Agent DNS ingress IPv4 尚未就绪")
 		}
-		if err := validateAddress("dns_ingress_ipv4_address"); err != nil {
+		if err := validateAddress("dns_ingress_ipv4_address", true); err != nil {
 			return err
+		}
+		if status["dns_ingress_smartdns_ipv4_bound"] != true || status["dns_ingress_smartdns_ipv4_bind_address"] != status["dns_ingress_ipv4_address"] {
+			return fmt.Errorf("SmartDNS 未在已验收的 IPv4 ingress 地址上同时监听")
 		}
 	}
 	if hasIPv6 {
 		if status["dns_ingress_ipv6_ready"] != true {
 			return fmt.Errorf("Agent DNS ingress IPv6 尚未就绪")
 		}
-		if err := validateAddress("dns_ingress_ipv6_address"); err != nil {
+		if err := validateAddress("dns_ingress_ipv6_address", false); err != nil {
 			return err
+		}
+		if status["dns_ingress_smartdns_ipv6_bound"] != true || status["dns_ingress_smartdns_ipv6_bind_address"] != status["dns_ingress_ipv6_address"] {
+			return fmt.Errorf("SmartDNS 未在已验收的 IPv6 ingress 地址上同时监听")
 		}
 	}
 	return nil
