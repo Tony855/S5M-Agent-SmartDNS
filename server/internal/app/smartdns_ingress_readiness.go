@@ -1,9 +1,9 @@
 package app
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/netip"
 	"regexp"
 	"strconv"
@@ -20,6 +20,17 @@ var smartDNSIngressInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}
 // sufficient: it must attest to the exact routed ingress, firewall, transport,
 // address-family and CIDR state that the generated config depends on.
 func validateSmartDNSIngressReadiness(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time) error {
+	return validateSmartDNSIngressState(settings, machineCode, routing, now, true)
+}
+
+// validateSmartDNSIngressProvisioning validates the host-side routed path before
+// the first SmartDNS config is applied. The joint Agent transaction then binds
+// and probes the actual SmartDNS listeners before committing.
+func validateSmartDNSIngressProvisioning(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time) error {
+	return validateSmartDNSIngressState(settings, machineCode, routing, now, false)
+}
+
+func validateSmartDNSIngressState(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time, requireRuntimeListener bool) error {
 	machineCode = strings.TrimSpace(machineCode)
 	if machineCode == "" {
 		return fmt.Errorf("Agent 机器码为空，无法验证 DNS ingress 就绪状态")
@@ -40,15 +51,17 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 	if version, ok := status["dns_ingress_contract_version"].(float64); !ok || version != smartDNSIngressReadinessContractVersion {
 		return fmt.Errorf("Agent DNS ingress 就绪协议版本不匹配")
 	}
-	for _, key := range []string{
-		"dns_ingress_ready",
+	requiredKeys := []string{
 		"dns_ingress_source_ip_preserved",
 		"dns_ingress_firewall_ready",
 		"dns_ingress_firewall_persistent",
 		"dns_ingress_udp_ready",
 		"dns_ingress_tcp_ready",
-		"dns_ingress_smartdns_listener_ready",
-	} {
+	}
+	if requireRuntimeListener {
+		requiredKeys = append(requiredKeys, "dns_ingress_ready", "dns_ingress_smartdns_listener_ready")
+	}
+	for _, key := range requiredKeys {
 		if status[key] != true {
 			return fmt.Errorf("Agent DNS ingress 未满足就绪条件: %s", key)
 		}
@@ -65,6 +78,9 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 			return fmt.Errorf("DNS ingress 映射 CIDR 无效: %q", route.ClientCIDR)
 		}
 		prefix = prefix.Masked()
+		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
+			return fmt.Errorf("DNS ingress 客户端 CIDR 过宽或使用保留地址族: %s", prefix.String())
+		}
 		requiredCIDRs[prefix.String()] = struct{}{}
 		if prefix.Addr().Is4() {
 			hasIPv4 = true
@@ -119,8 +135,8 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		if !ok {
 			return fmt.Errorf("Agent DNS ingress 地址缺失: %s", key)
 		}
-		ip := net.ParseIP(strings.TrimSpace(value))
-		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
+		ip, err := netip.ParseAddr(strings.TrimSpace(value))
+		if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (wantIPv4 && !ip.Is4()) || (!wantIPv4 && !ip.Is6()) {
 			return fmt.Errorf("Agent DNS ingress 地址无效: %s", key)
 		}
 		return nil
@@ -132,7 +148,7 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		if err := validateAddress("dns_ingress_ipv4_address", true); err != nil {
 			return err
 		}
-		if status["dns_ingress_smartdns_ipv4_bound"] != true || status["dns_ingress_smartdns_ipv4_bind_address"] != status["dns_ingress_ipv4_address"] {
+		if requireRuntimeListener && (status["dns_ingress_smartdns_ipv4_bound"] != true || status["dns_ingress_smartdns_ipv4_bind_address"] != status["dns_ingress_ipv4_address"]) {
 			return fmt.Errorf("SmartDNS 未在已验收的 IPv4 ingress 地址上同时监听")
 		}
 	}
@@ -143,9 +159,95 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		if err := validateAddress("dns_ingress_ipv6_address", false); err != nil {
 			return err
 		}
-		if status["dns_ingress_smartdns_ipv6_bound"] != true || status["dns_ingress_smartdns_ipv6_bind_address"] != status["dns_ingress_ipv6_address"] {
+		if requireRuntimeListener && (status["dns_ingress_smartdns_ipv6_bound"] != true || status["dns_ingress_smartdns_ipv6_bind_address"] != status["dns_ingress_ipv6_address"]) {
 			return fmt.Errorf("SmartDNS 未在已验收的 IPv6 ingress 地址上同时监听")
 		}
 	}
 	return nil
+}
+
+
+type SmartDNSAgentIngressContract struct {
+	Version int `json:"version"`
+	Ready bool `json:"ready"`
+	IPv4Address string `json:"ipv4_address,omitempty"`
+	IPv6Address string `json:"ipv6_address,omitempty"`
+	ClientCIDRs []string `json:"client_cidrs"`
+}
+
+func buildSmartDNSAgentIngressContract(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time) (SmartDNSAgentIngressContract, error) {
+	return buildSmartDNSAgentIngressContractWithReadiness(settings, machineCode, routing, now, true)
+}
+
+func buildSmartDNSAgentIngressProvisioningContract(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time) (SmartDNSAgentIngressContract, error) {
+	return buildSmartDNSAgentIngressContractWithReadiness(settings, machineCode, routing, now, false)
+}
+
+func buildSmartDNSAgentIngressContractWithReadiness(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time, requireRuntimeListener bool) (SmartDNSAgentIngressContract, error) {
+	var contract SmartDNSAgentIngressContract
+	validate := validateSmartDNSIngressProvisioning
+	if requireRuntimeListener { validate = validateSmartDNSIngressReadiness }
+	if err := validate(settings, machineCode, routing, now); err != nil { return contract, err }
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_"+strings.TrimSpace(machineCode)]), &status); err != nil {
+		return contract, fmt.Errorf("解析 Agent DNS ingress 状态失败: %w", err)
+	}
+	contract.Version = smartDNSIngressReadinessContractVersion
+	contract.Ready = true
+	hasIPv4, hasIPv6 := false, false
+	for _, route := range routing.Clients {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(route.ClientCIDR))
+		if err != nil { return SmartDNSAgentIngressContract{}, fmt.Errorf("DNS ingress 映射 CIDR 无效") }
+		prefix = prefix.Masked()
+		contract.ClientCIDRs = append(contract.ClientCIDRs, prefix.String())
+		if prefix.Addr().Is4() { hasIPv4 = true } else { hasIPv6 = true }
+	}
+	if hasIPv4 {
+		value, ok := status["dns_ingress_ipv4_address"].(string)
+		if !ok || strings.TrimSpace(value) == "" { return SmartDNSAgentIngressContract{}, fmt.Errorf("Agent DNS ingress IPv4 地址缺失") }
+		contract.IPv4Address = strings.TrimSpace(value)
+	}
+	if hasIPv6 {
+		value, ok := status["dns_ingress_ipv6_address"].(string)
+		if !ok || strings.TrimSpace(value) == "" { return SmartDNSAgentIngressContract{}, fmt.Errorf("Agent DNS ingress IPv6 地址缺失") }
+		contract.IPv6Address = strings.TrimSpace(value)
+	}
+	return contract, nil
+}
+
+// smartDNSIngressContractForMachine returns a fully ready contract for publication.
+func (a *App) smartDNSIngressContractForMachine(machineCode string) (*SmartDNSAgentIngressContract, error) {
+	return a.smartDNSIngressContractForMachineMode(machineCode, true)
+}
+
+// smartDNSIngressProvisioningContractForMachine is used only by the explicit
+// enable transition. It attests host routing/firewall readiness before Agent
+// applies the SmartDNS listeners; the Agent transaction must bind/probe 6055.
+func (a *App) smartDNSIngressProvisioningContractForMachine(machineCode string) (*SmartDNSAgentIngressContract, error) {
+	return a.smartDNSIngressContractForMachineMode(machineCode, false)
+}
+
+func (a *App) smartDNSIngressContractForMachineMode(machineCode string, requireRuntimeListener bool) (*SmartDNSAgentIngressContract, error) {
+	raw, err := a.store.GetSetting("smartdns_routing_config")
+	if err != nil && err != sql.ErrNoRows { return nil, fmt.Errorf("读取 SmartDNS 路由模式失败: %w", err) }
+	if err == sql.ErrNoRows || strings.TrimSpace(raw) == "" { return nil, nil }
+	var routing SmartDNSRoutingConfig
+	if err := json.Unmarshal([]byte(raw), &routing); err != nil { return nil, fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err) }
+	if !strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) { return nil, nil }
+	settings, err := a.store.GetSettings()
+	if err != nil { return nil, fmt.Errorf("读取 Agent DNS ingress 就绪状态失败: %w", err) }
+	var contract SmartDNSAgentIngressContract
+	if requireRuntimeListener {
+		contract, err = buildSmartDNSAgentIngressContract(settings, machineCode, routing, time.Now())
+	} else {
+		contract, err = buildSmartDNSAgentIngressProvisioningContract(settings, machineCode, routing, time.Now())
+	}
+	if err != nil { return nil, fmt.Errorf("Agent DNS ingress 尚未通过生产就绪校验，拒绝 per-client 操作: %w", err) }
+	return &contract, nil
+}
+
+// requireSmartDNSIngressReady is retained for callers that only need the gate.
+func (a *App) requireSmartDNSIngressReady(machineCode string) error {
+	_, err := a.smartDNSIngressContractForMachine(machineCode)
+	return err
 }
