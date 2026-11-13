@@ -16,6 +16,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate physical LAN probe tooling
+        run: |
+          bash -n scripts/lab/smartdns-dns-ingress/physical-lan-capture.sh
+          python3 -m py_compile scripts/lab/smartdns-dns-ingress/physical-client-probe.py
+          rm -rf scripts/lab/smartdns-dns-ingress/__pycache__
       - name: Run isolated Docker source-IP experiment
         run: |
           bash scripts/lab/smartdns-dns-ingress/run.sh

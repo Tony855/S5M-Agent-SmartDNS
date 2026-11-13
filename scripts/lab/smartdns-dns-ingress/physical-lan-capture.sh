@@ -15,7 +15,7 @@ DURATION=${3:-90}
 OUT_DIR=${4:-}
 [[ "$DURATION" =~ ^[0-9]+$ ]] && (( DURATION >= 10 && DURATION <= 600 )) || usage
 [[ "$LAN_IF" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || usage
-for cmd in docker tcpdump nsenter timeout; do
+for cmd in docker ip tcpdump nsenter timeout; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: missing required command: $cmd" >&2; exit 1; }
 done
 ip link show dev "$LAN_IF" >/dev/null 2>&1 || { echo "ERROR: interface not found: $LAN_IF" >&2; exit 1; }
