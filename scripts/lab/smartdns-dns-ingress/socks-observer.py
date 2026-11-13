@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import socket
 import socketserver
 import struct
 import sys
@@ -30,12 +31,12 @@ class Handler(socketserver.BaseRequestHandler):
             if version != 5 or command != 1:
                 return
             if atyp == 1:
-                host = socketserver.socket.inet_ntop(socketserver.socket.AF_INET, read_exact(sock, 4))
+                host = socket.inet_ntop(socket.AF_INET, read_exact(sock, 4))
             elif atyp == 3:
                 length = read_exact(sock, 1)[0]
                 host = read_exact(sock, length).decode("ascii", "replace")
             elif atyp == 4:
-                host = socketserver.socket.inet_ntop(socketserver.socket.AF_INET6, read_exact(sock, 16))
+                host = socket.inet_ntop(socket.AF_INET6, read_exact(sock, 16))
             else:
                 return
             port = struct.unpack("!H", read_exact(sock, 2))[0]
