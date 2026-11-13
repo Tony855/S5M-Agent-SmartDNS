@@ -143,6 +143,10 @@ if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "
 fi
 
 install -d -m 0700 "$DATA_DIR"
+# The host ingress controller publishes a root-owned, read-only attestation here.
+# An empty directory is fail-closed; it does not provision or open DNS ingress.
+INGRESS_ATTESTATION_DIR="${INGRESS_ATTESTATION_DIR:-/run/s5m-agent-ingress}"
+install -d -o root -g root -m 0755 "$INGRESS_ATTESTATION_DIR"
 if [[ "$PULL_IMAGE" == "1" ]]; then
   log "拉取镜像：$IMAGE"
   docker pull "$IMAGE"
@@ -155,7 +159,7 @@ WEB_BIND_ADDR="$WEB_BIND_IP"
 PROXY_BIND_ADDR="$PROXY_BIND_IP"
 [[ "$PROXY_BIND_IP" == *:* ]] && PROXY_BIND_ADDR="[$PROXY_BIND_IP]"
 args=(run -d --name "$CONTAINER_NAME" --restart "$RESTART_POLICY")
-args+=(-e "S5M_HOSTNAME=$S5M_HOSTNAME" -v "$DATA_DIR:/data")
+args+=(-e "S5M_HOSTNAME=$S5M_HOSTNAME" -v "$DATA_DIR:/data" -v "$INGRESS_ATTESTATION_DIR:/run/s5m-agent-ingress:ro")
 [[ -n "$EXTRA_ENV_FILE" ]] && args+=(--env-file "$EXTRA_ENV_FILE")
 (( WEB_PORT > 0 )) && args+=(-p "$WEB_BIND_ADDR:$WEB_PORT:80/tcp")
 (( PROXY_PORT > 0 )) && args+=(-p "$PROXY_BIND_ADDR:$PROXY_PORT:7890/tcp")
