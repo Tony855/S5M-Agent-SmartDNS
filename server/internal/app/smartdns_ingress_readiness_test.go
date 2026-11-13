@@ -228,3 +228,31 @@ func TestValidateSmartDNSIngressReadinessRejectsIPv4MappedIPv6Addresses(t *testi
 		t.Fatal("IPv4-mapped IPv6 ingress address accepted as IPv4")
 	}
 }
+
+
+func TestSmartDNSIngressProvisioningAllowsFirstBindButPublicationRequiresRuntimeReady(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ready"] = false
+	status["dns_ingress_smartdns_listener_ready"] = false
+	status["dns_ingress_smartdns_ipv4_bound"] = false
+	status["dns_ingress_smartdns_ipv4_bind_address"] = ""
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressProvisioning(settings, "node-a", routing, now); err != nil {
+		t.Fatalf("valid host-side provisioning state rejected before first SmartDNS bind: %v", err)
+	}
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("runtime publication gate accepted an Agent before SmartDNS ingress bind")
+	}
+	contract, err := buildSmartDNSAgentIngressProvisioningContract(settings, "node-a", routing, now)
+	if err != nil || !contract.Ready || contract.IPv4Address != "192.0.2.1" {
+		t.Fatalf("provisioning contract = %#v, err=%v", contract, err)
+	}
+}
