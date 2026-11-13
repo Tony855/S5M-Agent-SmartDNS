@@ -17,6 +17,11 @@ func readySmartDNSIngressSettings(now time.Time, cidrs ...string) map[string]str
 		"dns_ingress_firewall_persistent": true,
 		"dns_ingress_udp_ready": true,
 		"dns_ingress_tcp_ready": true,
+		"dns_ingress_smartdns_listener_ready": true,
+		"dns_ingress_smartdns_ipv4_bound": true,
+		"dns_ingress_smartdns_ipv4_bind_address": "192.0.2.1",
+		"dns_ingress_smartdns_ipv6_bound": true,
+		"dns_ingress_smartdns_ipv6_bind_address": "2001:db8::1",
 		"dns_ingress_interface": "eth0",
 		"dns_ingress_client_cidrs": cidrs,
 		"dns_ingress_ipv4_ready": true,
@@ -52,6 +57,7 @@ func TestValidateSmartDNSIngressReadinessRequiresCompleteFreshAttestation(t *tes
 		{"no source preservation", func(s map[string]string) { s["agent_status_node-a"] = strings.Replace(s["agent_status_node-a"], `"dns_ingress_source_ip_preserved":true`, `"dns_ingress_source_ip_preserved":false`, 1) }, "source_ip_preserved"},
 		{"firewall not persistent", func(s map[string]string) { s["agent_status_node-a"] = strings.Replace(s["agent_status_node-a"], `"dns_ingress_firewall_persistent":true`, `"dns_ingress_firewall_persistent":false`, 1) }, "firewall_persistent"},
 		{"missing TCP", func(s map[string]string) { s["agent_status_node-a"] = strings.Replace(s["agent_status_node-a"], `"dns_ingress_tcp_ready":true`, `"dns_ingress_tcp_ready":false`, 1) }, "tcp_ready"},
+		{"SmartDNS not bound to ingress", func(s map[string]string) { s["agent_status_node-a"] = strings.Replace(s["agent_status_node-a"], `"dns_ingress_smartdns_ipv4_bound":true`, `"dns_ingress_smartdns_ipv4_bound":false`, 1) }, "SmartDNS 未在已验收的 IPv4 ingress 地址上"},
 		{"CIDR not provisioned", func(s map[string]string) { s["agent_status_node-a"] = strings.Replace(s["agent_status_node-a"], "192.168.50.0/24", "192.168.60.0/24", 1) }, "未授权"},
 		{"IPv6 not ready", func(s map[string]string) { s["agent_status_node-a"] = strings.Replace(s["agent_status_node-a"], `"dns_ingress_ipv6_ready":true`, `"dns_ingress_ipv6_ready":false`, 1) }, "IPv6"},
 		{"invalid interface", func(s map[string]string) { s["agent_status_node-a"] = strings.Replace(s["agent_status_node-a"], `"dns_ingress_interface":"eth0"`, `"dns_ingress_interface":"eth0;bad"`, 1) }, "网卡信息"},
@@ -74,7 +80,7 @@ func TestValidateSmartDNSIngressReadinessChecksOnlyMappedAddressFamilies(t *test
 		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
 	}}
 	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
-	raw := strings.Replace(settings["agent_status_node-a"], `,"dns_ingress_ipv6_ready":true,"dns_ingress_ipv6_address":"2001:db8::1"`, "", 1)
+	raw := strings.Replace(settings["agent_status_node-a"], `,"dns_ingress_ipv6_ready":true,"dns_ingress_ipv6_address":"2001:db8::1","dns_ingress_smartdns_ipv6_bound":true,"dns_ingress_smartdns_ipv6_bind_address":"2001:db8::1"`, "", 1)
 	settings["agent_status_node-a"] = raw
 	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err != nil {
 		t.Fatalf("IPv4-only route should not require an IPv6 ingress address: %v", err)
