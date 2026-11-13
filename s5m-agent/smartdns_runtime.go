@@ -1249,7 +1249,10 @@ func skipSmartDNSName(message []byte, offset int) (int, bool) {
 				return 0, false
 			}
 			pointer := (length&0x3f)<<8 | int(message[position+1])
-			if pointer >= len(message) {
+			// RFC 1035 compression pointers refer to a prior occurrence in
+			// the message. Reject forward/self references rather than relying
+			// only on the jump limit to contain malformed pointer chains.
+			if pointer >= position || pointer >= len(message) {
 				return 0, false
 			}
 			if next < 0 {
