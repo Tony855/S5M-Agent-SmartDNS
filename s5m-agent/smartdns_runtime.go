@@ -750,7 +750,16 @@ func writeSmartDNSConfigLocked(data []byte) (string, error) {
 // rollback copy remains available until the joint Mihomo+SmartDNS health check
 // has succeeded. The legacy wrapper retains its original cleanup behavior.
 func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool) (string, error) {
-	if err := validateSmartDNSConfig(data); err != nil {
+	return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validateSmartDNSConfig)
+}
+
+// The validator is supplied by the caller while the existing file-apply,
+// parser preflight, restart, and rollback mechanics remain shared.
+func writeSmartDNSConfigLockedWithValidator(data []byte, cleanupBackup bool, validator func([]byte) error) (string, error) {
+	if validator == nil {
+		return "", fmt.Errorf("SmartDNS validator is unavailable")
+	}
+	if err := validator(data); err != nil {
 		return "", err
 	}
 	if !smartDNSBinaryAvailable() {
