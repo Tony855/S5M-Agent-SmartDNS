@@ -1315,13 +1315,19 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	}
 
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
-	// Apply it only to the outgoing payload so health loss immediately falls back
-	// to the original configured nameservers on the next config request.
+	// Per-client publication is stricter: the same fresh attestation that authorizes
+	// non-loopback listeners must also report a healthy SmartDNS runtime.
 	domesticListener, domesticReported := a.agentSmartDNSDomesticListenerStatus(machineCode)
-	if domesticReported {
-		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode), domesticListener)
+	smartDNSHealthy := a.agentHasHealthySmartDNS(machineCode)
+	if ingressContract != nil && !smartDNSHealthy {
+		return fmt.Errorf("per-client ingress 已验收，但 Agent SmartDNS 健康状态未确认，拒绝发布")
+	}
+	if ingressContract != nil {
+		yml, err = applyAgentRuntimeDNS(yml, true, domesticReported && domesticListener)
+	} else if domesticReported {
+		yml, err = applyAgentRuntimeDNS(yml, smartDNSHealthy, domesticListener)
 	} else {
-		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode))
+		yml, err = applyAgentRuntimeDNS(yml, smartDNSHealthy)
 	}
 	if err != nil {
 		return err
