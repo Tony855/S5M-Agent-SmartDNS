@@ -107,7 +107,7 @@ def atomic_json(path: Path, payload: dict) -> None:
             json.dump(payload, f, sort_keys=True, separators=(",", ":")); f.write("\n")
             f.flush(); os.fsync(f.fileno())
         os.replace(tmp, path)
-        os.chown(path, 0, 0); os.chmod(path, 0o600)
+        os.chmod(path, 0o600)
         dfd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try: os.fsync(dfd)
         finally: os.close(dfd)
@@ -144,11 +144,13 @@ def main(argv=None) -> int:
             applied = subprocess.run(["nft", "-f", "-"], input=transaction, text=True, capture_output=True)
             if applied.returncode: raise ConfigError(f"nft apply failed: {applied.stderr.strip()}")
             now = int(time.time())
+            timer_enabled = subprocess.run(["systemctl", "is-enabled", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
+            timer_active = subprocess.run(["systemctl", "is-active", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
             payload = {"version": 1, "updated_at": now, "interface": cfg["interface"],
                 "ipv4_address": next((str(x) for x in cfg["addresses"] if x.version == 4), None),
                 "ipv6_address": next((str(x) for x in cfg["addresses"] if x.version == 6), None),
                 "client_cidrs": [str(x) for x in cfg["networks"]],
-                "source_ip_preserved": False, "firewall_ready": True, "firewall_persistent": False, "udp_ready": False, "tcp_ready": False}
+                "source_ip_preserved": False, "firewall_ready": True, "firewall_persistent": bool(timer_enabled and timer_active), "udp_ready": False, "tcp_ready": False}
             atomic_json(a.attestation, payload)
         print("nftables ingress allowlist reconciled; routed readiness and source-IP proof remain false")
         return 0

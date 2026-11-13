@@ -58,4 +58,4 @@ Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/
 
 仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建 Docker network、不改宿主机路由，也不接触 Docker socket。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
 
-该组件当前只证明专属 nftables allowlist 已应用；attestation 仍固定报告 `firewall_persistent=false`、`udp_ready=false`、`tcp_ready=false`、`source_ip_preserved=false`。因此它不会单独通过 Master provisioning gate，更不会开启 per-client。真实 routed Docker lifecycle、外部路由和物理 LAN 源地址验收仍是独立阻断项。
+该组件当前只证明专属 nftables allowlist 已应用；attestation 仅在 systemd timer 同时 enabled/active 时报告 `firewall_persistent=true`；否则为 false。它始终报告 `udp_ready=false`、`tcp_ready=false`、`source_ip_preserved=false`。因此它不会单独通过 Master provisioning gate，更不会开启 per-client。真实 routed Docker lifecycle、外部路由和物理 LAN 源地址验收仍是独立阻断项。
