@@ -15,8 +15,8 @@ Create `/etc/s5m-agent-ingress/config.json` as root, mode `0600`:
   "version": 1,
   "interface": "eth1",
   "ipv4_address": "172.31.10.2",
-  "ipv6_address": "2001:db8:31::2",
-  "client_cidrs": ["192.168.50.0/24", "2001:db8:50::/64"]
+  "ipv6_address": null,
+  "client_cidrs": ["192.168.50.0/24"]
 }
 ```
 
@@ -71,7 +71,7 @@ Create `/etc/s5m-agent-ingress/network.json` as root-owned mode `0600` (replace 
 }
 ```
 
-Before provisioning, deploy/redeploy the Agent with `ENABLE_PER_CLIENT_INGRESS=1` in `/etc/default/s5m-agent-smartdns`. The interactive `deploy-s5m-agent.sh` offers menu item `22` to toggle the same option; save it with `19` and redeploy with `2`. The deployment script publishes UDP/TCP 6055 only on random host ports bound to `127.0.0.1`; remote clients never use those host ports and reach the stable container address directly through the routed bridge. This loopback-only mapping is required because Docker routed gateway mode filters ingress to published container ports. The lifecycle helper refuses containers whose 6055 mappings are missing or bound to wildcard/public host addresses. IPv6 per-client ingress is currently disabled. Validation showed that Docker allocates a non-loopback IPv6 host port for the `[::]::6055` mapping even when the default bridge IPv6 switch is off. Both deploy scripts and the network helper now fail closed for IPv6; do not set `ENABLE_PER_CLIENT_INGRESS_IPV6=1`. A separate IPv6 ingress design is required before re-enabling it.
+Before provisioning, deploy/redeploy the Agent with `ENABLE_PER_CLIENT_INGRESS=1` in `/etc/default/s5m-agent-smartdns`. The interactive `deploy-s5m-agent.sh` offers menu item `22` to toggle the same option; save it with `19` and redeploy with `2`. The deployment script publishes UDP/TCP 6055 only on random host ports bound to `127.0.0.1`; remote clients never use those host ports and reach the stable container address directly through the routed bridge. This loopback-only mapping is required because Docker routed gateway mode filters ingress to published container ports. The lifecycle helper refuses containers whose 6055 mappings are missing or whose non-loopback mapping allocates a host port. After attach it accepts Docker's routed-only `0.0.0.0` mapping only when `HostPort` is empty. IPv6 per-client ingress is currently disabled. Validation showed that Docker allocates a non-loopback IPv6 host port for the `[::]::6055` mapping even when the default bridge IPv6 switch is off. Both deploy scripts and the network helper now fail closed for IPv6; do not set `ENABLE_PER_CLIENT_INGRESS_IPV6=1`. A separate IPv6 ingress design is required before re-enabling it.
 
 After both host configs exist and the helper is installed, both `deploy-agent.sh` and `deploy-s5m-agent.sh` automatically attempt `provision` after a successful redeploy (after removing the old container so its static IP is free). If that step warns/fails, shared SmartDNS remains available and per-client remains fail-closed; fix the host config and retry manually.
 
@@ -92,4 +92,4 @@ To remove only the dedicated network, first stop the Agent or ensure no other co
 sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py uninstall --config /etc/s5m-agent-ingress/network.json
 ```
 
-For IPv6 ingress, the ordinary default Docker bridge must itself have an IPv6 gateway/default route; otherwise the helper refuses to attach the routed IPv6 network because it cannot prove IPv6 egress preservation. Cleanup does not depend on the current firewall config, so it remains possible after firewall CIDRs are changed; it still requires the saved network config to match the exact owned Docker network. Docker gateway mode behavior is documented at <https://docs.docker.com/engine/network/port-publishing/>: routed networks still enforce published-container-port filtering, while the host port is unused on the routed endpoint. The helper refuses to remove a network not carrying its ownership label or one with unexpected attached containers. It does not touch the default Docker bridge.
+IPv6 provisioning is currently rejected before any Docker mutation because the tested Docker dual-network publication allocates a non-loopback IPv6 host port. Cleanup does not depend on the current firewall config, so it remains possible after firewall CIDRs are changed; it still requires the saved network config to match the exact owned Docker network. Docker gateway mode behavior is documented at <https://docs.docker.com/engine/network/port-publishing/>: routed networks still enforce published-container-port filtering, while the host port is unused on the routed endpoint. The helper refuses to remove a network not carrying its ownership label or one with unexpected attached containers. It does not touch the default Docker bridge.
