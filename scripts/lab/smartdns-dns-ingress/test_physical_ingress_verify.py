@@ -1,9 +1,11 @@
 import importlib.util
+import json
 import pathlib
 import struct
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -81,11 +83,12 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         cfg={"addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
         inspected={"Id":"a"*64,"State":{"Running":True,"Pid":123},
             "NetworkSettings":{"Networks":{"ingress":{"IPAddress":"172.31.0.10","GlobalIPv6Address":""}}}}
-        fake=type("Completed",(),{"stdout":__import__("json").dumps([inspected])})()
+        fake=SimpleNamespace(stdout=json.dumps([inspected]))
         with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
             VERIFY.validate_capture_container(manifest,cfg)
         inspected["Id"]="b"*64
-        with unittest.mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+        fake=SimpleNamespace(stdout=json.dumps([inspected]))
+        with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
             with self.assertRaisesRegex(ValueError,"container ID"):
                 VERIFY.validate_capture_container(manifest,cfg)
 
@@ -94,12 +97,13 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         cfg={"addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
         inspected={"Id":"a"*64,"State":{"Running":True,"Pid":124},
             "NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.2","GlobalIPv6Address":""}}}}
-        fake=type("Completed",(),{"stdout":__import__("json").dumps([inspected])})()
-        with unittest.mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+        fake=SimpleNamespace(stdout=json.dumps([inspected]))
+        with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
             with self.assertRaisesRegex(ValueError,"restarted"):
                 VERIFY.validate_capture_container(manifest,cfg)
         inspected["State"]["Pid"]=123
-        with unittest.mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+        fake=SimpleNamespace(stdout=json.dumps([inspected]))
+        with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
             with self.assertRaisesRegex(ValueError,"not attached"):
                 VERIFY.validate_capture_container(manifest,cfg)
 
