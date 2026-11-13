@@ -535,6 +535,8 @@ type smartDNSStatusDependencies struct {
 	restart    func() error
 	waitHealthy func(time.Duration) bool
 	ingressAttestation func() (smartDNSHostIngressAttestation, error)
+	ingressObservation func() (smartDNSIngressObservation, error)
+	ingressSocketBound func(string) (bool, error)
 }
 
 func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
@@ -552,6 +554,8 @@ func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
 		restart: restartSmartDNSService,
 		waitHealthy: waitForSmartDNSHealthy,
 		ingressAttestation: readSmartDNSHostIngressAttestation,
+		ingressObservation: func() (smartDNSIngressObservation, error) { return collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies()) },
+		ingressSocketBound: smartDNSIngressAddressSocketsBound,
 	}
 }
 
@@ -591,7 +595,9 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	status["dns_ingress_observed_ipv6_addresses"] = []string{}
 	status["dns_ingress_observed_udp_6055"] = false
 	status["dns_ingress_observed_tcp_6055"] = false
-	observation, observationErr := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+	observationFn := deps.ingressObservation
+	if observationFn == nil { observationFn = func() (smartDNSIngressObservation, error) { return collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies()) } }
+	observation, observationErr := observationFn()
 	if observationErr != nil {
 		status["dns_ingress_observation_error"] = safeSmartDNSDiagnostic(observationErr.Error())
 	} else {
@@ -622,8 +628,10 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 			for _, address := range observation.IPv4 { if address == attestation.IPv4Address { ipv4Observed = true; break } }
 			for _, address := range observation.IPv6 { if address == attestation.IPv6Address { ipv6Observed = true; break } }
 			ipv4Bound, ipv6Bound := false, false
-			if attestation.IPv4Address != "" { ipv4Bound, _ = smartDNSIngressAddressSocketsBound(attestation.IPv4Address) }
-			if attestation.IPv6Address != "" { ipv6Bound, _ = smartDNSIngressAddressSocketsBound(attestation.IPv6Address) }
+			socketBound := deps.ingressSocketBound
+			if socketBound == nil { socketBound = smartDNSIngressAddressSocketsBound }
+			if attestation.IPv4Address != "" { ipv4Bound, _ = socketBound(attestation.IPv4Address) }
+			if attestation.IPv6Address != "" { ipv6Bound, _ = socketBound(attestation.IPv6Address) }
 			status["dns_ingress_ipv4_ready"] = attestation.IPv4Address == "" || (interfaceObserved && ipv4Observed)
 			status["dns_ingress_ipv6_ready"] = attestation.IPv6Address == "" || (interfaceObserved && ipv6Observed)
 			status["dns_ingress_smartdns_ipv4_bound"] = ipv4Bound
