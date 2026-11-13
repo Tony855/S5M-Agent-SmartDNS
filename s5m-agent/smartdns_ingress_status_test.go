@@ -3,7 +3,8 @@ package main
 import (
 	"errors"
 	"os"
-	"testing"\n\t"time"
+	"testing"
+	"time"
 )
 
 func TestCollectSmartDNSStatusFailsClosedWithoutHostAttestation(t *testing.T) {
