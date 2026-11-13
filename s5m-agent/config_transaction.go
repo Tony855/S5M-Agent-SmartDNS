@@ -173,7 +173,7 @@ func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []b
 // Runtime YAML may be sanitized for an image capability while the exact
 // controller payload is retained separately for WebSocket SHA-256 consistency.
 func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool) error {
-	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, controllerPayload, skipSmartDNSHealth, transactionApplySmartDNS)
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, controllerPayload, skipSmartDNSHealth, transactionApplySmartDNS, nil)
 }
 
 // applyAgentConfigTransactionWithIngress validates per-client configuration
@@ -190,7 +190,7 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, false, apply)
 }
 
-func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error)) error {
+func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error), postApplyCheck func() error) error {
 	if applySmartDNS == nil {
 		return fmt.Errorf("SmartDNS transaction apply function is unavailable")
 	}
@@ -326,6 +326,11 @@ func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []b
 	if !skipSmartDNSHealth && smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
 		if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 			return rollback(fmt.Errorf("SmartDNS 联合事务 UDP/TCP DNS 健康检查失败"))
+		}
+	}
+	if postApplyCheck != nil {
+		if err := postApplyCheck(); err != nil {
+			return rollback(fmt.Errorf("SmartDNS ingress UDP/TCP A/AAAA 健康检查失败: %w", err))
 		}
 	}
 	if err := transactionWriteControllerConfig(controllerPayload); err != nil {
