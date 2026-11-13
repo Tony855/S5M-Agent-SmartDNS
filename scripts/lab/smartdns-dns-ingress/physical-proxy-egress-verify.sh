@@ -14,13 +14,12 @@ routes, firewall rules, or proxy configuration.
 EOF
 }
 
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then usage; exit 0; fi
 [[ ${EUID} -eq 0 ]] || { echo "run with sudo/root" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 command -v nsenter >/dev/null 2>&1 || { echo "nsenter is required" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 1; }
-
-if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then usage; exit 0; fi
 CONTAINER=${1:-}
 [[ -n "$CONTAINER" ]] || { usage >&2; exit 2; }
 shift
@@ -51,6 +50,7 @@ for item in "${EXPECTATIONS[@]}"; do
   port="${item%%=*}"
   expected="${item#*=}"
   [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535)) || { echo "invalid SOCKS port: $port" >&2; exit 2; }
+  port=$((10#$port))
   [[ -z "${SEEN_PORTS[$port]:-}" ]] || { echo "duplicate SOCKS port: $port" >&2; exit 2; }
   SEEN_PORTS[$port]=1
   python3 - "$expected" <<'PY'

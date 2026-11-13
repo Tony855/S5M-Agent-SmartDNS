@@ -21,6 +21,7 @@ jobs:
         run: |
           bash -n scripts/lab/smartdns-dns-ingress/physical-lan-capture.sh
           bash -n scripts/lab/smartdns-dns-ingress/physical-proxy-egress-verify.sh
+          bash scripts/lab/smartdns-dns-ingress/physical-proxy-egress-verify.sh --help >/dev/null
           bash -n scripts/lab/smartdns-dns-ingress/test-network-lifecycle-docker.sh
           bash -n scripts/deploy-agent.sh
           bash -n scripts/deploy-s5m-agent.sh
