@@ -464,6 +464,7 @@ do_recreate() {
       err "无法创建数据目录，现有容器保持不变"
       return 1
     fi
+    install -d -o root -g root -m 0755 -- /run/s5m-agent-ingress
     if container_exists; then
       backup_container="${CONTAINER_NAME}-rollback-$(date +%s)-${BASHPID}"
       log "停止旧容器并保留回滚副本：${backup_container}"
