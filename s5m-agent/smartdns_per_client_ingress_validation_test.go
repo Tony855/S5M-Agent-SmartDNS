@@ -29,7 +29,7 @@ func validPerClientIngressFixture() ([]byte, smartDNSPerClientIngressContract) {
 }
 
 func TestValidateSmartDNSConfigWithIngressAcceptsExactAttestedPlan(t *testing.T) {
-	config, contract := validPerClientIngressFixture()
+	config, _ := validPerClientIngressFixture()
 	if err := validateSmartDNSConfigWithIngress(config, contract); err != nil {
 		t.Fatalf("valid contract-bound config rejected: %v", err)
 	}
@@ -125,5 +125,4 @@ func TestValidateSmartDNSConfigWithIngressRejectsMappedAndNonRoutableAddresses(t
 			t.Errorf("non-routable client CIDR accepted: %s", cidr)
 		}
 	}
-	_ = contract
 }
