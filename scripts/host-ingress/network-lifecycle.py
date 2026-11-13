@@ -70,6 +70,12 @@ def run(args, *, check=True):
     return p
 
 def validate_firewall_contract(cfg: dict, path: Path) -> None:
+    current=Path("/")
+    for part in path.absolute().parts[1:-1]:
+        current=current/part
+        parent_st=current.lstat()
+        if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid!=0 or parent_st.st_mode & 0o022:
+            raise LifecycleError(f"firewall config parent {current} must be root-owned and non-writable")
     if path.is_symlink(): raise LifecycleError("firewall config must not be a symlink")
     st=path.lstat()
     if not stat.S_ISREG(st.st_mode) or st.st_uid!=0 or st.st_mode & 0o077 or st.st_size>16384:
@@ -82,7 +88,7 @@ def validate_firewall_contract(cfg: dict, path: Path) -> None:
         raise LifecycleError("firewall config schema/version mismatch")
     expected4=str(cfg["_networks"][4][2])
     expected6=str(cfg["_networks"][6][2]) if 6 in cfg["_networks"] else None
-    cidrs=sorted(str(net) for net,_,_ in cfg["_networks"].values() for net in [net])
+    cidrs=sorted(str(values[0]) for values in cfg["_networks"].values())
     if fw["interface"]!=cfg["interface"] or fw["ipv4_address"]!=expected4 or fw["ipv6_address"]!=expected6:
         raise LifecycleError("firewall config interface/ingress addresses do not match routed Docker network config")
     if not isinstance(fw["client_cidrs"],list) or sorted(fw["client_cidrs"])!=cidrs:
