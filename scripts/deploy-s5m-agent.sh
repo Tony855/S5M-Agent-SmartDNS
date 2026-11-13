@@ -888,6 +888,12 @@ exec_deploy_auto() {
   echo "  docker logs -f ${CONTAINER_NAME}"
   echo "  docker restart ${CONTAINER_NAME}"
   echo "  docker inspect ${CONTAINER_NAME} --format '{{.State.Health.Status}}'"
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    echo
+    echo "Per-client DNS ingress 仍 fail-closed；请先安装 host controller 并执行："
+    echo "  sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision --config /etc/s5m-agent-ingress/network.json --firewall-config /etc/s5m-agent-ingress/config.json"
+    echo "随后配置上游路由器静态路由并完成真实 LAN UDP/TCP 源地址验收。"
+  fi
   echo
   echo "提示：不带参数运行本脚本可进入交互式管理菜单"
 }
