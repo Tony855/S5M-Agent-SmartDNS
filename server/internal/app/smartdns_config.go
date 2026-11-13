@@ -73,10 +73,10 @@ func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (stri
 		}
 		seenProxy[proxyName] = true
 		fmt.Fprintf(&b, "proxy-server socks5://127.0.0.1:%d -name %s\n", m.ListenerPort, proxyName)
-		fmt.Fprintf(&b, "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group %s -proxy %s\n", groupName, proxyName)
-		fmt.Fprintf(&b, "server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group %s -proxy %s\n", groupName, proxyName)
-		fmt.Fprintf(&b, "server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google -group %s -proxy %s\n", groupName, proxyName)
-		fmt.Fprintf(&b, "server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google -group %s -proxy %s\n", groupName, proxyName)
+		fmt.Fprintf(&b, "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group %s -proxy %s -exclude-default-group\n", groupName, proxyName)
+		fmt.Fprintf(&b, "server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group %s -proxy %s -exclude-default-group\n", groupName, proxyName)
+		fmt.Fprintf(&b, "server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google -group %s -proxy %s -exclude-default-group\n", groupName, proxyName)
+		fmt.Fprintf(&b, "server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google -group %s -proxy %s -exclude-default-group\n", groupName, proxyName)
 		fmt.Fprintf(&b, "group-begin %s\ngroup-match -client-ip %s\ngroup-end\n\n", groupName, cidr)
 	}
 	b.WriteString("# Preserve A and AAAA answers; allow IPv6-only domains on dual-stack resolvers.\n")
