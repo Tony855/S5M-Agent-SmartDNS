@@ -25,7 +25,7 @@
 
 ## 3. 方案评估
 
-### A. 显式 DNS ingress + Docker bridge DNAT（优先实验，不直接上线）
+### A. 显式 DNS ingress + Docker bridge 默认 NAT 发布（已发现 SNAT，不作为 per-client 实现）
 
 新增独立 SmartDNS ingress listener（建议容器内专用端口 6055），由运维显式启用。部署层仅将宿主机明确指定的 LAN 地址和端口发布到容器 6055 TCP/UDP；不得默认发布到 0.0.0.0。宿主机防火墙必须按可信客户端 CIDR 限制来源。
 
@@ -40,7 +40,7 @@
 - SmartDNS 的 per-client 监听必须与 Mihomo TUN 路由避免环路；DoT upstream 通过生成的 loopback SOCKS listener 走指定代理。
 - 需要检测宿主机 LAN 地址变更、容器重建、端口冲突和防火墙规则漂移。
 
-结论：作为首选 PoC。只有真实抓包证明 SmartDNS socket peer IP 与终端源 IP 一致，并验证出站代理后，才能允许 per_client。
+结论：默认 bridge + published-port NAT 仅作为负向基线，不作为 per-client 实现。PR #221 的 GitHub-hosted Docker 实验已观察到两个不同 bridge 客户端的 UDP/TCP 源地址均被改写为宿主机默认 bridge 网关 172.17.0.1。该结果只覆盖跨 Docker bridge 到宿主机发布端口的测试拓扑，不代表物理 LAN 入站结果。
 
 ### B. 独立 resolver 实例 + 源地址分流
 
@@ -110,3 +110,42 @@
 ## 8. 当前结论
 
 本 ADR 不批准立即开放 per_client。首选开展 A 方案源地址保留 PoC。当前生产配置保持 loopback-only、DNS_PORT 默认关闭、per_client fail-closed。
+
+
+## 9. PR #221 实验结果与候选拓扑修订（2026-11-13）
+
+### 9.1 已实测的负向结果
+
+PR #221 在 GitHub-hosted Linux Docker runner 上创建两个客户端 bridge 网络：
+- 172.30.10.0/24，客户端 172.30.10.10
+- 172.30.20.0/24，客户端 172.30.20.10
+
+两个客户端分别通过宿主机默认 bridge gateway 的已发布端口发起 DNS-shaped UDP 与 TCP 请求。测试接收容器四次均观察到来源 172.17.0.1，而不是客户端地址。自动化实验已合并到 main。
+
+因此：跨 Docker bridge → 宿主机默认 bridge gateway → published port 这条路径存在源地址 SNAT，不能用于按原始客户端 CIDR 匹配。该结果不能外推到物理 LAN 客户端直达宿主机 LAN 接口的路径。
+
+### 9.2 新的首选 PoC：routed bridge + direct routing（不经过 host published-port NAT）
+
+Docker 官方文档说明，bridge network 的 gateway mode 可设置为 routed：不设置 NAT/masquerading，容器出站使用容器地址；外部客户端必须具有到容器网段、经 Docker 宿主机 LAN 地址的路由。对特定网络接口可使用 trusted_host_interfaces 限定允许 direct routing 的入站接口。
+
+候选实验：
+1. 创建独立 Docker bridge 网络，分别设置 IPv4/IPv6 gateway mode 为 routed（按目标主机 Docker Engine 版本支持情况配置）。
+2. 将 Agent/SmartDNS 专用 ingress 绑定到容器在该网络中的明确地址和专用端口，不使用宿主机 -p published-port 转发。
+3. 在 LAN 路由器/客户端侧配置到 Docker ingress 子网的静态路由，下一跳为宿主机 LAN 地址。
+4. 使用 bridge network 的 trusted_host_interfaces 将 direct routing 限定在指定 LAN 接口；不使用全局 allow-direct-routing，除非目标 Docker 版本/拓扑无法使用接口级约束且已评估风险。
+5. 在宿主机防火墙按真实客户端 CIDR、协议和专用端口限制入站；同时验证 Docker 管理的 firewall 规则不会绕过预期策略。
+6. 从两个真实 LAN 客户端网段发起 UDP/TCP 查询，同时在宿主机 LAN 接口、容器 ingress 接口抓包，并记录 SmartDNS socket peer IP。
+7. 只有客户端源 IP 在容器内保持不变，才进入 SmartDNS group-match + Mihomo SOCKS + 外部出口 IP 联合验收。
+
+参考：
+- Docker port publishing/direct routing/gateway modes: https://docs.docker.com/engine/network/port-publishing/
+- Docker bridge trusted host interfaces and routed gateway modes: https://docs.docker.com/engine/network/drivers/bridge/
+- Docker macvlan limitations and host communication: https://docs.docker.com/engine/network/drivers/macvlan/
+
+### 9.3 方案限制与回退
+
+- routed bridge 需要 LAN 路由器/网络允许到容器子网的路由；云厂商、VPS 网络或上游交换网络可能不允许。
+- Docker Engine 版本、iptables/nftables 后端、IPv4/IPv6 路由和宿主机转发策略必须实测；不得假设配置项在所有发行版均可用。
+- 若 routed bridge 无法在目标网络中安全部署，评估 macvlan/ipvlan L2 或 host-level DNS ingress proxy；macvlan 需评估交换机多 MAC、云平台限制和 host-container 通信限制。
+- 不能退回普通 published-port NAT 并将 SNAT 后的宿主机地址伪装成客户端地址。
+- 在真实 LAN 抓包验收之前，per_client 继续 fail-closed；PR #217/#218 继续 Draft。
