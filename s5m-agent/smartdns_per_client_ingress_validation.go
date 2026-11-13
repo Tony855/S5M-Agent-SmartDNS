@@ -320,7 +320,7 @@ func hasPerClientSmartDNSDirectives(data []byte) bool {
 // address: that address is not expected to belong to any client CIDR mapping.
 func smartDNSIngressAddressSocketsBound(address string) (bool, error) {
 	ip, err := netip.ParseAddr(strings.TrimSpace(address))
-	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
 		return false, fmt.Errorf("invalid ingress address")
 	}
 	var udpPath, tcpPath string
@@ -330,7 +330,6 @@ func smartDNSIngressAddressSocketsBound(address string) (bool, error) {
 	if err != nil { return false, fmt.Errorf("read UDP socket table: %w", err) }
 	tcp, err := os.ReadFile(tcpPath)
 	if err != nil { return false, fmt.Errorf("read TCP socket table: %w", err) }
-	only := map[string]bool{ip.String(): true}
 	return procSocketTableHasExactListener(udp, ipv6, smartDNSPerClientIngressPort, ip.String(), false) &&
 		procSocketTableHasExactListener(tcp, ipv6, smartDNSPerClientIngressPort, ip.String(), true), nil
 }
