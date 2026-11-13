@@ -228,7 +228,7 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 
 	// Persist the complete pre-transaction state before the first live mutation.
 	journal := configTransactionRecoveryRecord{
-		Version: 1, Phase: "prepared",
+		Version: 1, Phase: "prepared", SmartDNSUpdated: updateSmartDNS,
 		SmartDNS: transactionRecoveryFile{Data: oldSmartDNS, Existed: hadSmartDNS},
 		Mihomo: transactionRecoveryFile{Data: oldMihomo, Existed: hadMihomo},
 		ManagedRoutes: transactionRecoveryFile{Data: oldManaged, Existed: hadManaged},
