@@ -1165,6 +1165,10 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // sendAgentWSConfig returns only the configuration assigned to the authenticated machine.
 func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, clientHash, clientSmartDNSHash string) error {
+	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
+	if err != nil {
+		return err
+	}
 	nodeConfig, err := a.store.GetNodeConfig(machineCode)
 	if err != nil {
 		return err
@@ -1177,7 +1181,11 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		yml = nodeConfig.YAML
 	}
 	if strings.TrimSpace(yml) == "" {
-		yml, err = a.BuildConfigForMachine(machineCode)
+		if ingressContract != nil {
+			yml, err = a.buildConfigForMachineWithSmartDNSOverrideAndPerClient(machineCode, nil, true)
+		} else {
+			yml, err = a.BuildConfigForMachine(machineCode)
+		}
 		if err != nil {
 			return err
 		}
@@ -1187,6 +1195,36 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	normalized, normalizeErr := normalizeAgentProxyConfig(yml)
 	if normalizeErr != nil {
 		return normalizeErr
+	}
+	generatedPerClientSmartDNS := ""
+	if ingressContract != nil {
+		rawRouting, readErr := a.store.GetSetting("smartdns_routing_config")
+		if readErr != nil {
+			return fmt.Errorf("读取 per-client SmartDNS 路由设置失败: %w", readErr)
+		}
+		var routing SmartDNSRoutingConfig
+		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
+			return fmt.Errorf("解析 per-client SmartDNS 路由设置失败: %w", err)
+		}
+		proxies, err := a.store.ListProxies()
+		if err != nil {
+			return fmt.Errorf("读取 per-client 代理列表失败: %w", err)
+		}
+		refs := make([]SmartDNSProxyRef, 0, len(proxies))
+		for _, proxy := range proxies {
+			owner := strings.TrimSpace(proxy.MachineCode)
+			if owner == "__GLOBAL__" || owner == machineCode {
+				refs = append(refs, SmartDNSProxyRef{Name: proxy.Name, Enabled: proxy.Enabled})
+			}
+		}
+		var mappings []SmartDNSClientRuntimeMapping
+		yml, generatedPerClientSmartDNS, mappings, err = buildSmartDNSPerClientRuntimeConfigsWithIngress(yml, routing, refs, ingressContract.IPv4Address, ingressContract.IPv6Address)
+		if err != nil {
+			return fmt.Errorf("生成 per-client Mihomo/SmartDNS 联合运行配置失败: %w", err)
+		}
+		if len(mappings) != len(ingressContract.ClientCIDRs) {
+			return fmt.Errorf("per-client 路由映射与已验收 ingress CIDR 数量不一致")
+		}
 	}
 	if normalized != yml {
 		updated, saveErr := a.store.SaveNodeConfigIfUnchanged(machineCode, yml, normalized)
@@ -1217,12 +1255,6 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		}
 	}
 
-	// Keep config publication and explicit apply commands behind one identical per-client ingress gate.
-	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
-	if err != nil {
-		return err
-	}
-
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
 	// Apply it only to the outgoing payload so health loss immediately falls back
 	// to the original configured nameservers on the next config request.
@@ -1246,6 +1278,9 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	}
 	if smartDNSErr == sql.ErrNoRows {
 		smartDNSYAML = ""
+	}
+	if ingressContract != nil {
+		smartDNSYAML = generatedPerClientSmartDNS
 	}
 	if len(smartDNSYAML) > 8<<10 {
 		return fmt.Errorf("主控端 SmartDNS 配置超过 8 KiB 限制")
