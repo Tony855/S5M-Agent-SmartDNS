@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -154,5 +155,25 @@ func TestApplyAgentConfigTransactionWithIngressRejectsUnreadyContractBeforeMutat
 	contract.Ready = false
 	if err := applyAgentConfigTransactionWithIngress(nil, config, true, "https://master.example", contract); err == nil {
 		t.Fatal("transaction accepted an unready ingress contract")
+	}
+}
+
+
+func TestSmartDNSIngressContractJSONSchema(t *testing.T) {
+	want := smartDNSPerClientIngressContract{
+		Version: 1, Ready: true, IPv4Address: "172.31.0.10",
+		ClientCIDRs: []string{"192.168.50.0/24"},
+	}
+	data, err := json.Marshal(want)
+	if err != nil { t.Fatal(err) }
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil { t.Fatal(err) }
+	for _, key := range []string{"version", "ready", "ipv4_address", "client_cidrs"} {
+		if _, ok := got[key]; !ok { t.Fatalf("contract JSON missing stable field %q: %s", key, data) }
+	}
+	var roundTrip smartDNSPerClientIngressContract
+	if err := json.Unmarshal(data, &roundTrip); err != nil { t.Fatal(err) }
+	if roundTrip.Version != want.Version || roundTrip.IPv4Address != want.IPv4Address || len(roundTrip.ClientCIDRs) != 1 || roundTrip.ClientCIDRs[0] != want.ClientCIDRs[0] {
+		t.Fatalf("contract JSON round trip mismatch: %#v", roundTrip)
 	}
 }
