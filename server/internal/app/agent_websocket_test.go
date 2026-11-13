@@ -2053,3 +2053,72 @@ func TestAgentWebSocketConfigRequestDoesNotHoldGlobalLockDuringDatabaseIO(t *tes
 		t.Fatalf("unexpected config response: %#v", response)
 	}
 }
+
+
+func TestAgentWebSocketManagedSmartDNSRequiresBothHashes(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	configYAML := "allow-lan: true\nmixed-port: 7890\nsecret: test-secret\ntun:\n  enable: true\ndns:\n  enable: true\n"
+	if err := app.store.SaveNodeConfig(code, configYAML); err != nil {
+		t.Fatalf("save node config: %v", err)
+	}
+	smartDNSYAML := "bind :6053\ncache-size 4096\n"
+	if err := app.store.UpdateSettings(map[string]string{"smartdns_config_" + code: smartDNSYAML}); err != nil {
+		t.Fatalf("save managed SmartDNS config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+	if err != nil {
+		t.Fatalf("dial authenticated WebSocket: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var welcome map[string]any
+	if err := conn.ReadJSON(&welcome); err != nil || welcome["type"] != "welcome" {
+		t.Fatalf("read welcome: %#v, err=%v", welcome, err)
+	}
+
+	request := func(id, mihomoHash, smartDNSHash string) map[string]any {
+		t.Helper()
+		if err := conn.WriteJSON(map[string]string{
+			"type": "config.request", "id": id,
+			"config_sha256": mihomoHash, "smartdns_config_sha256": smartDNSHash,
+		}); err != nil {
+			t.Fatalf("send %s: %v", id, err)
+		}
+		var response map[string]any
+		if err := conn.ReadJSON(&response); err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		return response
+	}
+
+	first := request("managed-config-1", "", "")
+	if first["type"] != "config.sync" || first["smartdns_yaml"] != smartDNSYAML {
+		t.Fatalf("managed SmartDNS payload missing: %#v", first)
+	}
+	smartSum := sha256.Sum256([]byte(smartDNSYAML))
+	smartHash := hex.EncodeToString(smartSum[:])
+	if first["smartdns_sha256"] != smartHash {
+		t.Fatalf("SmartDNS SHA mismatch: got %#v want %s", first["smartdns_sha256"], smartHash)
+	}
+	mihomoHash, ok := first["sha256"].(string)
+	if !ok || len(mihomoHash) != 64 {
+		t.Fatalf("invalid Mihomo hash in response: %#v", first["sha256"])
+	}
+
+	// Matching Mihomo alone must not produce unchanged while the managed
+	// SmartDNS document is missing or stale on the Agent.
+	second := request("managed-config-2", mihomoHash, "")
+	if second["type"] != "config.sync" || second["smartdns_yaml"] != smartDNSYAML {
+		t.Fatalf("Mihomo-only match incorrectly skipped SmartDNS sync: %#v", second)
+	}
+
+	third := request("managed-config-3", mihomoHash, smartHash)
+	if third["type"] != "config.unchanged" || third["smartdns_sha256"] != smartHash {
+		t.Fatalf("both matching hashes should be unchanged: %#v", third)
+	}
+}
