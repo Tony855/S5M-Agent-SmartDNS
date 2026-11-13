@@ -1869,36 +1869,32 @@ listeners:
 	}
 }
 
-func TestBuildConfigForMachineFailsClosedForPerClientRouting(t *testing.T) {
-	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-per-client-fail-closed.db"))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+func TestBuildConfigForMachineValidatesPerClientRoutingPlan(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-per-client-plan.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
 	defer store.db.Close()
 
-	routing, err := json.Marshal(SmartDNSRoutingConfig{
-		Mode: SmartDNSProxyModePerClient,
-		Clients: []SmartDNSClientRoute{{
-			ClientCIDR: "192.168.50.10/32",
-			ProxyName:  "node-a-egress",
-		}},
-	})
-	if err != nil {
-		t.Fatalf("marshal routing config: %v", err)
-	}
+	routing := `{"mode":"per_client","clients":[{"client_cidr":"192.168.50.10/32","proxy_name":"node-a-egress"}]}`
 	if err := store.UpdateSettings(map[string]string{
-		"smartdns_routing_config": string(routing),
-		"agent_machine_node-a":    "token-a",
-	}); err != nil {
-		t.Fatalf("UpdateSettings: %v", err)
+		"smartdns_routing_config": routing,
+		"smartdns_enabled_node-a": "true",
+		"agent_machine_node-a": "token-a",
+	}); err != nil { t.Fatalf("UpdateSettings: %v", err) }
+	proxy := Proxy{Name:"node-a-egress", Type:"socks5", Server:"192.0.2.10", Port:1080, MachineCode:"node-a", Enabled:true}
+	if err := store.CreateProxy(&proxy); err != nil { t.Fatalf("CreateProxy: %v", err) }
+
+	got, err := (&App{store:store}).BuildConfigForMachine("node-a")
+	if err != nil { t.Fatalf("BuildConfigForMachine should validate a usable per-client plan: %v", err) }
+	if strings.Contains(got, "PROCESS-NAME,smartdns,") {
+		t.Fatalf("per-client mode must not publish shared-process routing rules before the isolated runtime is generated:\\n%s", got)
+	}
+	if strings.Contains(got, "s5m-smartdns-") {
+		t.Fatalf("base persisted YAML must not contain runtime-only per-client listeners:\\n%s", got)
 	}
 
-	app := &App{store: store}
-	for _, machineCode := range []string{"", "node-a"} {
-		_, err := app.BuildConfigForMachine(machineCode)
-		if err == nil || !strings.Contains(err.Error(), "尚未接入隔离 DNS 运行时") {
-			t.Errorf("BuildConfigForMachine(%q) must fail closed for per-client routing, got %v", machineCode, err)
-		}
+	if err := store.SetMachineProxyMode("node-b", "rule"); err != nil { t.Fatal(err) }
+	if _, err := (&App{store:store}).BuildConfigForMachine("node-b"); err == nil {
+		t.Fatal("node without the referenced enabled proxy must fail closed")
 	}
 }
 
