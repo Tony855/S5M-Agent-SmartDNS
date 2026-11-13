@@ -743,6 +743,9 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
 		return fmt.Errorf("机器码格式无效")
 	}
+	if err := a.requireSmartDNSIngressReady(machineCode); err != nil {
+		return err
+	}
 	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
 		return fmt.Errorf("SmartDNS 配置不能为空且不能超过 8 KiB（Agent 安全限制）")
 	}
@@ -1210,28 +1213,9 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		}
 	}
 
-	// Per-client DNS configuration must not be published until this exact Agent
-	// has a fresh, complete ingress attestation. The API still keeps per-client
-	// mode disabled by default; this guard also protects internal/legacy writes
-	// and the staged runtime publisher when it is enabled.
-	routingRaw, routingErr := a.store.GetSetting("smartdns_routing_config")
-	if routingErr != nil && routingErr != sql.ErrNoRows {
-		return fmt.Errorf("读取 SmartDNS 路由模式失败: %w", routingErr)
-	}
-	if routingErr == nil && strings.TrimSpace(routingRaw) != "" {
-		var routing SmartDNSRoutingConfig
-		if err := json.Unmarshal([]byte(routingRaw), &routing); err != nil {
-			return fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
-		}
-		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
-			settings, err := a.store.GetSettings()
-			if err != nil {
-				return fmt.Errorf("读取 Agent DNS ingress 就绪状态失败: %w", err)
-			}
-			if err := validateSmartDNSIngressReadiness(settings, machineCode, routing, time.Now()); err != nil {
-				return fmt.Errorf("Agent DNS ingress 尚未通过生产就绪校验，拒绝发布 per-client 配置: %w", err)
-			}
-		}
+	// Keep config publication and explicit apply commands behind one identical per-client ingress gate.
+	if err := a.requireSmartDNSIngressReady(machineCode); err != nil {
+		return err
 	}
 
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
