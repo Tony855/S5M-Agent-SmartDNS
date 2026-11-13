@@ -534,6 +534,7 @@ type smartDNSStatusDependencies struct {
 	probe      func() bool
 	restart    func() error
 	waitHealthy func(time.Duration) bool
+	ingressAttestation func() (smartDNSHostIngressAttestation, error)
 }
 
 func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
@@ -550,6 +551,7 @@ func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
 		probe: probeSmartDNSDNS,
 		restart: restartSmartDNSService,
 		waitHealthy: waitForSmartDNSHealthy,
+		ingressAttestation: readSmartDNSHostIngressAttestation,
 	}
 }
 
@@ -560,13 +562,12 @@ func collectSmartDNSStatus(status map[string]any) {
 // collectSmartDNSStatusWithDependencies keeps host interactions injectable so
 // every status and failure path can be tested without a live SmartDNS daemon.
 func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSStatusDependencies) {
-	// Per-client DNS ingress is deliberately unavailable until the Agent can
-	// provision and observe the complete routed dataplane. Publish an explicit
-	// fail-closed contract state rather than allowing stale/omitted fields to be
-	// mistaken for readiness by dashboards or future protocol consumers.
+	// Never infer host firewall or source-IP preservation from the Agent
+	// namespace alone. Only a fresh, root-owned host-controller attestation can
+	// populate those fields; socket inspection independently confirms SmartDNS.
 	status["dns_ingress_contract_version"] = 0
 	status["dns_ingress_ready"] = false
-	status["dns_ingress_reason"] = "agent_ingress_lifecycle_not_implemented"
+	status["dns_ingress_reason"] = "host_ingress_attestation_unavailable"
 	status["dns_ingress_source_ip_preserved"] = false
 	status["dns_ingress_firewall_ready"] = false
 	status["dns_ingress_firewall_persistent"] = false
@@ -590,14 +591,55 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	status["dns_ingress_observed_ipv6_addresses"] = []string{}
 	status["dns_ingress_observed_udp_6055"] = false
 	status["dns_ingress_observed_tcp_6055"] = false
-	if observation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies()); err != nil {
-		status["dns_ingress_observation_error"] = safeSmartDNSDiagnostic(err.Error())
+	observation, observationErr := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+	if observationErr != nil {
+		status["dns_ingress_observation_error"] = safeSmartDNSDiagnostic(observationErr.Error())
 	} else {
 		status["dns_ingress_observed_interfaces"] = observation.Interfaces
 		status["dns_ingress_observed_ipv4_addresses"] = observation.IPv4
 		status["dns_ingress_observed_ipv6_addresses"] = observation.IPv6
 		status["dns_ingress_observed_udp_6055"] = observation.UDP
 		status["dns_ingress_observed_tcp_6055"] = observation.TCP
+	}
+	if deps.ingressAttestation != nil {
+		attestation, attestationErr := deps.ingressAttestation()
+		if attestationErr != nil {
+			status["dns_ingress_reason"] = safeSmartDNSDiagnostic(attestationErr.Error())
+		} else {
+			status["dns_ingress_contract_version"] = attestation.Version
+			status["dns_ingress_interface"] = attestation.Interface
+			status["dns_ingress_ipv4_address"] = attestation.IPv4Address
+			status["dns_ingress_ipv6_address"] = attestation.IPv6Address
+			status["dns_ingress_client_cidrs"] = attestation.ClientCIDRs
+			status["dns_ingress_source_ip_preserved"] = attestation.SourceIPPreserved
+			status["dns_ingress_firewall_ready"] = attestation.FirewallReady
+			status["dns_ingress_firewall_persistent"] = attestation.FirewallPersistent
+			status["dns_ingress_udp_ready"] = attestation.UDPReady
+			status["dns_ingress_tcp_ready"] = attestation.TCPReady
+			interfaceObserved := false
+			for _, name := range observation.Interfaces { if name == attestation.Interface { interfaceObserved = true; break } }
+			ipv4Observed, ipv6Observed := false, false
+			for _, address := range observation.IPv4 { if address == attestation.IPv4Address { ipv4Observed = true; break } }
+			for _, address := range observation.IPv6 { if address == attestation.IPv6Address { ipv6Observed = true; break } }
+			ipv4Bound, ipv6Bound := false, false
+			if attestation.IPv4Address != "" { ipv4Bound, _ = smartDNSIngressAddressSocketsBound(attestation.IPv4Address) }
+			if attestation.IPv6Address != "" { ipv6Bound, _ = smartDNSIngressAddressSocketsBound(attestation.IPv6Address) }
+			status["dns_ingress_ipv4_ready"] = attestation.IPv4Address == "" || (interfaceObserved && ipv4Observed)
+			status["dns_ingress_ipv6_ready"] = attestation.IPv6Address == "" || (interfaceObserved && ipv6Observed)
+			status["dns_ingress_smartdns_ipv4_bound"] = ipv4Bound
+			status["dns_ingress_smartdns_ipv6_bound"] = ipv6Bound
+			if ipv4Bound { status["dns_ingress_smartdns_ipv4_bind_address"] = attestation.IPv4Address }
+			if ipv6Bound { status["dns_ingress_smartdns_ipv6_bind_address"] = attestation.IPv6Address }
+			listenerReady := (attestation.IPv4Address == "" || ipv4Bound) && (attestation.IPv6Address == "" || ipv6Bound)
+			status["dns_ingress_smartdns_listener_ready"] = listenerReady
+			runtimeReady := attestation.SourceIPPreserved && attestation.FirewallReady && attestation.FirewallPersistent &&
+				attestation.UDPReady && attestation.TCPReady && interfaceObserved &&
+				(attestation.IPv4Address == "" || ipv4Observed) && (attestation.IPv6Address == "" || ipv6Observed) && listenerReady
+			status["dns_ingress_ready"] = runtimeReady
+			if runtimeReady { status["dns_ingress_reason"] = "" } else { status["dns_ingress_reason"] = "host_or_smartdns_ingress_not_ready" }
+		}
+	} else {
+		status["dns_ingress_reason"] = "host_ingress_attestation_reader_unavailable"
 	}
 
 	status["smartdns_available"] = false
