@@ -64,3 +64,12 @@ func TestValidateSmartDNSHostIngressAttestationRejectsStaleAndOverlappingCIDRs(t
 		t.Fatal("overlapping client CIDRs accepted")
 	}
 }
+
+
+func TestReadSmartDNSHostIngressAttestationEnforcesRootOwnership(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ingress.json")
+	writeHostIngressAttestationFixture(t, path, validHostIngressAttestationFixture(), 0600)
+	_, err := readSmartDNSHostIngressAttestationFromPath(path)
+	if os.Geteuid() == 0 && err != nil { t.Fatalf("root-owned test file should be accepted: %v", err) }
+	if os.Geteuid() != 0 && err == nil { t.Fatal("non-root-owned host attestation accepted") }
+}
