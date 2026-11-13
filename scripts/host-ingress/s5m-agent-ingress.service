@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=oneshot
 RuntimeDirectory=s5m-agent-ingress
 RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/local/libexec/s5m-agent-ingress/controller.py apply
 User=root
 Group=root

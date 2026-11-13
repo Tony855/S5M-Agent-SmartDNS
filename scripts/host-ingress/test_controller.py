@@ -45,4 +45,9 @@ class ControllerTests(unittest.TestCase):
         link=self.path.with_name("link.json"); link.symlink_to(self.path)
         with self.assertRaises(mod.ConfigError): mod.load_config(link, require_root=False)
 
+    def test_systemd_preserves_attestation_directory_after_oneshot_exit(self):
+        unit = pathlib.Path(__file__).with_name("s5m-agent-ingress.service").read_text()
+        self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)
+        self.assertIn("RuntimeDirectoryPreserve=yes", unit)
+
 if __name__ == "__main__": unittest.main()
