@@ -1212,6 +1212,11 @@ func smartDNSResponseHasAnswer(message []byte, transactionID, qtype uint16) bool
 	if !sectionOK {
 		return false
 	}
+	// Every byte in the DNS frame must belong to a declared section. Padding
+	// is valid only inside a length-delimited EDNS OPT record, not as stray tail.
+	if offset != len(message) {
+		return false
+	}
 	return foundRequestedAnswer
 }
 
