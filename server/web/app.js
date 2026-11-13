@@ -112,7 +112,12 @@ createApp({
     const applyingSmartDNS = ref(false);
     const smartdnsResult = ref('');
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
+    const smartdnsRoutingMode = ref('shared');
     const smartdnsRoutingStrategy = ref('fallback');
+    const smartdnsClientRoutes = ref([]);
+    const globalEnabledSmartDNSProxies = computed(() => proxies.value.filter(p =>
+      String(p.machine_code || '') === '__GLOBAL__' && (p.enabled === true || p.enabled === 1)
+    ));
     const savingSmartDNSRouting = ref(false);
     let smartdnsLoadGeneration = 0;
     let smartdnsApplyGeneration = 0;
@@ -628,7 +633,7 @@ createApp({
       if (v === 'dashboard') loadOverview();
       if (v === 'proxies') { loadProxies(); loadAgentsData(); }
       if (v === 'instances') { loadAgentsData(); loadProxies(); }
-      if (v === 'config') { loadAgentsData(); loadSettings(); }
+      if (v === 'config') { loadAgentsData(); loadProxies(); loadSettings(); }
       if (v === 'system') { loadSystemLogs(); loadMainMihomoStatus(); }
     };
 
@@ -1796,29 +1801,68 @@ createApp({
         const hasRoutingSetting = Object.prototype.hasOwnProperty.call(settings, 'smartdns_routing_config');
         const raw = String(settings.smartdns_routing_config || '').trim();
         if (!hasRoutingSetting) {
+          smartdnsRoutingMode.value = 'shared';
           smartdnsRoutingStrategy.value = 'fallback';
+          smartdnsClientRoutes.value = [];
         } else if (!raw) {
+          smartdnsRoutingMode.value = 'legacy';
           smartdnsRoutingStrategy.value = 'legacy';
+          smartdnsClientRoutes.value = [];
         } else {
           const routing = JSON.parse(raw);
+          smartdnsRoutingMode.value = routing.mode === 'per_client' ? 'per_client' : 'shared';
           smartdnsRoutingStrategy.value = ['url-test', 'select', 'fallback'].includes(routing.strategy)
             ? routing.strategy : 'fallback';
+          smartdnsClientRoutes.value = Array.isArray(routing.clients)
+            ? routing.clients.map(route => ({ client_cidr: String(route.client_cidr || ''), proxy_name: String(route.proxy_name || '') }))
+            : [];
         }
       } catch (e) {
         console.warn('读取 SmartDNS 上游出口策略失败', e);
       }
     };
 
+    const addSmartDNSClientRoute = () => {
+      smartdnsClientRoutes.value.push({ client_cidr: '', proxy_name: '' });
+    };
+    const removeSmartDNSClientRoute = (index) => {
+      smartdnsClientRoutes.value.splice(index, 1);
+    };
+
     const saveSmartDNSRoutingStrategy = async () => {
       if (savingSmartDNSRouting.value) return;
+      const mode = String(smartdnsRoutingMode.value || 'shared');
       const strategy = String(smartdnsRoutingStrategy.value || 'fallback');
-      if (!['url-test', 'select', 'fallback', 'legacy'].includes(strategy)) {
+      if (!['shared', 'per_client', 'legacy'].includes(mode)) {
+        showMsg('SmartDNS 出口模式无效', 'error');
+        return;
+      }
+      if (mode === 'shared' && !['url-test', 'select', 'fallback'].includes(strategy)) {
         showMsg('SmartDNS 出口策略无效', 'error');
         return;
       }
+      let routing = '';
+      if (mode === 'shared') {
+        routing = JSON.stringify({ mode: 'shared', strategy });
+      } else if (mode === 'per_client') {
+        const clients = smartdnsClientRoutes.value.map(route => ({
+          client_cidr: String(route.client_cidr || '').trim(),
+          proxy_name: String(route.proxy_name || '').trim()
+        }));
+        if (clients.length === 0 || clients.some(route => !route.client_cidr || !route.proxy_name)) {
+          showMsg('按客户端模式至少需要一条完整的 CIDR → 代理映射', 'error');
+          return;
+        }
+        const eligible = new Set(globalEnabledSmartDNSProxies.value.map(proxy => String(proxy.name || proxy.proxy_name || '')));
+        const unavailable = clients.find(route => !eligible.has(route.proxy_name));
+        if (unavailable) {
+          showMsg('代理 ' + unavailable.proxy_name + ' 不是全局启用代理；全局按客户端策略必须选择所有 Agent 均可用的全局代理', 'error');
+          return;
+        }
+        routing = JSON.stringify({ mode: 'per_client', strategy: 'fallback', clients });
+      }
       savingSmartDNSRouting.value = true;
       try {
-        const routing = strategy === 'legacy' ? '' : JSON.stringify({ mode: 'shared', strategy });
         const res = await api('/api/v1/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -1865,7 +1909,8 @@ createApp({
       configYaml, configTunEnabled, configDnsEnabled, configDnsNameservers, syncConfigQuickSettingsFromYaml, applyConfigQuickSettings,
       selectedConfigNode, savingConfig, publishing, updatingKernel,
       smartdnsYaml, loadingSmartDNS, applyingSmartDNS, smartdnsResult, smartdnsStatus, loadSmartDNSConfig, applySmartDNSConfig,
-      smartdnsRoutingStrategy, savingSmartDNSRouting, saveSmartDNSRoutingStrategy,
+      smartdnsRoutingMode, smartdnsRoutingStrategy, smartdnsClientRoutes, globalEnabledSmartDNSProxies,
+      savingSmartDNSRouting, saveSmartDNSRoutingStrategy, addSmartDNSClientRoute, removeSmartDNSClientRoute,
       kernelUpdateDialog, kernelUpdateMachineCode, kernelUpdateVersion, kernelUpdateSHA256, queueingKernelUpdate, kernelUpdateInfo, kernelUpdateInfoLoading,
       openAgentKernelUpdate, loadAgentKernelUpdateInfo, queueAgentKernelUpdate,
       systemLogs, loadingSystemLogs, restoringBackup, loadSystemLogs, downloadBackup, restoreBackup,
