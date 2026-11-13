@@ -603,6 +603,20 @@ do_recreate() {
     log "新容器健康，删除回滚副本 ${backup_container}"
     docker rm "${backup_container}" >/dev/null 2>&1 || warn "回滚副本未能清理，可手动删除"
   fi
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    if [[ -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
+          -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
+      if /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
+          --config /etc/s5m-agent-ingress/network.json \
+          --firewall-config /etc/s5m-agent-ingress/config.json; then
+        log "Routed DNS ingress network attached; firewall/physical proof gates remain enforced."
+      else
+        warn "routed DNS ingress provision 失败；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
+      fi
+    else
+      warn "缺少 host-ingress helper/config；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
+    fi
+  fi
   if [[ "${remove_image}" == "true" ]]; then
     log "清理旧的 dangling 镜像"
     docker image prune -f >/dev/null 2>&1 || true

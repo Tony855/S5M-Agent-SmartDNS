@@ -317,6 +317,21 @@ if (( HAD_OLD )); then
   if docker rm "$BACKUP_NAME" >/dev/null; then HAD_OLD=0; else log "警告：新容器已运行，但旧容器暂存项未能删除：$BACKUP_NAME"; fi
 fi
 
+if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+  if [[ -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
+        -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
+    if /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
+        --config /etc/s5m-agent-ingress/network.json \
+        --firewall-config /etc/s5m-agent-ingress/config.json; then
+      log "Routed DNS ingress network attached; firewall/physical proof gates remain enforced."
+    else
+      log "警告：routed DNS ingress provision 失败；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
+    fi
+  else
+    log "警告：缺少 host-ingress helper/config；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
+  fi
+fi
+
 printf '\n===== 容器状态 =====\n'
 docker ps --filter "name=^/${CONTAINER_NAME}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 printf '\n===== 已发布端口 =====\n'
@@ -325,8 +340,6 @@ printf '\n===== 最近日志 =====\n'
 docker logs --tail 40 "$CONTAINER_NAME" || true
 printf '\n配置文件：%s\n数据目录：%s\n' "$CONFIG_FILE" "$DATA_DIR"
 if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
-  log "Per-client DNS ingress 端口仅绑定宿主机 loopback；功能仍 fail-closed。安装 host controller 后执行："
-  echo "  sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision --config /etc/s5m-agent-ingress/network.json --firewall-config /etc/s5m-agent-ingress/config.json"
-  echo "  随后配置上游路由器静态路由并完成真实 LAN UDP/TCP 源地址验收。"
+  log "Per-client DNS ingress 端口仅绑定宿主机 loopback；配置仍需上游路由器静态路由和真实 LAN UDP/TCP 源地址验收。"
 fi
 log "部署流程完成。"
