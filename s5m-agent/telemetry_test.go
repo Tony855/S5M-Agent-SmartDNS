@@ -328,3 +328,41 @@ func TestStopAndWaitAgentTelemetryPublisherWaitsForWriterExit(t *testing.T) {
 		t.Fatal("publisher shutdown did not finish after the writer exited")
 	}
 }
+
+
+func TestTelemetryPublisherWaitsForPollerExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	pollerStarted := make(chan struct{})
+	releasePoller := make(chan struct{})
+	publisherDone := make(chan struct{})
+
+	go func() {
+		runAgentTelemetryPublisherWithPoll(ctx, nil, func(pollCtx context.Context) {
+			close(pollerStarted)
+			<-pollCtx.Done()
+			<-releasePoller
+		})
+		close(publisherDone)
+	}()
+
+	select {
+	case <-pollerStarted:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("telemetry poller did not start")
+	}
+	cancel()
+
+	select {
+	case <-publisherDone:
+		t.Fatal("telemetry publisher returned before its poller exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releasePoller)
+	select {
+	case <-publisherDone:
+	case <-time.After(time.Second):
+		t.Fatal("telemetry publisher did not return after its poller exited")
+	}
+}
