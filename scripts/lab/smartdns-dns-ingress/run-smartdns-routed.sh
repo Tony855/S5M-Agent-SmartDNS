@@ -81,6 +81,29 @@ wait_for_log_increase() {
   done
   return 1
 }
+wait_for_quiet() {
+  local previous_a previous_b current_a current_b stable=0
+  previous_a="$(log_count "$LOG_DIR/proxy-a.log")"
+  previous_b="$(log_count "$LOG_DIR/proxy-b.log")"
+  for _ in $(seq 1 40); do
+    sleep 0.25
+    current_a="$(log_count "$LOG_DIR/proxy-a.log")"
+    current_b="$(log_count "$LOG_DIR/proxy-b.log")"
+    if [[ "$current_a" == "$previous_a" && "$current_b" == "$previous_b" ]]; then
+      stable=$((stable + 1))
+      if (( stable >= 4 )); then return 0; fi
+    else
+      stable=0
+    fi
+    previous_a="$current_a"
+    previous_b="$current_b"
+  done
+  echo "SOCKS observers did not become quiet; proxy-a log:" >&2
+  cat "$LOG_DIR/proxy-a.log" 2>/dev/null >&2 || true
+  echo "proxy-b log:" >&2
+  cat "$LOG_DIR/proxy-b.log" 2>/dev/null >&2 || true
+  return 1
+}
 for transport in udp tcp; do
   ip netns exec "$NS_A" python3 "$ROOT/client-query.py" probe-a.test 192.0.2.10 "$transport"
   ip netns exec "$NS_B" python3 "$ROOT/client-query.py" probe-b.test 192.0.2.20 "$transport"
@@ -88,22 +111,22 @@ for transport in udp tcp; do
 
   a_before="$(log_count "$LOG_DIR/proxy-a.log")"
   b_before="$(log_count "$LOG_DIR/proxy-b.log")"
-  ip netns exec "$NS_A" python3 "$ROOT/client-probe.py" example.com "$transport"
-  wait_for_log_increase "$LOG_DIR/proxy-a.log" "$a_before" || { echo "client A did not use its named SOCKS listener" >&2; exit 1; }
-  sleep 1
+  ip netns exec "$NS_A" python3 "$ROOT/client-probe.py" a-route-check.example.com "$transport"
+  wait_for_log_increase "$LOG_DIR/proxy-a.log" "$a_before" || { echo "client A did not use its named SOCKS listener" >&2; cat "$LOG_DIR/proxy-a.log" 2>/dev/null || true; exit 1; }
+  wait_for_quiet
   [[ "$(log_count "$LOG_DIR/proxy-b.log")" == "$b_before" ]] || { echo "client A unexpectedly used client B SOCKS listener" >&2; exit 1; }
 
   a_before="$(log_count "$LOG_DIR/proxy-a.log")"
   b_before="$(log_count "$LOG_DIR/proxy-b.log")"
-  ip netns exec "$NS_B" python3 "$ROOT/client-probe.py" example.com "$transport"
-  wait_for_log_increase "$LOG_DIR/proxy-b.log" "$b_before" || { echo "client B did not use its named SOCKS listener" >&2; exit 1; }
-  sleep 1
+  ip netns exec "$NS_B" python3 "$ROOT/client-probe.py" b-route-check.example.com "$transport"
+  wait_for_log_increase "$LOG_DIR/proxy-b.log" "$b_before" || { echo "client B did not use its named SOCKS listener" >&2; cat "$LOG_DIR/proxy-b.log" 2>/dev/null || true; exit 1; }
+  wait_for_quiet
   [[ "$(log_count "$LOG_DIR/proxy-a.log")" == "$a_before" ]] || { echo "client B unexpectedly used client A SOCKS listener" >&2; exit 1; }
 
   a_before="$(log_count "$LOG_DIR/proxy-a.log")"
   b_before="$(log_count "$LOG_DIR/proxy-b.log")"
-  ip netns exec "$NS_C" python3 "$ROOT/client-probe.py" example.com "$transport"
-  sleep 1
+  ip netns exec "$NS_C" python3 "$ROOT/client-probe.py" unmapped-route-check.example.com "$transport"
+  wait_for_quiet
   [[ "$(log_count "$LOG_DIR/proxy-a.log")" == "$a_before" && "$(log_count "$LOG_DIR/proxy-b.log")" == "$b_before" ]] || { echo "unmapped client unexpectedly reached a named SOCKS listener" >&2; exit 1; }
 done
 echo "PASS: real SmartDNS daemon selected distinct client CIDR groups, excluded unmatched clients from default upstreams, and sent mapped queries only to the matching named SOCKS listener over UDP and TCP."
