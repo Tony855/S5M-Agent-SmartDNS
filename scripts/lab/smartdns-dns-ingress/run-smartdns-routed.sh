@@ -41,14 +41,14 @@ docker network create --driver bridge --subnet 172.31.0.0/24 --gateway 172.31.0.
   --opt "com.docker.network.bridge.trusted_host_interfaces=$LAN_BR" \
   --opt com.docker.network.bridge.name=br-s5m-real "$NET_IN" >/dev/null
 docker run -d --name "$SERVER" --restart no --network "$NET_IN" --ip 172.31.0.10 \
-  -p 0.0.0.0::6055/udp -p 0.0.0.0::6055/tcp \
+  -p 127.0.0.1::6055/udp -p 127.0.0.1::6055/tcp \
   --cap-drop ALL --security-opt no-new-privileges:true s5m-smartdns-routed-lab >/dev/null
 sleep 2
 state="$(docker inspect -f '{{.State.Status}}' "$SERVER")"
 if [[ "$state" != running ]]; then docker logs "$SERVER"; echo "SmartDNS daemon failed to start (state=$state)" >&2; exit 1; fi
 for transport in udp tcp; do
-  ip netns exec "$NS_A" python3 "$ROOT/client-query.py" 192.0.2.10 "$transport"
-  ip netns exec "$NS_B" python3 "$ROOT/client-query.py" 192.0.2.20 "$transport"
+  ip netns exec "$NS_A" python3 "$ROOT/client-query.py" probe-a.test 192.0.2.10 "$transport"
+  ip netns exec "$NS_B" python3 "$ROOT/client-query.py" probe-b.test 192.0.2.20 "$transport"
 done
-echo "PASS: real SmartDNS daemon selected distinct CIDR groups over routed ingress for UDP and TCP."
+echo "PASS: real SmartDNS daemon accepted generated proxy-server/server-tls/group-match directives and selected distinct CIDR groups over routed ingress for UDP and TCP."
 echo "LIMIT: same-host IPv4 lab only; Agent validator/deployment, IPv6, Mihomo SOCKS and real proxy egress remain separate acceptance gates."
