@@ -390,6 +390,7 @@ do_recreate() {
 
   # Validate every existing path component before mkdir, bind-mount, or deletion.
   validate_data_dir_path || return 1
+  prepare_ingress_attestation_dir || return 1
 
   # Confirm destructive intent before touching the current container or data.
   if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then
@@ -495,7 +496,6 @@ do_recreate() {
     fi
   fi
 
-  prepare_ingress_attestation_dir || return 1
   log "启动新容器 ${CONTAINER_NAME}"
   if ! docker run -d \
       --name "${CONTAINER_NAME}" \
