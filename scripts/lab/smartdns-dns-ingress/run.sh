@@ -2,7 +2,6 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 command -v docker >/dev/null
-docker compose version >/dev/null 2>&1
 GW="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')"
 [[ "$GW" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo "Cannot determine Docker bridge gateway" >&2; exit 1; }
 PORT="$(printenv DNS_INGRESS_PORT || echo 16055)"
