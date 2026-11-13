@@ -165,7 +165,9 @@ def provision(cfg):
             raise LifecycleError(f"default IPv4 egress changed; expected default bridge gateway {gw4}, got {routes[0]}")
         if 6 in cfg["_networks"]:
             gw6=bridge.get("IPv6Gateway")
-            if gw6 and not any(f"via {gw6}" in line for line in routes[1]):
+            if not gw6:
+                raise LifecycleError("dual-stack ingress requires an IPv6 gateway on the default bridge to preserve default IPv6 egress")
+            if not any(f"via {gw6}" in line for line in routes[1]):
                 raise LifecycleError(f"default IPv6 egress changed; expected default bridge gateway {gw6}, got {routes[1]}")
     except Exception:
         if connected: run(["docker","network","disconnect",cfg["network"],cfg["container"]],check=False)
