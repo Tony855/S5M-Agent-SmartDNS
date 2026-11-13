@@ -280,3 +280,39 @@ func TestValidateSmartDNSIngressReadinessRejectsReservedCIDRsAndLinkLocalIngress
   })
  }
 }
+
+func TestValidateSmartDNSIngressReadinessRejectsIngressInsideClientCIDRAndExtraFamily(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.0.2.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.0.2.0/24")
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("ingress address inside client CIDR was accepted")
+	}
+
+	routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings = readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("extra unmapped IPv6 ingress address was accepted")
+	}
+}
+
+func TestValidateSmartDNSIngressReadinessRejectsNonCanonicalIngressAddress(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv4_address"] = " 192.0.2.1 "
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("non-canonical ingress address was accepted")
+	}
+}

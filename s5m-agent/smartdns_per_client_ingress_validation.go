@@ -94,6 +94,15 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 	} else if strings.TrimSpace(contract.IPv6Address) != "" {
 		return fmt.Errorf("IPv6 ingress address supplied without IPv6 client CIDRs")
 	}
+	for cidr := range cidrs {
+		prefix, _ := netip.ParsePrefix(cidr)
+		for address := range ingressAddresses {
+			ip, _ := netip.ParseAddr(address)
+			if prefix.Contains(ip) {
+				return fmt.Errorf("client CIDR overlaps an attested ingress address")
+			}
+		}
+	}
 
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	var sharedConfig strings.Builder

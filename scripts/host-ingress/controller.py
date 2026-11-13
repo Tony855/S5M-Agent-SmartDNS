@@ -83,8 +83,11 @@ def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
     for i, left in enumerate(networks):
         for right in networks[i+1:]:
             if left.version == right.version and left.overlaps(right): raise ConfigError("overlapping client CIDRs")
-    if {n.version for n in networks} - {a.version for a in addresses}:
-        raise ConfigError("the client CIDR family needs an address")
+    if {n.version for n in networks} != {a.version for a in addresses}:
+        raise ConfigError("ingress address families must exactly match client CIDR families")
+    for address in addresses:
+        if any(network.version == address.version and address in network for network in networks):
+            raise ConfigError("an ingress address must not overlap a client source CIDR")
     return {"interface": iface, "addresses": addresses, "networks": networks}
 
 def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: dict, now: int | None = None) -> bool:

@@ -212,3 +212,12 @@ func TestValidateSmartDNSConfigWithIngressRejectsDefaultDoHAndUnknownDoTOptions(
 		t.Fatal("unknown per-client DoT option accepted")
 	}
 }
+
+func TestValidateSmartDNSConfigWithIngressRejectsCIDRContainingIngressAddress(t *testing.T) {
+	config, contract := validPerClientIngressFixture()
+	configText := strings.Replace(string(config), "192.168.50.10/32", "172.31.0.0/24", 1)
+	contract.ClientCIDRs = []string{"172.31.0.0/24"}
+	if err := validateSmartDNSConfigWithIngress([]byte(configText), contract); err == nil {
+		t.Fatal("client source CIDR containing the ingress address was accepted")
+	}
+}

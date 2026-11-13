@@ -29,6 +29,15 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
         x=self.valid(); x["client_cidrs"]=["192.168.50.1/24"]; self.write(x)
         with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
+    def test_rejects_ingress_address_overlap_and_extra_family(self):
+        x = self.valid()
+        x["client_cidrs"] = ["172.31.10.0/24", "2001:db8:50::/64"]
+        self.write(x)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
+        x = self.valid()
+        x["client_cidrs"] = ["192.168.50.0/24"]
+        self.write(x)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
     def test_rejects_overlap_and_missing_family_address(self):
         x=self.valid(); x["client_cidrs"] += ["192.168.50.0/25"]; self.write(x)
         with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
