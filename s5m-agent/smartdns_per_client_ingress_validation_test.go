@@ -98,7 +98,7 @@ func TestValidateSmartDNSConfigWithIngressRequiresExactNonOverlappingCIDRs(t *te
 
 func TestValidateSmartDNSConfigWithIngressRejectsDuplicateListenersAndReservedCIDRs(t *testing.T) {
 	config, contract := validPerClientIngressFixture()
-	duplicate := strings.Replace(string(config), "bind 172.31.0.10:6055\\n", "bind 172.31.0.10:6055\\nbind 172.31.0.10:6055\\n", 1)
+	duplicate := strings.Replace(string(config), "bind 172.31.0.10:6055\n", "bind 172.31.0.10:6055\nbind 172.31.0.10:6055\n", 1)
 	if err := validateSmartDNSConfigWithIngress([]byte(duplicate), contract); err == nil {
 		t.Fatal("duplicate UDP ingress listener accepted")
 	}
