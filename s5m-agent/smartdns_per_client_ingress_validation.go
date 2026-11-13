@@ -276,7 +276,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 
 func addValidatedIngressAddress(addresses map[string]bool, raw string, wantIPv4 bool) error {
 	ip, err := netip.ParseAddr(strings.TrimSpace(raw))
-	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Is4In6() || ip.IsMulticast() ||
+	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Is4() != wantIPv4 {
 		return fmt.Errorf("address is not a usable unicast address for the configured family")
 	}
