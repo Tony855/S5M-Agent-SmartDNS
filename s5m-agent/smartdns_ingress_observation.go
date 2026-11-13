@@ -128,3 +128,22 @@ func decodeProcSocketAddress(raw string, ipv6 bool) (net.IP, error) {
 	}
 	return net.IP(decoded), nil
 }
+
+
+// procSocketTableHasExactListener is stricter than the diagnostic observer:
+// wildcard binds are never accepted as proof for a contract-specific address.
+func procSocketTableHasExactListener(data []byte, ipv6 bool, port int, expectedAddress string, requireTCPListen bool) bool {
+	for _, line := range strings.Split(string(data), "\n")[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 4 { continue }
+		if requireTCPListen && fields[3] != "0A" { continue }
+		local := strings.Split(fields[1], ":")
+		if len(local) != 2 { continue }
+		parsedPort, err := strconv.ParseInt(local[1], 16, 32)
+		if err != nil || int(parsedPort) != port { continue }
+		address, err := decodeProcSocketAddress(local[0], ipv6)
+		if err != nil || address.IsUnspecified() { continue }
+		if address.String() == expectedAddress { return true }
+	}
+	return false
+}
