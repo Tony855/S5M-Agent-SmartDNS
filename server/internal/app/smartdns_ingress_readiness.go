@@ -90,12 +90,28 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		if err != nil {
 			return fmt.Errorf("Agent DNS ingress CIDR 状态包含无效网段")
 		}
-		allowed[prefix.Masked().String()] = struct{}{}
+		normalized := prefix.Masked().String()
+		if _, duplicate := allowed[normalized]; duplicate {
+			return fmt.Errorf("Agent DNS ingress CIDR 状态包含重复网段: %s", normalized)
+		}
+		allowed[normalized] = struct{}{}
 	}
+	// The firewall allowlist must be the exact configured CIDR set. A
+	// superset is not acceptable: it would silently authorize client networks
+	// that have no per-client proxy mapping, even though SmartDNS itself
+	// remains fail-closed for those clients.
 	for cidr := range requiredCIDRs {
 		if _, ok := allowed[cidr]; !ok {
 			return fmt.Errorf("Agent DNS ingress 未授权当前映射网段: %s", cidr)
 		}
+	}
+	for cidr := range allowed {
+		if _, ok := requiredCIDRs[cidr]; !ok {
+			return fmt.Errorf("Agent DNS ingress 防火墙包含未配置的额外网段: %s", cidr)
+		}
+	}
+	if len(allowed) != len(requiredCIDRs) {
+		return fmt.Errorf("Agent DNS ingress 防火墙 CIDR 集合与当前映射不完全一致")
 	}
 
 	validateAddress := func(key string, wantIPv4 bool) error {
