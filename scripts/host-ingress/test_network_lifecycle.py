@@ -60,6 +60,12 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
 
 class NetworkSafetyTests(unittest.TestCase):
+    def test_ipv6_provisioning_fails_closed_before_host_mutation(self):
+        cfg=self.write_config()
+        with patch.object(nl,"run") as command:
+            with self.assertRaises(nl.LifecycleError): nl.provision(cfg)
+            command.assert_not_called()
+
     def test_dns_port_bindings_are_loopback_only(self):
         cfg=self.write_config()
         cfg["_networks"].pop(6)
