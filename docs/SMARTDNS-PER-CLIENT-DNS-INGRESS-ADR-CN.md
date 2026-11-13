@@ -149,3 +149,16 @@ Docker 官方文档说明，bridge network 的 gateway mode 可设置为 routed�
 - 若 routed bridge 无法在目标网络中安全部署，评估 macvlan/ipvlan L2 或 host-level DNS ingress proxy；macvlan 需评估交换机多 MAC、云平台限制和 host-container 通信限制。
 - 不能退回普通 published-port NAT 并将 SNAT 后的宿主机地址伪装成客户端地址。
 - 在真实 LAN 抓包验收之前，per_client 继续 fail-closed；PR #217/#218 继续 Draft。
+
+
+### 9.4 Routed bridge PoC 结果（GitHub Actions Docker Engine 29.4.2）
+
+PR #223 的同主机 Linux 网络命名空间实验已通过：
+- 两个模拟 LAN 客户端分别使用 192.168.50.10 与 192.168.50.20；
+- 客户端通过宿主机 LAN bridge 的三层路由访问 routed-mode Docker 容器地址 172.31.0.10；
+- 目标 Docker bridge 设置 gateway_mode_ipv4=routed，并将 trusted_host_interfaces 限定为模拟 LAN bridge；
+- UDP 与 TCP 两种请求均在接收容器内观察到原始来源地址 192.168.50.10 / 192.168.50.20，没有被改写为宿主机地址。
+
+结论：在 Docker Engine 29.4.2、同主机 Linux netns 模拟 LAN 的实验拓扑中，routed bridge + trusted_host_interfaces 可保留两个客户端的源地址；默认 published-port NAT 对照组仍将两客户端都改写为 172.17.0.1。
+
+该结果提升了 routed bridge 作为首选实现的可信度，但仍不是生产验收：未经过物理 LAN 交换机/路由器、未测试 IPv6、iptables/nftables 多环境、真实 Agent SmartDNS peer IP、SmartDNS group-match、Mihomo SOCKS 选择和外部代理出口。生产实现仍需在目标部署环境重复。
