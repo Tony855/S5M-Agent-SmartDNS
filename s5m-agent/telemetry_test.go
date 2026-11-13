@@ -298,3 +298,33 @@ func TestMihomoTelemetryStatusIsSharedByHeartbeatAndPublisher(t *testing.T) {
 		t.Fatalf("heartbeat schema has %d fields, stream schema has %d", len(heartbeatStatus), len(streamStatus))
 	}
 }
+
+func TestStopAndWaitAgentTelemetryPublisherWaitsForWriterExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		<-releaseWriter
+		close(writerDone)
+	}()
+
+	stopped := make(chan struct{})
+	go func() {
+		stopAndWaitAgentTelemetryPublisher(cancel, writerDone)
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("publisher shutdown returned before the writer exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseWriter)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("publisher shutdown did not finish after the writer exited")
+	}
+}
