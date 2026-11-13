@@ -1,7 +1,7 @@
 package app
 
 import (
-	"encoding/json"
+	"database/sql"\n\t"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
@@ -149,6 +149,35 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		if status["dns_ingress_smartdns_ipv6_bound"] != true || status["dns_ingress_smartdns_ipv6_bind_address"] != status["dns_ingress_ipv6_address"] {
 			return fmt.Errorf("SmartDNS 未在已验收的 IPv6 ingress 地址上同时监听")
 		}
+	}
+	return nil
+}
+
+
+// requireSmartDNSIngressReady centralizes the production fail-closed gate so
+// both periodic config publication and direct SmartDNS apply commands enforce
+// the same per-client ingress contract.
+func (a *App) requireSmartDNSIngressReady(machineCode string) error {
+	raw, err := a.store.GetSetting("smartdns_routing_config")
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("读取 SmartDNS 路由模式失败: %w", err)
+	}
+	if err == sql.ErrNoRows || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var routing SmartDNSRoutingConfig
+	if err := json.Unmarshal([]byte(raw), &routing); err != nil {
+		return fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
+		return nil
+	}
+	settings, err := a.store.GetSettings()
+	if err != nil {
+		return fmt.Errorf("读取 Agent DNS ingress 就绪状态失败: %w", err)
+	}
+	if err := validateSmartDNSIngressReadiness(settings, machineCode, routing, time.Now()); err != nil {
+		return fmt.Errorf("Agent DNS ingress 尚未通过生产就绪校验，拒绝发布 per-client 配置: %w", err)
 	}
 	return nil
 }
