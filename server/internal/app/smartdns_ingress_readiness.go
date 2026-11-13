@@ -176,6 +176,9 @@ func (a *App) smartDNSIngressContractForMachine(machineCode string) (*SmartDNSAg
 	if err != nil {
 		return nil, fmt.Errorf("读取 Agent DNS ingress 就绪状态失败: %w", err)
 	}
+	if strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false") {
+		return nil, fmt.Errorf("该 Agent 已显式禁用 SmartDNS，拒绝发布 per-client ingress 配置")
+	}
 	contract, err := buildSmartDNSAgentIngressContract(settings, machineCode, routing, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("Agent DNS ingress 尚未通过生产就绪校验，拒绝发布 per-client 配置: %w", err)
