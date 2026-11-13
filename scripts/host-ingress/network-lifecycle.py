@@ -158,7 +158,9 @@ def provision(cfg):
     if net is None:
         create_network(cfg); created=True
         net=inspect_network(cfg["network"])
-        if net is None: raise LifecycleError("Docker did not create the requested network")
+        if net is None:
+            run(["docker","network","rm",cfg["network"]],check=False)
+            raise LifecycleError("Docker did not create the requested network")
     try:
         validate_existing(net,cfg)
         attached=container_networks(cfg["container"])
