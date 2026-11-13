@@ -362,3 +362,28 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 	if err != nil { return "", fmt.Errorf("序列化 Mihomo per-client Listener 失败: %w", err) }
 	return string(out), nil
 }
+
+// buildSmartDNSPerClientRuntimeConfigs is the single orchestration entry point
+// for an isolated per-client runtime. It validates the requested routes,
+// allocates Mihomo loopback listeners once, then renders SmartDNS from the exact
+// listener mappings returned by Mihomo. Callers must publish both documents
+// through the Agent's joint config transaction; neither output is independently
+// safe to activate.
+func buildSmartDNSPerClientRuntimeConfigs(document string, cfg SmartDNSRoutingConfig, proxies []SmartDNSProxyRef) (string, string, []SmartDNSClientRuntimeMapping, error) {
+	plan, err := BuildSmartDNSRoutingPlan(cfg, proxies)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("SmartDNS per-client 路由计划无效: %w", err)
+	}
+	if plan.Mode != SmartDNSProxyModePerClient {
+		return "", "", nil, fmt.Errorf("SmartDNS per-client 运行时构建要求 per_client 模式")
+	}
+	mihomoYAML, mappings, err := applySmartDNSPerClientListenersWithMappings(document, plan)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("生成 Mihomo per-client Listener 失败: %w", err)
+	}
+	smartDNSYAML, err := buildSmartDNSPerClientConfig(mappings)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("生成 SmartDNS per-client 上游配置失败: %w", err)
+	}
+	return mihomoYAML, smartDNSYAML, mappings, nil
+}
