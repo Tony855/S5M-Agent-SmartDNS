@@ -98,6 +98,7 @@ func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddre
 		fields := strings.Fields(line)
 		if len(fields) < 4 { continue }
 		if requireTCPListen && fields[3] != "0A" { continue }
+		if !requireTCPListen && fields[3] != "07" { continue }
 		local := strings.Split(fields[1], ":")
 		if len(local) != 2 { continue }
 		parsedPort, err := strconv.ParseInt(local[1], 16, 32)
