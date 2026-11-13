@@ -46,9 +46,9 @@ def secure_read(path, require_root=True, max_bytes=2 * 1024 * 1024 * 1024):
             os.close(fd)
 
 
-def pcap_packets(path, data=None):
+def pcap_packets(path, data=None, require_root=True):
     if data is None:
-        data = secure_read(path, require_root=True)
+        data = secure_read(path, require_root=require_root)
     if len(data) < 24:
         raise ValueError(f"{path}: truncated pcap global header")
     magic = data[:4]

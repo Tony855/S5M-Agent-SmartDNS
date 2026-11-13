@@ -42,7 +42,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "host.pcap"
             path.write_bytes(pcap(1, [frame]))
-            packets = VERIFY.pcap_packets(path)
+            packets = VERIFY.pcap_packets(path, require_root=False)
         self.assertEqual(len(packets), 1)
         packet = packets[0]
         self.assertEqual((packet["src"], packet["dst"], packet["sport"], packet["dport"], packet["proto"]),
