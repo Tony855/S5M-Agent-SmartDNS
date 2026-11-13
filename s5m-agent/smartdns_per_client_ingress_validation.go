@@ -318,36 +318,38 @@ func hasPerClientSmartDNSDirectives(data []byte) bool {
 // TCP sockets to every exact contract address before the joint transaction is
 // committed. It deliberately does not send a query from the Agent's own source
 // address: that address is not expected to belong to any client CIDR mapping.
+func smartDNSIngressAddressSocketsBound(address string) (bool, error) {
+	ip, err := netip.ParseAddr(strings.TrimSpace(address))
+	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+		return false, fmt.Errorf("invalid ingress address")
+	}
+	var udpPath, tcpPath string
+	ipv6 := ip.Is6()
+	if ipv6 { udpPath, tcpPath = "/proc/net/udp6", "/proc/net/tcp6" } else { udpPath, tcpPath = "/proc/net/udp", "/proc/net/tcp" }
+	udp, err := os.ReadFile(udpPath)
+	if err != nil { return false, fmt.Errorf("read UDP socket table: %w", err) }
+	tcp, err := os.ReadFile(tcpPath)
+	if err != nil { return false, fmt.Errorf("read TCP socket table: %w", err) }
+	only := map[string]bool{ip.String(): true}
+	return procSocketTableHasListener(udp, ipv6, smartDNSPerClientIngressPort, only, false) &&
+		procSocketTableHasListener(tcp, ipv6, smartDNSPerClientIngressPort, only, true), nil
+}
+
+// waitForSmartDNSIngressListeners confirms exact UDP and TCP socket binds. It
+// deliberately does not send a DNS query from the Agent's own source address,
+// which is not expected to belong to any mapped client CIDR.
 func waitForSmartDNSIngressListeners(contract smartDNSPerClientIngressContract, timeout time.Duration) error {
-	addresses := make(map[string]bool, 2)
-	if strings.TrimSpace(contract.IPv4Address) != "" { addresses[contract.IPv4Address] = true }
-	if strings.TrimSpace(contract.IPv6Address) != "" { addresses[contract.IPv6Address] = true }
+	addresses := make([]string, 0, 2)
+	if strings.TrimSpace(contract.IPv4Address) != "" { addresses = append(addresses, contract.IPv4Address) }
+	if strings.TrimSpace(contract.IPv6Address) != "" { addresses = append(addresses, contract.IPv6Address) }
 	if len(addresses) == 0 { return fmt.Errorf("ingress contract contains no listener addresses") }
 	deadline := time.Now().Add(timeout)
 	for {
-		udp4, err := os.ReadFile("/proc/net/udp")
-		if err != nil { return fmt.Errorf("read IPv4 UDP sockets: %w", err) }
-		udp6, err := os.ReadFile("/proc/net/udp6")
-		if err != nil { return fmt.Errorf("read IPv6 UDP sockets: %w", err) }
-		tcp4, err := os.ReadFile("/proc/net/tcp")
-		if err != nil { return fmt.Errorf("read IPv4 TCP sockets: %w", err) }
-		tcp6, err := os.ReadFile("/proc/net/tcp6")
-		if err != nil { return fmt.Errorf("read IPv6 TCP sockets: %w", err) }
 		allBound := true
-		for address := range addresses {
-			ip, parseErr := netip.ParseAddr(address)
-			if parseErr != nil { return fmt.Errorf("invalid ingress address in contract") }
-			var udp, tcp bool
-			if ip.Is4() {
-				only := map[string]bool{ip.String(): true}
-				udp = procSocketTableHasListener(udp4, false, smartDNSPerClientIngressPort, only, false)
-				tcp = procSocketTableHasListener(tcp4, false, smartDNSPerClientIngressPort, only, true)
-			} else {
-				only := map[string]bool{ip.String(): true}
-				udp = procSocketTableHasListener(udp6, true, smartDNSPerClientIngressPort, only, false)
-				tcp = procSocketTableHasListener(tcp6, true, smartDNSPerClientIngressPort, only, true)
-			}
-			if !udp || !tcp { allBound = false; break }
+		for _, address := range addresses {
+			bound, err := smartDNSIngressAddressSocketsBound(address)
+			if err != nil { return err }
+			if !bound { allBound = false; break }
 		}
 		if allBound { return nil }
 		if time.Now().After(deadline) { return fmt.Errorf("SmartDNS 6055 UDP/TCP sockets are not bound to all contract addresses") }
