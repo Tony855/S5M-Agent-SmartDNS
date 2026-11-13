@@ -56,6 +56,16 @@ log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 
+prepare_ingress_attestation_dir() {
+  local path="/run/s5m-agent-ingress"
+  if [[ -L "$path" || ( -e "$path" && ! -d "$path" ) ]]; then
+    err "宿主机 ingress attestation 路径不安全：$path"
+    return 1
+  fi
+  install -d -o root -g root -m 0755 -- "$path" || return 1
+  [[ -d "$path" && ! -L "$path" ]] || { err "无法安全创建 ingress attestation 目录：$path"; return 1; }
+}
+
 validate_data_dir_path() {
   local path="${DATA_DIR}" current="" component
   local -a components=()
@@ -380,6 +390,7 @@ do_recreate() {
 
   # Validate every existing path component before mkdir, bind-mount, or deletion.
   validate_data_dir_path || return 1
+  prepare_ingress_attestation_dir || return 1
 
   # Confirm destructive intent before touching the current container or data.
   if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then
@@ -493,6 +504,7 @@ do_recreate() {
       "${DEVICE_MAP[@]}" \
       "${CAP_ADD[@]}" \
       -v "${DATA_DIR}:/data" \
+      -v "/run/s5m-agent-ingress:/run/s5m-agent-ingress:ro" \
       -e TZ="${TZ_VAL}" \
       "${EXTRA_ENVS[@]}" \
       "${IMAGE}" >/dev/null; then
