@@ -19,13 +19,13 @@ const smartDNSAgentConfigMaxBytes = 8 << 10
 // dedicated SmartDNS group, whose encrypted upstreams use the matching named
 // loopback SOCKS5 proxy. Unmatched clients have no configured default upstream.
 func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (string, error) {
-	return buildSmartDNSPerClientConfigWithIngress(mappings, "", "")
+	return buildSmartDNSPerClientConfigInternal(mappings, "", "", false)
 }
 
 // buildSmartDNSPerClientConfigWithIngress adds dedicated LAN-facing UDP/TCP
 // listeners only for addresses supplied by a separately attested host ingress
 // contract. Empty addresses preserve the existing loopback-only lab output.
-func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string) (string, error) {
+func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string) (string, error) {\n\treturn buildSmartDNSPerClientConfigInternal(mappings, ingressIPv4, ingressIPv6, true)\n}\n\nfunc buildSmartDNSPerClientConfigInternal(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string, requireIngress bool) (string, error) {
 	if len(mappings) == 0 {
 		return "", fmt.Errorf("SmartDNS per-client 运行时映射不能为空")
 	}
@@ -53,7 +53,7 @@ func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMap
 		return ip, nil
 	}
 	var ipv4, ipv6 netip.Addr
-	ingressRequested := strings.TrimSpace(ingressIPv4) != "" || strings.TrimSpace(ingressIPv6) != ""
+	ingressRequested := requireIngress
 	if hasIPv4 && strings.TrimSpace(ingressIPv4) != "" {
 		var err error
 		ipv4, err = validateIngress(ingressIPv4, true)
