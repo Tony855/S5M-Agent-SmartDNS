@@ -71,6 +71,8 @@ Create `/etc/s5m-agent-ingress/network.json` as root-owned mode `0600` (replace 
 }
 ```
 
+Before provisioning, deploy/redeploy the Agent with `ENABLE_PER_CLIENT_INGRESS=1` in `/etc/default/s5m-agent-smartdns`. The deployment script publishes UDP/TCP 6055 only on random host ports bound to `127.0.0.1`; remote clients never use those host ports and reach the stable container address directly through the routed bridge. This loopback-only mapping is required because Docker routed gateway mode filters ingress to published container ports. The lifecycle helper refuses containers whose 6055 mappings are missing or bound to wildcard/public host addresses. For IPv6, set `ENABLE_PER_CLIENT_INGRESS_IPV6=1` only when the default Docker bridge has IPv6 disabled; Docker must report an IPv6 routed mapping with an empty host port. The deploy script and helper both reject a public IPv6 host-port mapping.
+
 Install the helper and provision after the Agent container is running:
 
 ```sh
@@ -88,4 +90,4 @@ To remove only the dedicated network, first stop the Agent or ensure no other co
 sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py uninstall --config /etc/s5m-agent-ingress/network.json
 ```
 
-For IPv6 ingress, the ordinary default Docker bridge must itself have an IPv6 gateway/default route; otherwise the helper refuses to attach the routed IPv6 network because it cannot prove IPv6 egress preservation. Cleanup does not depend on the current firewall config, so it remains possible after firewall CIDRs are changed; it still requires the saved network config to match the exact owned Docker network. The helper refuses to remove a network not carrying its ownership label or one with unexpected attached containers. It does not touch the default Docker bridge.
+For IPv6 ingress, the ordinary default Docker bridge must itself have an IPv6 gateway/default route; otherwise the helper refuses to attach the routed IPv6 network because it cannot prove IPv6 egress preservation. Cleanup does not depend on the current firewall config, so it remains possible after firewall CIDRs are changed; it still requires the saved network config to match the exact owned Docker network. Docker gateway mode behavior is documented at <https://docs.docker.com/engine/network/port-publishing/>: routed networks still enforce published-container-port filtering, while the host port is unused on the routed endpoint. The helper refuses to remove a network not carrying its ownership label or one with unexpected attached containers. It does not touch the default Docker bridge.
