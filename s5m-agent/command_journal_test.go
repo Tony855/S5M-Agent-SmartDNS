@@ -305,3 +305,40 @@ func TestExecuteAgentCommandWithJournalRejectsHistoricalIDPayloadReuse(t *testin
 	status,_,_,err:=executeAgentCommandWithJournal(reused,func()(string,string,error){executions++;return "bad","",nil})
 	if err==nil || status!="failed" || executions!=0 { t.Fatalf("historical ID payload reuse was not rejected: status=%q executions=%d err=%v",status,executions,err) }
 }
+
+
+func TestReadAgentCommandJournalRejectsAmbiguousHistory(t *testing.T) {
+	tests := []struct {
+		name    string
+		history []agentCommandJournalSeen
+	}{
+		{
+			name: "duplicate historical command IDs",
+			history: []agentCommandJournalSeen{
+				{ID: "cmd-old", PayloadHash: strings.Repeat("a", 64)},
+				{ID: "cmd-old", PayloadHash: strings.Repeat("b", 64)},
+			},
+		},
+		{
+			name: "current command repeated in history",
+			history: []agentCommandJournalSeen{
+				{ID: "cmd-current", PayloadHash: strings.Repeat("a", 64)},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MIHOMO_HOME", t.TempDir())
+			entry := agentCommandJournalEntry{
+				ID: "cmd-current", PayloadHash: strings.Repeat("c", 64),
+				State: "completed", Status: "success", History: tt.history,
+			}
+			if err := writeAgentCommandJournal(entry); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readAgentCommandJournal(); err == nil {
+				t.Fatal("ambiguous command history was accepted")
+			}
+		})
+	}
+}
