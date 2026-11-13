@@ -22,13 +22,14 @@ func writeHostIngressAttestationFixture(t *testing.T, path string, attestation s
 	data, err := json.Marshal(attestation)
 	if err != nil { t.Fatal(err) }
 	if err := os.WriteFile(path, data, mode); err != nil { t.Fatal(err) }
+	if err := os.Chmod(path, mode); err != nil { t.Fatal(err) }
 }
 
 func TestReadSmartDNSHostIngressAttestationAcceptsFreshRootOwnedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ingress.json")
 	want := validHostIngressAttestationFixture()
 	writeHostIngressAttestationFixture(t, path, want, 0600)
-	got, err := readSmartDNSHostIngressAttestationFromPath(path)
+	got, err := readSmartDNSHostIngressAttestationFromPathWithOwner(path, false)
 	if err != nil { t.Fatalf("read valid attestation: %v", err) }
 	if got.Version != want.Version || got.Interface != want.Interface || got.IPv4Address != want.IPv4Address || len(got.ClientCIDRs) != 1 {
 		t.Fatalf("attestation mismatch: %#v", got)
@@ -41,12 +42,12 @@ func TestReadSmartDNSHostIngressAttestationRejectsSymlinkAndWritableFile(t *test
 	writeHostIngressAttestationFixture(t, target, validHostIngressAttestationFixture(), 0600)
 	link := filepath.Join(dir, "link.json")
 	if err := os.Symlink(target, link); err != nil { t.Fatal(err) }
-	if _, err := readSmartDNSHostIngressAttestationFromPath(link); err == nil {
+	if _, err := readSmartDNSHostIngressAttestationFromPathWithOwner(link, false); err == nil {
 		t.Fatal("symlinked host attestation accepted")
 	}
 	writable := filepath.Join(dir, "writable.json")
 	writeHostIngressAttestationFixture(t, writable, validHostIngressAttestationFixture(), 0666)
-	if _, err := readSmartDNSHostIngressAttestationFromPath(writable); err == nil {
+	if _, err := readSmartDNSHostIngressAttestationFromPathWithOwner(writable, false); err == nil {
 		t.Fatal("group/world writable host attestation accepted")
 	}
 }
