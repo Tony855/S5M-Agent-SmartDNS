@@ -2397,18 +2397,29 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 		if localData, readErr := configHashSource(); readErr == nil && len(localData) > 0 {
 			localHash = controllerConfigHash(localData)
 		}
+		localSmartDNSHash := ""
+		localSmartDNS, smartDNSReadErr := readSmartDNSFileNoFollow(smartDNSConfigPath, 8<<10)
+		if smartDNSReadErr != nil && !os.IsNotExist(smartDNSReadErr) {
+			return recordAgentConfigSyncFailure(fmt.Errorf("读取本地 SmartDNS 配置摘要失败：%w", smartDNSReadErr))
+		}
+		if len(localSmartDNS) > 0 {
+			localSmartDNSHash = controllerConfigHash(localSmartDNS)
+		}
 		configRequestID := fmt.Sprintf("cfg-%d", time.Now().UnixNano())
 		if err := writeAgentWSJSON(conn, map[string]string{
-			"type": "config.request", "id": configRequestID, "config_sha256": localHash,
+			"type": "config.request", "id": configRequestID,
+			"config_sha256": localHash, "smartdns_config_sha256": localSmartDNSHash,
 		}); err != nil {
 			return recordAgentConfigSyncFailure(fmt.Errorf("请求配置失败：%w", err))
 		}
 		var configResponse struct {
 			Type    string `json:"type"`
 			ID      string `json:"id"`
-			SHA256  string `json:"sha256"`
-			YAML    string `json:"yaml"`
-			Message string `json:"message"`
+			SHA256         string `json:"sha256"`
+			YAML           string `json:"yaml"`
+			SmartDNSSHA256 string `json:"smartdns_sha256"`
+			SmartDNSYAML   string `json:"smartdns_yaml"`
+			Message        string `json:"message"`
 		}
 		if err := readAgentWSJSON(conn, &configResponse, 90*time.Second); err != nil {
 			return recordAgentConfigSyncFailure(fmt.Errorf("读取配置响应失败：%w", err))
@@ -2432,16 +2443,21 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				// body so operators can diagnose stale Agent builds or payload mutation.
 				return recordAgentConfigSyncFailure(fmt.Errorf("WebSocket 配置 SHA-256 不匹配，拒绝应用（收到=%s，计算=%s，字节数=%d）", strings.TrimSpace(configResponse.SHA256), configHash, len(configResponse.YAML)))
 			}
-			smartDNSConfig, smartDNSErr := readSmartDNSFileNoFollow(smartDNSConfigPath, 8<<10)
-			if smartDNSErr != nil && !os.IsNotExist(smartDNSErr) {
-				setAgentConfigSyncError("读取现有 SmartDNS 配置失败，联合事务未启动: " + smartDNSErr.Error())
-				break
-			}
-			if os.IsNotExist(smartDNSErr) {
-				smartDNSConfig = nil
+			smartDNSConfig := localSmartDNS
+			updateSmartDNS := false
+			if configResponse.SmartDNSYAML != "" {
+				if len(configResponse.SmartDNSYAML) > 8<<10 {
+					return recordAgentConfigSyncFailure(fmt.Errorf("主控端 SmartDNS 配置超过 8 KiB 限制，拒绝应用"))
+				}
+				smartDNSHash := controllerConfigHash([]byte(configResponse.SmartDNSYAML))
+				if !strings.EqualFold(smartDNSHash, strings.TrimSpace(configResponse.SmartDNSSHA256)) {
+					return recordAgentConfigSyncFailure(fmt.Errorf("WebSocket SmartDNS 配置 SHA-256 校验失败，拒绝联合应用"))
+				}
+				smartDNSConfig = []byte(configResponse.SmartDNSYAML)
+				updateSmartDNS = true
 			}
 			if applyErr := applyAgentConfigTransaction(
-				[]byte(configResponse.YAML), smartDNSConfig, false, cfg.CentralURL,
+				[]byte(configResponse.YAML), smartDNSConfig, updateSmartDNS, cfg.CentralURL,
 			); applyErr != nil {
 				setAgentConfigSyncError("Mihomo/SmartDNS 联合配置事务失败: " + applyErr.Error())
 				fmt.Printf("WebSocket 联合配置应用失败: %s\n", safeMihomoValidationDiagnostic([]byte(applyErr.Error())))
