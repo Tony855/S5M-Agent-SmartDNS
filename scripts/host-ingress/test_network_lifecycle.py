@@ -53,7 +53,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_gateway_address_collision_rejected(self):
         cfg=valid_config(); cfg["ipv4_address"]=cfg["ipv4_gateway"]
-        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
+        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg),require_root=False)
 
     def test_partial_ipv6_config_rejected(self):
         cfg=valid_config(); cfg["ipv6_gateway"]=None
