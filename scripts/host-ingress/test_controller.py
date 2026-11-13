@@ -15,7 +15,9 @@ class ControllerTests(unittest.TestCase):
     def test_valid_config_and_rules_are_scoped(self):
         self.write(self.valid()); cfg=mod.load_config(self.path); rules=mod.render_nft(cfg)
         self.assertIn('iifname "eth1" ip daddr 172.31.10.2', rules)
-        self.assertIn('tcp dport 6055 drop', rules); self.assertNotIn('dport 53', rules)
+        self.assertIn('ip daddr 172.31.10.2 udp dport 6055 drop', rules)
+        self.assertIn('ip6 daddr 2001:db8:31::2 tcp dport 6055 drop', rules)
+        self.assertNotIn('dport 53', rules)
     def test_rejects_extra_keys_and_noncanonical_cidr(self):
         x=self.valid(); x["source_ip_preserved"]=True; self.write(x)
         with self.assertRaises(mod.ConfigError): mod.load_config(self.path)

@@ -91,13 +91,15 @@ def render_nft(cfg: dict) -> str:
             if nets:
                 set_text = ", ".join(str(n) for n in nets)
                 lines.append(f'    iifname "{iface}" {family} daddr {addr} {family} saddr {{ {set_text} }} {proto} dport 6055 accept')
-            lines.append(f'    iifname "{iface}" {family} daddr {addr} {proto} dport 6055 drop')
+            lines.append(f'    {family} daddr {addr} {proto} dport 6055 drop')
     lines += ["  }", "}"]
     return "\n".join(lines) + "\n"
 
 def atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    if path.parent.is_symlink(): raise ConfigError("attestation directory cannot be a symlink")
+    parent_st = path.parent.lstat()
+    if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
+        raise ConfigError("attestation directory must be root-owned, non-writable by group/world, and not a symlink")
     fd, tmp = tempfile.mkstemp(prefix=".ingress.", dir=path.parent)
     try:
         os.fchmod(fd, 0o600)
