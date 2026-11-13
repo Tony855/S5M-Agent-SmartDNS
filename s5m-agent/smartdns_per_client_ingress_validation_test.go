@@ -111,3 +111,19 @@ func TestValidateSmartDNSConfigWithIngressRejectsDuplicateListenersAndReservedCI
 		}
 	}
 }
+
+func TestValidateSmartDNSConfigWithIngressRejectsMappedAndNonRoutableAddresses(t *testing.T) {
+	addresses := map[string]bool{}
+	if err := addValidatedIngressAddress(addresses, "::ffff:172.31.0.10", false); err == nil {
+		t.Fatal("IPv4-mapped IPv6 ingress address accepted")
+	}
+	config, contract := validPerClientIngressFixture()
+	for _, cidr := range []string{"127.0.0.0/8", "169.254.0.0/16", "fe80::/64", "::1/128"} {
+		_, invalid := validPerClientIngressFixture()
+		invalid.ClientCIDRs = []string{cidr}
+		if err := validateSmartDNSConfigWithIngress(config, invalid); err == nil {
+			t.Errorf("non-routable client CIDR accepted: %s", cidr)
+		}
+	}
+	_ = contract
+}
