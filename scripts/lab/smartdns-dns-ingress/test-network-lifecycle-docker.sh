@@ -6,7 +6,7 @@ command -v docker >/dev/null
 command -v ip >/dev/null
 NAME=s5m-ingress-lifecycle-ci
 NETWORK=s5m-ingress-lifecycle-ci
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d /run/s5m-ingress-lifecycle.XXXXXX)"
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
