@@ -46,7 +46,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			return fmt.Errorf("invalid client CIDR in ingress contract")
 		}
 		prefix = prefix.Masked()
-		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
+		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
 			return fmt.Errorf("client CIDR is too broad or uses a reserved address family")
 		}
 		cidr := prefix.String()
@@ -274,7 +274,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 
 func addValidatedIngressAddress(addresses map[string]bool, raw string, wantIPv4 bool) error {
 	ip, err := netip.ParseAddr(strings.TrimSpace(raw))
-	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() ||
+	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Is4In6() || ip.IsMulticast() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Is4() != wantIPv4 {
 		return fmt.Errorf("address is not a usable unicast address for the configured family")
 	}
