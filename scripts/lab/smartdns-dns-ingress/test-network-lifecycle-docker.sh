@@ -20,6 +20,7 @@ docker run -d --name "$NAME" --network bridge \
   alpine:3.24 sleep 3600 >/dev/null
 IFACE=docker0
 ip link show dev "$IFACE" >/dev/null
+docker inspect --format '{{json .NetworkSettings.Ports}}' "$NAME"
 cat >"$TMP/network.json" <<EOF
 {
   "version": 1,

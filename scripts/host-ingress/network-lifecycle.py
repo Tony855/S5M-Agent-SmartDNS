@@ -193,7 +193,7 @@ def validate_dns_port_bindings(container: dict, cfg: dict) -> None:
         entries=ports.get(f"6055/{proto}") or []
         expected=1 + (1 if 6 in cfg["_networks"] else 0)
         if len(entries)!=expected:
-            raise LifecycleError(f"container must publish DNS 6055/{proto} only through loopback/routed-family bindings; redeploy with ENABLE_PER_CLIENT_INGRESS=1")
+            raise LifecycleError(f"container must publish DNS 6055/{proto} only through loopback/routed-family bindings; found {entries!r}; redeploy with ENABLE_PER_CLIENT_INGRESS=1")
         ipv4=[x for x in entries if x.get("HostIp")=="127.0.0.1" and str(x.get("HostPort","")).isdigit() and 1<=int(x["HostPort"])<=65535]
         if len(ipv4)!=1:
             raise LifecycleError(f"DNS 6055/{proto} must have exactly one IPv4 host mapping bound to 127.0.0.1 with an allocated ephemeral port")
