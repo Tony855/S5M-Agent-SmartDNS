@@ -85,7 +85,10 @@ sudo bash scripts/lab/smartdns-dns-ingress/physical-lan-capture.sh s5m-agent eth
 
 Replace `eth0` with the physical LAN interface that receives client traffic.
 The capture helper is read-only and captures both directions on port 6055 on
-the physical interface and inside the Agent namespace. Files are stored with
+the physical interface and inside the Agent namespace. It writes a root-owned
+`capture-manifest.json` recording the container identity, capture interface,
+timestamps, and pcap names; the verifier requires the interface to match the
+host controller config. Files are stored with
 directory mode 0700 and file mode 0600.
 
 2. On each physical client, send both UDP and TCP probes to its family-matched

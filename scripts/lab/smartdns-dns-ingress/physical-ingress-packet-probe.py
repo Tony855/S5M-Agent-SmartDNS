@@ -14,6 +14,7 @@ import secrets
 import socket
 import stat
 import sys
+import time
 
 
 def append_result(path, record):
@@ -60,6 +61,7 @@ def main():
     records = []
     nonce = secrets.token_hex(12)
     marker = ("S5M-INGRESS-PROBE:" + nonce).encode()
+    udp_started_at = int(time.time())
     with socket.socket(family, socket.SOCK_DGRAM) as sock:
         sock.settimeout(args.timeout)
         if bind_address:
@@ -69,10 +71,11 @@ def main():
         records.append({
             "version": 1, "transport": "udp", "source_addr": local[0],
             "source_port": local[1], "destination": str(target),
-            "destination_port": args.port, "nonce": nonce, "result": "sent",
+            "destination_port": args.port, "nonce": nonce, "observed_at": udp_started_at, "result": "sent",
         })
 
     tcp_result = "connected"
+    tcp_started_at = int(time.time())
     with socket.socket(family, socket.SOCK_STREAM) as sock:
         sock.settimeout(args.timeout)
         if bind_address:
@@ -91,7 +94,7 @@ def main():
         records.append({
             "version": 1, "transport": "tcp", "source_addr": local[0],
             "source_port": local[1], "destination": str(target),
-            "destination_port": args.port, "nonce": nonce, "result": tcp_result,
+            "destination_port": args.port, "nonce": nonce, "observed_at": tcp_started_at, "result": tcp_result,
         })
 
     for record in records:

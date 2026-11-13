@@ -10,6 +10,7 @@ usage() {
 [[ $# -ge 2 && $# -le 4 ]] || usage
 [[ $EUID -eq 0 ]] || { echo "ERROR: run as root" >&2; exit 1; }
 CONTAINER=$1
+[[ "$CONTAINER" =~ ^[A-Za-z0-9_.-]{1,128}$ ]] || usage
 LAN_IF=$2
 DURATION=${3:-90}
 OUT_DIR=${4:-}
@@ -35,6 +36,8 @@ CONTAINER_PCAP="$OUT_DIR/container-ingress.pcap"
 HOST_LOG="$OUT_DIR/host-lan.txt"
 CONTAINER_LOG="$OUT_DIR/container-ingress.txt"
 FILTER='port 6055'
+STARTED_AT=$(date +%s)
+CONTAINER_ID=$(docker inspect -f '{{.Id}}' "$CONTAINER")
 HOST_PID=""
 CONTAINER_PID=""
 cleanup() {
@@ -60,6 +63,11 @@ sleep "$DURATION" || true
 cleanup
 HOST_PID=""
 CONTAINER_PID=""
+FINISHED_AT=$(date +%s)
+printf '{"version":1,"container":"%s","container_id":"%s","container_pid":%s,"host_interface":"%s","started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
+  "$CONTAINER" "$CONTAINER_ID" "$PID" "$LAN_IF" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
+chmod 0600 "$OUT_DIR/capture-manifest.json.tmp"
+mv "$OUT_DIR/capture-manifest.json.tmp" "$OUT_DIR/capture-manifest.json"
 tcpdump -nn -tttt -r "$HOST_PCAP" >"$HOST_LOG" 2>&1 || true
 tcpdump -nn -tttt -r "$CONTAINER_PCAP" >"$CONTAINER_LOG" 2>&1 || true
 chmod 0600 "$OUT_DIR"/*
@@ -70,6 +78,6 @@ echo
 echo "=== Agent network namespace ingress packets ==="
 cat "$CONTAINER_LOG"
 echo
-echo "CAPTURE_ONLY: compare source IPs in both files with SOURCE_ADDR from each physical client."
+echo "Capture manifest: $OUT_DIR/capture-manifest.json; run physical-ingress-verify.py with the paired pcaps and client probe JSONL."
 echo "This script does not prove source preservation, firewall policy, SmartDNS group selection, or proxy egress."
 echo "Evidence files (mode 0600): $HOST_PCAP $CONTAINER_PCAP $HOST_LOG $CONTAINER_LOG"

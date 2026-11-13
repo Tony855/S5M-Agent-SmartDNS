@@ -92,7 +92,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         "version", "verified_at", "config_sha256", "client_cidrs", "ipv4_address",
         "ipv6_address", "coverage", "verified_client_sources", "source_ip_preserved",
         "udp_ready", "tcp_ready", "host_pcap_sha256", "container_pcap_sha256",
-        "probe_results_sha256",
+        "probe_results_sha256", "capture_manifest_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
         return False
@@ -131,7 +131,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
             return False
     if evidence["source_ip_preserved"] is not True or evidence["udp_ready"] is not True or evidence["tcp_ready"] is not True:
         return False
-    for key in ("host_pcap_sha256", "container_pcap_sha256", "probe_results_sha256"):
+    for key in ("host_pcap_sha256", "container_pcap_sha256", "probe_results_sha256", "capture_manifest_sha256"):
         value = evidence[key]
         if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
             return False

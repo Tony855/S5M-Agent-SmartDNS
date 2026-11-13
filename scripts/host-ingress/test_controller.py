@@ -62,7 +62,7 @@ class ControllerTests(unittest.TestCase):
             "verified_client_sources": ["192.168.50.10"],
             "source_ip_preserved": True, "udp_ready": True, "tcp_ready": True,
             "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
-            "probe_results_sha256": "c" * 64,
+            "probe_results_sha256": "c" * 64, "capture_manifest_sha256": "e" * 64,
         }
         self.assertTrue(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001))
         stale = dict(evidence); stale["verified_at"] = 0

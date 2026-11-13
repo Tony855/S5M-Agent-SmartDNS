@@ -19,8 +19,36 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "host-ingress"))
 from controller import load_config, _secure_regular
 
 
-def pcap_packets(path):
-    data = Path(path).read_bytes()
+def secure_read(path, require_root=True, max_bytes=2 * 1024 * 1024 * 1024):
+    path = Path(path)
+    st = path.lstat()
+    if not stat.S_ISREG(st.st_mode) or (require_root and (st.st_uid != 0 or st.st_mode & 0o077)) or (not require_root and st.st_mode & 0o022):
+        raise ValueError(f"{path}: expected a safe regular capture/evidence file")
+    if require_root:
+        parent_st = path.parent.lstat()
+        if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
+            raise ValueError(f"{path.parent}: expected a root-owned non-writable directory")
+    if st.st_size > max_bytes:
+        raise ValueError(f"{path}: file exceeds the size limit")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        current = os.fstat(fd)
+        if not stat.S_ISREG(current.st_mode) or current.st_dev != st.st_dev or current.st_ino != st.st_ino:
+            raise ValueError(f"{path}: file changed during secure open")
+        with os.fdopen(fd, "rb") as stream:
+            fd = -1
+            data = stream.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise ValueError(f"{path}: file exceeds the size limit")
+            return data
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def pcap_packets(path, data=None):
+    if data is None:
+        data = secure_read(path, require_root=True)
     if len(data) < 24:
         raise ValueError(f"{path}: truncated pcap global header")
     magic = data[:4]
@@ -185,12 +213,34 @@ def main():
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise ValueError("run verifier as root on the Docker host")
+    if args.host_pcap.parent.resolve() != args.container_pcap.parent.resolve():
+        raise ValueError("host and Agent pcaps must be from the same capture directory")
+    manifest_path = args.host_pcap.parent / "capture-manifest.json"
+    manifest_raw = secure_read(manifest_path, require_root=True, max_bytes=16384)
+    host_pcap_raw = secure_read(args.host_pcap, require_root=True)
+    container_pcap_raw = secure_read(args.container_pcap, require_root=True)
+    probe_results_raw = secure_read(args.probe_results, require_root=False, max_bytes=8 * 1024 * 1024)
+    manifest = json.loads(manifest_raw)
+    manifest_keys = {"version", "container", "container_id", "container_pid", "host_interface", "started_at", "finished_at", "host_pcap", "container_pcap"}
+    if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 1:
+        raise ValueError("capture manifest schema is invalid")
+    if manifest["host_interface"] == "" or type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or type(manifest["container_pid"]) is not int or manifest["container_pid"] <= 0:
+        raise ValueError("capture manifest fields are invalid")
+    if manifest["host_pcap"] != args.host_pcap.name or manifest["container_pcap"] != args.container_pcap.name:
+        raise ValueError("capture manifest does not match the supplied pcap files")
+    if not isinstance(manifest["container"], str) or not manifest["container"] or not isinstance(manifest["container_id"], str) or len(manifest["container_id"]) != 64 or any(ch not in "0123456789abcdef" for ch in manifest["container_id"]):
+        raise ValueError("capture manifest container identity is invalid")
+    now = int(time.time())
+    if manifest["finished_at"] < manifest["started_at"] or manifest["finished_at"] - manifest["started_at"] > 610 or manifest["finished_at"] > now + 30 or now - manifest["finished_at"] > 3600:
+        raise ValueError("capture manifest is outside the accepted time window")
     cfg = load_config(args.config)
+    if manifest["host_interface"] != cfg["interface"]:
+        raise ValueError("capture host interface does not match the configured physical ingress interface")
     config_bytes = _secure_regular(args.config)
-    host_packets = pcap_packets(args.host_pcap)
-    container_packets = pcap_packets(args.container_pcap)
+    host_packets = pcap_packets(args.host_pcap, host_pcap_raw)
+    container_packets = pcap_packets(args.container_pcap, container_pcap_raw)
     results = []
-    for line_no, line in enumerate(args.probe_results.read_text(encoding="utf-8").splitlines(), 1):
+    for line_no, line in enumerate(probe_results_raw.decode("utf-8").splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -221,6 +271,8 @@ def main():
             raise ValueError("probe results may only attest destination port 6055")
         if not isinstance(item.get("nonce"), str) or len(item["nonce"]) != 24 or any(ch not in "0123456789abcdef" for ch in item["nonce"]):
             raise ValueError("probe result nonce is invalid")
+        if type(item.get("observed_at")) is not int or item["observed_at"] < manifest["started_at"] - 5 or item["observed_at"] > manifest["finished_at"] + 5:
+            raise ValueError("probe result timestamp is outside the capture window")
         if (transport == "udp" and item.get("result") != "sent") or (transport == "tcp" and item.get("result") not in ("connected", "connection-refused", "timeout-or-unreachable")):
             raise ValueError("probe result status is invalid")
         matching_networks = [net for net in cfg["networks"] if source.version == net.version and source in net]
@@ -261,9 +313,10 @@ def main():
         "source_ip_preserved": True,
         "udp_ready": True,
         "tcp_ready": True,
-        "host_pcap_sha256": hashlib.sha256(args.host_pcap.read_bytes()).hexdigest(),
-        "container_pcap_sha256": hashlib.sha256(args.container_pcap.read_bytes()).hexdigest(),
-        "probe_results_sha256": hashlib.sha256(args.probe_results.read_bytes()).hexdigest(),
+        "host_pcap_sha256": hashlib.sha256(host_pcap_raw).hexdigest(),
+        "container_pcap_sha256": hashlib.sha256(container_pcap_raw).hexdigest(),
+        "probe_results_sha256": hashlib.sha256(probe_results_raw).hexdigest(),
+        "capture_manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
     }
     append_result(args.output, evidence)
     print("PHYSICAL_INGRESS_VERIFIED")
