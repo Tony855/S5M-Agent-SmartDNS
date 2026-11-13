@@ -128,3 +128,47 @@ func TestValidateSmartDNSIngressReadinessRequiresExactFirewallCIDRSet(t *testing
 		})
 	}
 }
+
+func TestValidateSmartDNSIngressReadinessRejectsReservedCIDRsAndLinkLocalIngressAddresses(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	proxies := []string{"192.168.50.0/24"}
+	for _, cidr := range []string{"0.0.0.0/0", "::/0", "127.0.0.0/8", "169.254.0.0/16", "fe80::/10", "224.0.0.0/4", "::ffff:192.0.2.0/120"} {
+		t.Run("cidr-"+cidr, func(t *testing.T) {
+			settings := readySmartDNSIngressSettings(now, proxies...)
+			routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+				{ClientCIDR: cidr, ProxyName: "proxy-a"},
+			}}
+			if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+				t.Fatalf("unsafe client CIDR %q passed ingress readiness", cidr)
+			}
+		})
+	}
+	t.Run("link-local IPv4 ingress", func(t *testing.T) {
+		settings := readySmartDNSIngressSettings(now, proxies...)
+		settings["agent_status_node-a"] = strings.ReplaceAll(
+			settings["agent_status_node-a"],
+			"192.0.2.1",
+			"169.254.10.1",
+		)
+		routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+			{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+		}}
+		if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+			t.Fatal("link-local IPv4 ingress address passed readiness")
+		}
+	})
+	t.Run("link-local IPv6 ingress", func(t *testing.T) {
+		settings := readySmartDNSIngressSettings(now, "2001:db8:50::/64")
+		settings["agent_status_node-a"] = strings.ReplaceAll(
+			settings["agent_status_node-a"],
+			"2001:db8::1",
+			"fe80::1",
+		)
+		routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+			{ClientCIDR: "2001:db8:50::/64", ProxyName: "proxy-a"},
+		}}
+		if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+			t.Fatal("link-local IPv6 ingress address passed readiness")
+		}
+	})
+}
