@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import socket, struct, sys, time
-HOST, PORT, EXPECTED, TRANSPORT = "172.31.0.10", 6055, sys.argv[1], sys.argv[2]
-NAME, QID = "probe.test", b"\x5a\xa5"
+HOST, PORT, NAME, EXPECTED, TRANSPORT = "172.31.0.10", 6055, sys.argv[1], sys.argv[2], sys.argv[3]
+QID = b"\x5a\xa5"
 QNAME = b"".join(bytes([len(x)]) + x.encode() for x in NAME.split(".")) + b"\0"
 QUESTION = QID + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + QNAME + b"\x00\x01\x00\x01"
 def parse(packet):
@@ -49,4 +49,4 @@ for _ in range(20):
         error=f"unexpected answers {got!r}"
     except Exception as e: error=str(e)
     time.sleep(.25)
-print(f"FAIL {TRANSPORT}: {error}",file=sys.stderr); sys.exit(1)
+print(f"FAIL {TRANSPORT} {NAME}: {error}",file=sys.stderr); sys.exit(1)
