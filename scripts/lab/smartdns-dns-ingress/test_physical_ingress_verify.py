@@ -57,7 +57,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "container.pcap"
             path.write_bytes(pcap(276, [sll2(ip)]))
-            packets = VERIFY.pcap_packets(path)
+            packets = VERIFY.pcap_packets(path, require_root=False)
         self.assertEqual(len(packets), 1)
         self.assertEqual(packets[0]["proto"], "tcp")
         self.assertEqual(packets[0]["flags"] & 0x02, 0x02)
@@ -68,7 +68,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
             path = pathlib.Path(td) / "bad.pcap"
             path.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 8)
             with self.assertRaisesRegex(ValueError, "truncated pcap global header"):
-                VERIFY.pcap_packets(path)
+                VERIFY.pcap_packets(path, require_root=False)
 
 
 if __name__ == "__main__":
