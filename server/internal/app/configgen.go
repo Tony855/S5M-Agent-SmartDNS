@@ -1051,9 +1051,6 @@ func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smar
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
-		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
-			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
-		}
 		applySharedFallback = strings.TrimSpace(machineCode) != "" && !nodeSmartDNSDisabled && !noSmartDNSAgent
 	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
 		strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") && !noSmartDNSAgent {
@@ -1065,9 +1062,6 @@ func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smar
 		routing.Strategy = strings.ToLower(strings.TrimSpace(routing.Strategy))
 		if routing.Mode == "" {
 			routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
-		}
-		if routing.Mode == SmartDNSProxyModePerClient {
-			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
 		}
 		refs := make([]SmartDNSProxyRef, 0, len(proxies))
 		for _, p := range proxies {
