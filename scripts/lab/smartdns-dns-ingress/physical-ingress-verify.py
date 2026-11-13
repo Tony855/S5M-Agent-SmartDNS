@@ -65,7 +65,10 @@ def pcap_packets(path, data=None, require_root=True):
     offset = 24
     packets = []
     while offset + 16 <= len(data):
-        _, _, captured, original = struct.unpack(endian + "IIII", data[offset:offset + 16])
+        seconds, fraction, captured, original = struct.unpack(endian + "IIII", data[offset:offset + 16])
+        if fraction >= fraction_scale:
+            raise ValueError(f"{path}: invalid pcap packet timestamp fraction")
+        timestamp = seconds + fraction / fraction_scale
         offset += 16
         if captured > original or offset + captured > len(data):
             raise ValueError(f"{path}: truncated pcap packet")
@@ -73,6 +76,7 @@ def pcap_packets(path, data=None, require_root=True):
         offset += captured
         packet = decode_frame(frame, linktype)
         if packet:
+            packet["timestamp"] = timestamp
             packets.append(packet)
     if offset != len(data):
         raise ValueError(f"{path}: malformed trailing pcap bytes")
@@ -285,6 +289,8 @@ def main():
         def packet_seen(packets):
             for packet in packets:
                 if (packet["src"], packet["sport"], packet["dst"], packet["dport"], packet["proto"]) != key:
+                    continue
+                if not manifest["started_at"] - 5 <= packet["timestamp"] <= manifest["finished_at"] + 5:
                     continue
                 if transport == "tcp" and not (packet["flags"] & 0x02):
                     continue

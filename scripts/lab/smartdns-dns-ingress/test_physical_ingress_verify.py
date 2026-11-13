@@ -48,6 +48,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         self.assertEqual((packet["src"], packet["dst"], packet["sport"], packet["dport"], packet["proto"]),
                          ("192.168.50.10", "172.31.0.10", 42000, 6055, "udp"))
         self.assertIn(marker, packet["payload"])
+        self.assertEqual(packet["timestamp"], 1.0)
 
     def test_reads_linux_sll2_tcp_syn(self):
         tcp = struct.pack("!HHIIHHHH", 43000, 6055, 123, 0, (5 << 12) | 0x02, 65535, 0, 0)
@@ -73,3 +74,14 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_rejects_invalid_pcap_timestamp_fraction(self):
+        frame = ethernet(ipv4_udp("192.168.50.10", "172.31.0.10", 42000, 6055, b"probe"))
+        data = bytearray(pcap(1, [frame]))
+        data[24:28] = struct.pack("<I", 1)
+        data[28:32] = struct.pack("<I", 1_000_000)
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "bad-time.pcap"
+            path.write_bytes(data)
+            with self.assertRaisesRegex(ValueError, "timestamp fraction"):
+                VERIFY.pcap_packets(path, require_root=False)
