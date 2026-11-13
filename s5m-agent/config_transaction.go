@@ -180,6 +180,9 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 // against the explicit Master-provided ingress contract, then uses the same
 // durable Mihomo+SmartDNS transaction and rollback journal as shared mode.
 func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, contract smartDNSPerClientIngressContract) error {
+	if !smartDNSFeatureSupported() {
+		return fmt.Errorf("当前 Agent 镜像不包含 SmartDNS，拒绝应用 per-client 配置")
+	}
 	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
 	if err := validator(smartDNSConfig); err != nil {
 		return fmt.Errorf("per-client SmartDNS ingress contract validation failed: %w", err)
