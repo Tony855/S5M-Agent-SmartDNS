@@ -1,0 +1,27 @@
+name: SmartDNS real-daemon routed client isolation
+on:
+  pull_request:
+    paths:
+      - "scripts/lab/smartdns-dns-ingress/**"
+      - "s5m-agent/Dockerfile.smartdns"
+      - ".github/workflows/smartdns-real-daemon-ingress.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smartdns-routed-group-match:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the pinned SmartDNS daemon
+        run: |
+          docker build --target smartdns-builder --tag s5m-smartdns-lab-builder -f s5m-agent/Dockerfile.smartdns .
+          id="$(docker create s5m-smartdns-lab-builder)"
+          mkdir -p scripts/lab/smartdns-dns-ingress/.runtime
+          docker cp "$id:/out/usr/sbin/smartdns" scripts/lab/smartdns-dns-ingress/.runtime/smartdns
+          docker rm "$id"
+      - name: Build isolated SmartDNS test image
+        run: docker build --tag s5m-smartdns-routed-lab scripts/lab/smartdns-dns-ingress
+      - name: Verify real SmartDNS client-IP group selection over routed ingress
+        run: sudo bash scripts/lab/smartdns-dns-ingress/run-smartdns-routed.sh

@@ -1,47 +1,39 @@
-# Docker DNS ingress source-IP lab
+# SmartDNS DNS ingress source-IP labs
 
-Run on a Linux Docker host from the repository root:
+The existing `run.sh` tests Docker published-port NAT behavior. The existing
+`run-routed.sh` tests kernel/Docker routed-bridge source preservation with a
+Python receiver. Neither proves SmartDNS itself selects the right client group.
 
-    bash scripts/lab/smartdns-dns-ingress/run.sh
+## Real SmartDNS daemon group-match test
 
-The lab creates two isolated Docker bridge subnets and sends DNS-shaped UDP
-and TCP requests through a port published only on the host's Docker bridge
-gateway. It expects the receiver to observe 172.30.10.10 and 172.30.20.10 as
-the source addresses for both transports. Set DNS_INGRESS_PORT to change the
-host-side port. The script removes its temporary container and networks.
+The GitHub Actions workflow
+`.github/workflows/smartdns-real-daemon-ingress.yml` builds the exact pinned
+SmartDNS source commit used by the combined Agent image, starts the real daemon
+on a dedicated routed bridge, and sends DNS queries from two Linux network
+namespaces with distinct client addresses.
 
-On standard Docker bridge networking this topology is expected to expose a
-source-NAT rewrite: the receiver sees the host bridge gateway (for example
-172.17.0.1), not the two client container addresses. The lab asserts this
-behavior so it cannot be mistaken for source-preserving ingress. It does not
-prove what happens to packets arriving from a physical LAN interface. Test
-that separately on a real host using two LAN clients and capture both the host
-LAN interface and the SmartDNS container interface.
+Expected results:
+- `192.168.50.10` receives `192.0.2.10`
+- `192.168.50.20` receives `192.0.2.20`
+- both results are verified over UDP and TCP
 
-This does not validate SmartDNS group-match, Agent ingress configuration,
-Mihomo SOCKS selection, DoT routing, or external proxy exit IP. Do not enable
-per-client mode based on this test. The real Agent/SmartDNS runtime must still
-correlate client IP, SmartDNS group, Mihomo proxy, and observed egress IP.
+This tests actual SmartDNS `group-match -client-ip` behavior using the source
+address delivered to the daemon, not only a generic receiver. It remains a
+same-host IPv4 lab; it does not prove physical LAN routing, Agent validator or
+deployment acceptance, IPv6, firewall deployment, Mihomo SOCKS selection,
+DoT transport, or public proxy egress.
 
-Requirements: Linux Docker Engine, IPv4 bridge networking,
-and non-overlapping 172.30.10.0/24 and 172.30.20.0/24 networks. The lab never
-binds a public/wildcard host address and does not alter production containers.
+Local execution after building the pinned daemon:
 
+```sh
+docker build --target smartdns-builder --tag s5m-smartdns-lab-builder -f s5m-agent/Dockerfile.smartdns .
+id="$(docker create s5m-smartdns-lab-builder)"
+mkdir -p scripts/lab/smartdns-dns-ingress/.runtime
+docker cp "$id:/out/usr/sbin/smartdns" scripts/lab/smartdns-dns-ingress/.runtime/smartdns
+docker rm "$id"
+docker build --tag s5m-smartdns-routed-lab scripts/lab/smartdns-dns-ingress
+sudo bash scripts/lab/smartdns-dns-ingress/run-smartdns-routed.sh
+```
 
-## Routed bridge direct-routing experiment
-
-Run the companion experiment:
-
-    bash scripts/lab/smartdns-dns-ingress/run-routed.sh
-
-It creates a target bridge in IPv4 routed gateway mode, disables masquerading
-on two client bridges, restricts trusted host interfaces to those client
-bridges, and routes directly to the target container IP without a host
-published-port NAT hop. The expected result is that the receiver observes each
-original client IP for UDP and TCP.
-
-This is a same-host routed Docker lab, not physical LAN acceptance. Production
-still requires an external LAN route to the container subnet, explicit trusted
-LAN interface, IPv6, firewall restrictions, and the actual Agent/SmartDNS/
-Mihomo egress chain. Docker Engine must support routed bridge gateway mode and
-trusted_host_interfaces.
+The test uses isolated namespaces, a dedicated Docker network, and TEST-NET-1
+addresses. It does not modify production containers or publish a host port.
