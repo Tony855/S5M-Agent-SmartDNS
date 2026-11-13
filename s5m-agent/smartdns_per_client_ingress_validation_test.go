@@ -134,11 +134,11 @@ func TestHasPerClientSmartDNSDirectives(t *testing.T) {
 		config string
 		want bool
 	}{
-		{name: "shared loopback", config: "bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\nserver-tls 1.1.1.1:853", want: false},
+		{name: "shared loopback", config: "bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\nserver-tls 1.1.1.1:853", want: false},
 		{name: "dedicated ingress listener", config: "bind 172.31.0.10:6055", want: true},
 		{name: "proxy declaration", config: "proxy-server socks5://127.0.0.1:16000 -name s5m-smartdns-16000", want: true},
 		{name: "client match group", config: "group-match -client-ip 192.168.50.0/24", want: true},
-		{name: "comments ignored", config: "# proxy-server\\n; group-match\\nbind 127.0.0.1:6053", want: false},
+		{name: "comments ignored", config: "# proxy-server\n; group-match\nbind 127.0.0.1:6053", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
