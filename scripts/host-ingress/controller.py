@@ -117,12 +117,31 @@ def atomic_json(path: Path, payload: dict) -> None:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("check", "render", "apply"))
+    p.add_argument("command", choices=("check", "render", "apply", "remove"))
     p.add_argument("--config", type=Path, default=CONFIG)
     p.add_argument("--attestation", type=Path, default=ATTEST)
     a = p.parse_args(argv)
     try:
         if os.geteuid() != 0: raise ConfigError("must run as root")
+        if a.command == "remove":
+            LOCK.parent.mkdir(parents=True, exist_ok=True)
+            lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(lock_fd, "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if a.attestation.parent.exists():
+                    parent_st = a.attestation.parent.lstat()
+                    if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
+                        raise ConfigError("attestation directory is not trusted")
+                    a.attestation.unlink(missing_ok=True)
+                    dfd = os.open(a.attestation.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                    try: os.fsync(dfd)
+                    finally: os.close(dfd)
+                exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
+                if exists.returncode == 0:
+                    removed = subprocess.run(["nft", "delete", "table", "inet", TABLE], text=True, capture_output=True)
+                    if removed.returncode: raise ConfigError(f"nft table removal failed: {removed.stderr.strip()}")
+            print("owned ingress firewall table and attestation removed; Docker networks/routes were not changed")
+            return 0
         cfg = load_config(a.config)
         rules = render_nft(cfg)
         if a.command == "check":

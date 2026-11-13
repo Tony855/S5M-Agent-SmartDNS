@@ -35,3 +35,12 @@ The service validates the full nftables transaction before applying it, serializ
 The generated attestation sets `firewall_ready=true` only after the owned allowlist table was applied. It sets `firewall_persistent=true` only when the systemd timer is both enabled and active; otherwise it remains false. It always sets `udp_ready=false`, `tcp_ready=false`, and `source_ip_preserved=false`. This component does not create/attach routed Docker networks, install router static routes, prove forwarding or socket reachability, or perform physical LAN source-IP capture. Therefore it cannot make the Master provisioning gate pass and cannot enable per-client SmartDNS by itself. Never edit the attestation manually to turn these flags on.
 
 A separate routed-network lifecycle and real LAN UDP/TCP capture/verification are still required. In particular, `source_ip_preserved=true` requires a real client on the configured LAN and matching client source addresses in the Agent network namespace capture; local Docker simulations are not sufficient.
+
+
+## Uninstall
+
+```sh
+sudo ./uninstall-host-controller.sh
+```
+
+The uninstall operation disables the refresh timer, removes the controller-owned attestation and nftables table, and removes the systemd units/binary. It deliberately retains the administrator configuration and does not touch Docker networks, host routes, or the default bridge.
