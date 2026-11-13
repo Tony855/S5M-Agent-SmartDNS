@@ -2478,7 +2478,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			}
 			if applyErr != nil {
 				setAgentConfigSyncError("Mihomo/SmartDNS 联合配置事务失败: " + applyErr.Error())
-				fmt.Printf("WebSocket 联合配置应用失败: %s\\n", safeMihomoValidationDiagnostic([]byte(applyErr.Error())))
+				fmt.Printf("WebSocket 联合配置应用失败: %s\n", safeMihomoValidationDiagnostic([]byte(applyErr.Error())))
 				break
 			}
 			clearAgentConfigSyncError()
