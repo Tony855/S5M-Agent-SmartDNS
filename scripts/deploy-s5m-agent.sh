@@ -457,6 +457,7 @@ do_recreate() {
       rm -rf -- "${DATA_DIR}"
     fi
     install -d -m 0700 -- "${DATA_DIR}"
+    install -d -o root -g root -m 0755 -- /run/s5m-agent-ingress
   else
     warn "保留现有数据目录 ${DATA_DIR}"
     if ! install -d -m 0700 -- "${DATA_DIR}"; then
@@ -493,6 +494,7 @@ do_recreate() {
       "${DEVICE_MAP[@]}" \
       "${CAP_ADD[@]}" \
       -v "${DATA_DIR}:/data" \
+      -v "/run/s5m-agent-ingress:/run/s5m-agent-ingress:ro" \
       -e TZ="${TZ_VAL}" \
       "${EXTRA_ENVS[@]}" \
       "${IMAGE}" >/dev/null; then
