@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,5 +80,45 @@ func TestCollectSmartDNSStatusCombinesHostAttestationAndExactListenerObservation
 	}
 	if status["dns_ingress_smartdns_ipv4_bound"] != true || status["dns_ingress_smartdns_listener_ready"] != true {
 		t.Fatalf("exact SmartDNS listener bind not reported: %#v", status)
+	}
+}
+
+func TestCollectSmartDNSStatusUsesPerClientHealthWithoutDefaultResolverProbe(t *testing.T) {
+	status := map[string]any{}
+	config, _ := validPerClientIngressFixture()
+	configText := strings.Replace(string(config), "bind-tcp 127.0.0.1:6053\n",
+		"bind-tcp 127.0.0.1:6053\nbind 127.0.0.1:6054 -group china-dot\nbind-tcp 127.0.0.1:6054 -group china-dot\nserver-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group\n", 1)
+	attestation := smartDNSHostIngressAttestation{
+		Version: 1, UpdatedAt: time.Now().Unix(), Interface: "eno1", IPv4Address: "172.31.0.10",
+		ClientCIDRs: []string{"192.168.50.10/32"}, SourceIPPreserved: true,
+		FirewallReady: true, FirewallPersistent: true, UDPReady: true, TCPReady: true,
+	}
+	info, err := os.Stat(os.Args[0])
+	if err != nil { t.Fatal(err) }
+	sharedProbeCalled, perClientProbeCalled := false, false
+	collectSmartDNSStatusWithDependencies(status, smartDNSStatusDependencies{
+		enabled: func() bool { return true },
+		binaryInfo: func() (os.FileInfo, error) { return info, nil },
+		readConfig: func(string) ([]byte, error) { return []byte(configText), nil },
+		version: func() ([]byte, error) { return []byte("SmartDNS test"), nil },
+		process: func() ([]byte, error) { return []byte("1234"), nil },
+		probe: func() bool { sharedProbeCalled = true; return false },
+		restart: func() error { return errors.New("unexpected restart") },
+		waitHealthy: func(time.Duration) bool { return false },
+		ingressAttestation: func() (smartDNSHostIngressAttestation, error) { return attestation, nil },
+		ingressObservation: func() (smartDNSIngressObservation, error) {
+			return smartDNSIngressObservation{
+				Interfaces: []string{"eth1"}, IPv4: []string{"172.31.0.10"},
+				AddressInterfaces: map[string]string{"172.31.0.10": "eth1"},
+			}, nil
+		},
+		ingressSocketBound: func(string) (bool, error) { return true, nil },
+		perClientProbe: func([]byte, smartDNSHostIngressAttestation) bool { perClientProbeCalled = true; return true },
+	})
+	if !perClientProbeCalled || sharedProbeCalled {
+		t.Fatalf("per-client health probe selection incorrect: perClient=%v shared=%v", perClientProbeCalled, sharedProbeCalled)
+	}
+	if status["smartdns_dns_healthy"] != true || status["dns_ingress_ready"] != true {
+		t.Fatalf("per-client config should report its dedicated health and ingress readiness: %#v", status)
 	}
 }

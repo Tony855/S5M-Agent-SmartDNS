@@ -310,6 +310,15 @@ func hasPerClientSmartDNSDirectives(data []byte) bool {
 		switch fields[0] {
 		case "proxy-server", "group-begin", "group-match":
 			return true
+		case "server-tls", "server-https", "server-quic":
+			for i := 1; i+1 < len(fields); i++ {
+				if fields[i] == "-group" && strings.HasPrefix(fields[i+1], "s5m-smartdns-group-") {
+					return true
+				}
+				if fields[i] == "-proxy" && strings.HasPrefix(fields[i+1], "s5m-smartdns-") {
+					return true
+				}
+			}
 		case "bind", "bind-tcp":
 			if len(fields) > 1 && strings.HasSuffix(fields[1], ":6055") {
 				return true

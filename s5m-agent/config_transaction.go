@@ -190,7 +190,16 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 	apply := func(data []byte, cleanupBackup bool) (string, error) {
 		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
 	}
-	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, false, apply, func() error { return waitForSmartDNSIngressListeners(contract, 5*time.Second) })
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, true, apply, func() error {
+		attestation := smartDNSHostIngressAttestation{
+			Version: contract.Version, IPv4Address: contract.IPv4Address,
+			IPv6Address: contract.IPv6Address, ClientCIDRs: contract.ClientCIDRs,
+		}
+		if !waitForSmartDNSPerClientHealthy(smartDNSConfig, attestation, 5*time.Second) {
+			return fmt.Errorf("per-client SmartDNS domestic DNS probe or exact UDP/TCP ingress listeners are not healthy")
+		}
+		return nil
+	})
 }
 
 func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error), postApplyCheck func() error) error {
@@ -497,8 +506,12 @@ func applyAgentSmartDNSEnabledWithValidator(enabled bool, mihomoYAML, smartDNSCo
 		if err := ensureSmartDNSServiceStarted(wasEnabled); err != nil {
 			return err
 		}
-		if !waitForSmartDNSHealthy(5 * time.Second) {
-			healthErr := fmt.Errorf("SmartDNS 当前未通过 UDP/TCP DNS 健康检查，未切换 Mihomo")
+		healthy := waitForSmartDNSHealthy(5 * time.Second)
+		if hasPerClientSmartDNSDirectives(smartDNSConfig) {
+			healthy = waitForSmartDNSProcess(5 * time.Second)
+		}
+		if !healthy {
+			healthErr := fmt.Errorf("SmartDNS 当前未达到目标运行模式的健康条件，未切换 Mihomo")
 			if !wasEnabled {
 				return rollbackFailedSmartDNSEnable(healthErr, persistSmartDNSDisabled, smartDNSServiceStop)
 			}

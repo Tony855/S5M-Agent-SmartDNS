@@ -156,6 +156,7 @@ func TestHasPerClientSmartDNSDirectives(t *testing.T) {
 		{name: "dedicated ingress listener", config: "bind 172.31.0.10:6055", want: true},
 		{name: "proxy declaration", config: "proxy-server socks5://127.0.0.1:16000 -name s5m-smartdns-16000", want: true},
 		{name: "client match group", config: "group-match -client-ip 192.168.50.0/24", want: true},
+		{name: "managed per-client upstream without proxy declaration", config: "server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000", want: true},
 		{name: "comments ignored", config: "# proxy-server\n; group-match\nbind 127.0.0.1:6053", want: false},
 	}
 	for _, tt := range tests {
