@@ -22,8 +22,10 @@ for spec in "$NET_A 172.30.10.10" "$NET_B 172.30.20.10"; do
 done
 logs="$(docker logs "$SERVER" 2>&1)"
 printf '%s\n' "$logs"
-for expected in 'OBSERVED udp 172.30.10.10:' 'OBSERVED tcp 172.30.10.10:' 'OBSERVED udp 172.30.20.10:' 'OBSERVED tcp 172.30.20.10:'; do
-  grep -Fq "$expected" <<<"$logs" || { echo "FAIL: source address not preserved: $expected" >&2; exit 1; }
+for expected in "OBSERVED udp $GW:" "OBSERVED tcp $GW:"; do
+  count="$(grep -Fc "$expected" <<<"$logs" || true)"
+  [[ "$count" -eq 2 ]] || { echo "FAIL: expected Docker bridge gateway SNAT for both clients: $expected (count=$count)" >&2; exit 1; }
 done
-echo "PASS: Docker published UDP/TCP ingress preserved both client source IPs."
-echo "LIMIT: this test does not validate SmartDNS or proxy egress."
+echo "CONFIRMED: Docker bridge-to-bridge published-port path rewrites both client source IPs to $GW."
+echo "BLOCKER: this path cannot support SmartDNS group-match -client-ip per original client."
+echo "LIMIT: real LAN-to-Agent ingress and SmartDNS/proxy egress still require a separate test."
