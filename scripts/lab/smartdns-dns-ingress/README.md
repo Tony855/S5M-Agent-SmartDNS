@@ -17,6 +17,6 @@ the first gate; repeat with the actual Agent/SmartDNS runtime and correlate
 client IP, SmartDNS group, Mihomo proxy, and observed egress IP before enabling
 per-client mode.
 
-Requirements: Linux Docker Engine, Docker Compose v2, IPv4 bridge networking,
+Requirements: Linux Docker Engine, IPv4 bridge networking,
 and non-overlapping 172.30.10.0/24 and 172.30.20.0/24 networks. The lab never
 binds a public/wildcard host address and does not alter production containers.
