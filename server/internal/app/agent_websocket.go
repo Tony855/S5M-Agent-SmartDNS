@@ -1323,7 +1323,7 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		return fmt.Errorf("per-client ingress 已验收，但 Agent SmartDNS 健康状态未确认，拒绝发布")
 	}
 	if ingressContract != nil {
-		yml, err = applyAgentRuntimeDNS(yml, true, domesticReported && domesticListener)
+		yml, err = applyAgentRuntimeDNS(yml, true, true)
 	} else if domesticReported {
 		yml, err = applyAgentRuntimeDNS(yml, smartDNSHealthy, domesticListener)
 	} else {
