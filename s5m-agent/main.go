@@ -2565,12 +2565,13 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 						commandErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
 					} else {
 						if hasPerClientSmartDNSDirectives([]byte(cmd.Config)) {
-							if cmd.IngressContract == nil {
-								commandErr = fmt.Errorf("per-client SmartDNS 启停命令缺少 ingress contract，拒绝操作")
-							} else if *cmd.Enabled {
-								commandErr = applyAgentSmartDNSEnabledWithIngress(true, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL, *cmd.IngressContract)
-							} else {
+							if !*cmd.Enabled {
+								// Disabling must remain possible when ingress readiness is lost.
 								commandErr = applyAgentSmartDNSEnabled(false, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+							} else if cmd.IngressContract == nil {
+								commandErr = fmt.Errorf("per-client SmartDNS 启用命令缺少 ingress contract，拒绝操作")
+							} else {
+								commandErr = applyAgentSmartDNSEnabledWithIngress(true, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL, *cmd.IngressContract)
 							}
 						} else if cmd.IngressContract != nil {
 							commandErr = fmt.Errorf("shared SmartDNS 启停命令不应携带 per-client ingress contract")
