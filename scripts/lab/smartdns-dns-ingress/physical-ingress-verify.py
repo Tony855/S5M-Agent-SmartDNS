@@ -208,6 +208,36 @@ def append_result(path, record):
             pass
 
 
+def correlate_probe_packets(host_packets, container_packets, key, transport, marker, result, started_at, finished_at, label="probe"):
+    def matching_packet(packets):
+        for packet in packets:
+            if (packet["src"],packet["sport"],packet["dst"],packet["dport"],packet["proto"]) != key:
+                continue
+            if not started_at-5 <= packet["timestamp"] <= finished_at+5:
+                continue
+            if transport=="udp" and marker not in packet["payload"]:
+                continue
+            if transport=="tcp":
+                if result=="connected":
+                    if marker not in packet["payload"]:
+                        continue
+                elif not (packet["flags"] & 0x02):
+                    continue
+            return packet
+        return None
+    host_match=matching_packet(host_packets)
+    container_match=matching_packet(container_packets)
+    if not host_match or not container_match:
+        raise ValueError(f"{label}: {transport} probe packet was not observed on both host LAN and Agent namespace")
+    if abs(host_match["timestamp"]-container_match["timestamp"])>2:
+        raise ValueError(f"{label}: {transport} host/container packet timestamps do not correlate")
+    if transport=="udp" and host_match["payload"]!=container_match["payload"]:
+        raise ValueError(f"{label}: UDP payload differs between host and Agent captures")
+    if transport=="tcp" and (host_match.get("seq"),host_match.get("ack"))!=(container_match.get("seq"),container_match.get("ack")):
+        raise ValueError(f"{label}: TCP sequence tuple differs between host and Agent captures")
+    return host_match,container_match
+
+
 def validate_capture_container(manifest: dict, cfg: dict) -> None:
     try:
         result=subprocess.run(["docker","inspect",manifest["container"]],check=True,capture_output=True,text=True)
@@ -311,33 +341,9 @@ def main():
         if destination.version != source.version:
             raise ValueError("probe source and ingress destination address families differ")
         key = (str(source), sport, str(destination), 6055, transport)
-        marker=b"S5M-INGRESS-PROBE:"+item["nonce"].encode()
-        def matching_packet(packets):
-            for packet in packets:
-                if (packet["src"], packet["sport"], packet["dst"], packet["dport"], packet["proto"]) != key:
-                    continue
-                if not manifest["started_at"] - 5 <= packet["timestamp"] <= manifest["finished_at"] + 5:
-                    continue
-                if transport == "udp" and marker not in packet["payload"]:
-                    continue
-                if transport == "tcp":
-                    if item["result"] == "connected":
-                        if marker not in packet["payload"]:
-                            continue
-                    elif not (packet["flags"] & 0x02):
-                        continue
-                return packet
-            return None
-        host_match=matching_packet(host_packets)
-        container_match=matching_packet(container_packets)
-        if not host_match or not container_match:
-            raise ValueError(f"{network}: {transport} probe tuple/source was not observed on both host LAN and Agent namespace")
-        if abs(host_match["timestamp"]-container_match["timestamp"])>2:
-            raise ValueError(f"{network}: {transport} host/container packet timestamps do not correlate")
-        if transport=="udp" and host_match["payload"]!=container_match["payload"]:
-            raise ValueError(f"{network}: UDP payload differs between host and Agent captures")
-        if transport=="tcp" and (host_match.get("seq"),host_match.get("ack"))!=(container_match.get("seq"),container_match.get("ack")):
-            raise ValueError(f"{network}: TCP sequence tuple differs between host and Agent captures")
+        correlate_probe_packets(host_packets,container_packets,key,transport,
+            b"S5M-INGRESS-PROBE:"+item["nonce"].encode(),item["result"],
+            manifest["started_at"],manifest["finished_at"],network)
         coverage[str(network)].add(transport)
         verified_sources.add(str(source))
 

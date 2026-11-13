@@ -80,6 +80,29 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "timestamp fraction"):
                 VERIFY.pcap_packets(path, require_root=False)
 
+    def test_packet_correlation_requires_same_udp_payload_and_close_timestamps(self):
+        key=("192.168.50.10",42000,"172.31.0.10",6055,"udp")
+        packet={"src":key[0],"sport":key[1],"dst":key[2],"dport":key[3],"proto":"udp",
+            "payload":b"S5M-INGRESS-PROBE:nonce","timestamp":10.0}
+        VERIFY.correlate_probe_packets([packet],[dict(packet)],key,"udp",b"S5M-INGRESS-PROBE:nonce","sent",9,11)
+        altered=dict(packet); altered["payload"]=b"S5M-INGRESS-PROBE:other"
+        with self.assertRaisesRegex(ValueError,"payload differs"):
+            VERIFY.correlate_probe_packets([packet],[altered],key,"udp",b"S5M-INGRESS-PROBE:nonce","sent",9,11)
+        late=dict(packet); late["timestamp"]=20
+        with self.assertRaisesRegex(ValueError,"timestamps"):
+            VERIFY.correlate_probe_packets([packet],[late],key,"udp",b"S5M-INGRESS-PROBE:nonce","sent",9,21)
+
+    def test_packet_correlation_requires_same_tcp_sequence_and_probe_marker(self):
+        key=("192.168.50.10",42000,"172.31.0.10",6055,"tcp")
+        packet={"src":key[0],"sport":key[1],"dst":key[2],"dport":key[3],"proto":"tcp",
+            "payload":b"S5M-INGRESS-PROBE:nonce","timestamp":10.0,"flags":0x18,"seq":100,"ack":200}
+        VERIFY.correlate_probe_packets([packet],[dict(packet)],key,"tcp",b"S5M-INGRESS-PROBE:nonce","connected",9,11)
+        altered=dict(packet); altered["seq"]=101
+        with self.assertRaisesRegex(ValueError,"sequence tuple"):
+            VERIFY.correlate_probe_packets([packet],[altered],key,"tcp",b"S5M-INGRESS-PROBE:nonce","connected",9,11)
+        syn=dict(packet); syn["payload"]=b""; syn["flags"]=0x02
+        VERIFY.correlate_probe_packets([syn],[dict(syn)],key,"tcp",b"S5M-INGRESS-PROBE:nonce","connection-refused",9,11)
+
     def test_capture_must_match_current_container_id_pid_and_ingress_ip(self):
         manifest={"container":"s5m-agent","container_id":"a"*64,"container_pid":123}
         cfg={"addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
