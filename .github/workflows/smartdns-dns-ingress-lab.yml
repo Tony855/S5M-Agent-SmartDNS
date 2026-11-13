@@ -22,6 +22,7 @@ jobs:
           bash -n scripts/lab/smartdns-dns-ingress/physical-lan-capture.sh
           bash -n scripts/lab/smartdns-dns-ingress/test-network-lifecycle-docker.sh
           bash -n scripts/deploy-agent.sh
+          bash -n scripts/deploy-s5m-agent.sh
           bash -n scripts/host-ingress/install-host-controller.sh
           python3 -m py_compile scripts/lab/smartdns-dns-ingress/physical-client-probe.py scripts/lab/smartdns-dns-ingress/physical-ingress-packet-probe.py scripts/lab/smartdns-dns-ingress/physical-ingress-verify.py
           python3 -m unittest discover -s scripts/lab/smartdns-dns-ingress -p 'test_*.py'

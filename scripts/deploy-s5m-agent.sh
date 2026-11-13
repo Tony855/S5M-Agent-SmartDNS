@@ -171,6 +171,10 @@ ports_display() {
     [[ "${p}" == "-p" ]] && continue
     out+=("${p}")
   done
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    out+=("127.0.0.1::6055/udp" "127.0.0.1::6055/tcp")
+    [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" ]] || out+=("[::]::6055/udp" "[::]::6055/tcp")
+  fi
   if [[ ${#out[@]} -eq 0 ]]; then
     echo "（无）"
   else
@@ -275,7 +279,7 @@ validate_ingress_options() {
   [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS_IPV6 必须是 0 或 1"; return 1; }
   [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || { err "启用 IPv6 ingress 前必须启用 IPv4 per-client ingress"; return 1; }
   local spec
-  for spec in "${PORT_MAP[@]+" ${PORT_MAP[@]}"}"; do
+  for spec in "${PORT_MAP[@]}"; do
     [[ "$spec" == "-p" ]] && continue
     if [[ "$spec" =~ :6055(/|$) ]]; then
       err "禁止在 PORT_MAP 中手工映射 6055；请使用 ENABLE_PER_CLIENT_INGRESS 以确保仅 loopback/routed-only 映射"
