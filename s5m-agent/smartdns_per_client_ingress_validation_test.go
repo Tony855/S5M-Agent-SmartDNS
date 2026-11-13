@@ -113,6 +113,23 @@ func TestValidateSmartDNSConfigWithIngressRejectsDuplicateListenersAndReservedCI
 	}
 }
 
+func TestValidateSmartDNSConfigWithIngressRejectsNonCanonicalAndOversizedContracts(t *testing.T) {
+	config, contract := validPerClientIngressFixture()
+	contract.ClientCIDRs = []string{"192.168.50.1/24"}
+	if err := validateSmartDNSConfigWithIngress(config, contract); err == nil {
+		t.Fatal("non-canonical client CIDR accepted")
+	}
+	contract.ClientCIDRs = make([]string, 129)
+	for i := range contract.ClientCIDRs { contract.ClientCIDRs[i] = "192.168.50.10/32" }
+	if err := validateSmartDNSConfigWithIngress(config, contract); err == nil {
+		t.Fatal("oversized client CIDR contract accepted")
+	}
+	contract = smartDNSPerClientIngressContract{Version: 1, Ready: true, IPv4Address: " 172.31.0.10 ", ClientCIDRs: []string{"192.168.50.10/32"}}
+	if err := validateSmartDNSConfigWithIngress(config, contract); err == nil {
+		t.Fatal("non-canonical ingress address accepted")
+	}
+}
+
 func TestValidateSmartDNSConfigWithIngressRejectsMappedAndNonRoutableAddresses(t *testing.T) {
 	addresses := map[string]bool{}
 	if err := addValidatedIngressAddress(addresses, "::ffff:172.31.0.10", false); err == nil {

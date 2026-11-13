@@ -40,6 +40,9 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 		return fmt.Errorf("SmartDNS per-client config contains control characters")
 	}
 
+	if len(contract.ClientCIDRs) == 0 || len(contract.ClientCIDRs) > 128 {
+		return fmt.Errorf("per-client ingress contract must contain 1..128 client CIDRs")
+	}
 	cidrs := make(map[string]bool, len(contract.ClientCIDRs))
 	hasIPv4CIDR, hasIPv6CIDR := false, false
 	for _, raw := range contract.ClientCIDRs {
@@ -47,8 +50,11 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 		if err != nil {
 			return fmt.Errorf("invalid client CIDR in ingress contract")
 		}
+		if prefix.String() != raw || prefix != prefix.Masked() {
+			return fmt.Errorf("client CIDR in ingress contract is not canonical")
+		}
 		prefix = prefix.Masked()
-		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
+		if prefix.Bits() == 0 || !prefix.Addr().IsGlobalUnicast() || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
 			return fmt.Errorf("client CIDR is too broad or uses a reserved address family")
 		}
 		cidr := prefix.String()
@@ -276,7 +282,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 
 func addValidatedIngressAddress(addresses map[string]bool, raw string, wantIPv4 bool) error {
 	ip, err := netip.ParseAddr(strings.TrimSpace(raw))
-	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() ||
+	if err != nil || ip.String() != raw || !ip.IsGlobalUnicast() || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Is4() != wantIPv4 {
 		return fmt.Errorf("address is not a usable unicast address for the configured family")
 	}

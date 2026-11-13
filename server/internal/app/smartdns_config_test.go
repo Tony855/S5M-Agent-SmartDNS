@@ -178,3 +178,27 @@ func TestBuildSmartDNSPerClientConfigWithIngressRejectsUnsafeOrMissingAddresses(
 		})
 	}
 }
+
+func TestBuildSmartDNSPerClientConfigRejectsNonCanonicalAndMappedCIDRs(t *testing.T) {
+	base := SmartDNSClientRuntimeMapping{
+		ClientCIDR: "192.168.10.1/24", ProxyName: "node-a",
+		ListenerName: "s5m-smartdns-16000", ListenerAddress: "127.0.0.1", ListenerPort: 16000,
+	}
+	if _, err := buildSmartDNSPerClientConfig([]SmartDNSClientRuntimeMapping{base}); err == nil {
+		t.Fatal("non-canonical client CIDR accepted")
+	}
+	base.ClientCIDR = "::ffff:192.0.2.0/120"
+	if _, err := buildSmartDNSPerClientConfig([]SmartDNSClientRuntimeMapping{base}); err == nil {
+		t.Fatal("IPv4-mapped IPv6 client CIDR accepted")
+	}
+}
+
+func TestBuildSmartDNSPerClientConfigWithIngressRejectsNonCanonicalAddress(t *testing.T) {
+	mapping := SmartDNSClientRuntimeMapping{
+		ClientCIDR: "192.168.50.0/24", ProxyName: "node-v4",
+		ListenerName: "s5m-smartdns-16000", ListenerAddress: "127.0.0.1", ListenerPort: 16000,
+	}
+	if _, err := buildSmartDNSPerClientConfigWithIngress([]SmartDNSClientRuntimeMapping{mapping}, " 172.31.0.10 ", ""); err == nil {
+		t.Fatal("non-canonical ingress address accepted")
+	}
+}
