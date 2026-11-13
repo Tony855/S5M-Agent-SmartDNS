@@ -251,26 +251,28 @@ def main(argv=None) -> int:
                     if removed.returncode: raise ConfigError(f"nft table removal failed: {removed.stderr.strip()}")
             print("owned ingress firewall table and attestation removed; Docker networks/routes were not changed")
             return 0
-        cfg = load_config(a.config)
-        rules = render_nft(cfg)
         if a.command == "check":
+            load_config(a.config)
             print("configuration valid; no host state changed")
             return 0
         if a.command == "render":
-            sys.stdout.write(rules)
+            sys.stdout.write(render_nft(load_config(a.config)))
             return 0
-        if subprocess.run(["ip", "link", "show", "dev", cfg["interface"]], text=True, capture_output=True).returncode:
-            raise ConfigError(f"ingress interface does not exist: {cfg['interface']}")
         with controller_lock():
+            # Invalidate first on every reconcile. Missing interface, invalid
+            # config, ownership conflict, nft check/apply failure, or attestation
+            # write failure must never leave stale readiness advertised.
+            invalidate_attestation(a.attestation)
+            cfg = load_config(a.config)
+            rules = render_nft(cfg)
+            if subprocess.run(["ip", "link", "show", "dev", cfg["interface"]], text=True, capture_output=True).returncode:
+                raise ConfigError(f"ingress interface does not exist: {cfg['interface']}")
             exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
             if exists.returncode == 0 and "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
                 raise ConfigError("refusing to replace an nftables table not owned by this controller")
-            transaction = (f"delete table inet {TABLE}\n" if exists.returncode == 0 else "") + rules
+            transaction = (f"delete table inet {TABLE}\\n" if exists.returncode == 0 else "") + rules
             check = subprocess.run(["nft", "-c", "-f", "-"], input=transaction, text=True, capture_output=True)
             if check.returncode: raise ConfigError(f"nft validation failed: {check.stderr.strip()}")
-            # Never leave a fresh old attestation in place while replacing the
-            # firewall policy. Any apply/write failure now remains fail-closed.
-            invalidate_attestation(a.attestation)
             applied = subprocess.run(["nft", "-f", "-"], input=transaction, text=True, capture_output=True)
             if applied.returncode: raise ConfigError(f"nft apply failed: {applied.stderr.strip()}")
             now = int(time.time())
