@@ -45,13 +45,13 @@ class PhysicalClientProbeTests(unittest.TestCase):
 
     def test_tcp_recv_exact_handles_fragmented_reads(self):
         class FragmentedSocket:
-            def __init__(self): self.parts = [b"\\x00", b"\\x03", b"abc"]
+            def __init__(self): self.parts = [b"\x00", b"\x03", b"abc"]
             def recv(self, size):
                 part = self.parts.pop(0)
                 result, rest = part[:size], part[size:]
                 if rest: self.parts.insert(0, rest)
                 return result
-        self.assertEqual(PROBE.recv_exact(FragmentedSocket(), 2), b"\\x00\\x03")
+        self.assertEqual(PROBE.recv_exact(FragmentedSocket(), 2), b"\x00\x03")
     def test_tcp_recv_exact_rejects_eof(self):
         class ClosedSocket:
             def recv(self, size): return b""

@@ -128,6 +128,12 @@ def main(argv=None) -> int:
             lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
             with os.fdopen(lock_fd, "w") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
+                exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
+                if exists.returncode == 0:
+                    if "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
+                        raise ConfigError("refusing to remove an nftables table not owned by this controller")
+                    removed = subprocess.run(["nft", "delete", "table", "inet", TABLE], text=True, capture_output=True)
+                    if removed.returncode: raise ConfigError(f"nft table removal failed: {removed.stderr.strip()}")
                 if a.attestation.parent.exists():
                     parent_st = a.attestation.parent.lstat()
                     if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
@@ -136,12 +142,6 @@ def main(argv=None) -> int:
                     dfd = os.open(a.attestation.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
                     try: os.fsync(dfd)
                     finally: os.close(dfd)
-                exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
-                if exists.returncode == 0:
-                    if "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
-                        raise ConfigError("refusing to remove an nftables table not owned by this controller")
-                    removed = subprocess.run(["nft", "delete", "table", "inet", TABLE], text=True, capture_output=True)
-                    if removed.returncode: raise ConfigError(f"nft table removal failed: {removed.stderr.strip()}")
             print("owned ingress firewall table and attestation removed; Docker networks/routes were not changed")
             return 0
         cfg = load_config(a.config)
