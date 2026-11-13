@@ -132,3 +132,49 @@ func TestBuildSmartDNSPerClientConfigRejectsAgentPayloadOverflow(t *testing.T) {
 		t.Fatalf("expected clear Agent payload size error, got %v", err)
 	}
 }
+
+
+func TestBuildSmartDNSPerClientConfigWithIngressBindsAttestedFamilies(t *testing.T) {
+	mappings := []SmartDNSClientRuntimeMapping{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "node-v4", ListenerName: "s5m-smartdns-16000", ListenerAddress: "127.0.0.1", ListenerPort: 16000},
+		{ClientCIDR: "2001:db8:50::/64", ProxyName: "node-v6", ListenerName: "s5m-smartdns-16001", ListenerAddress: "127.0.0.1", ListenerPort: 16001},
+	}
+	got, err := buildSmartDNSPerClientConfigWithIngress(mappings, "172.31.0.10", "2001:db8:31::10")
+	if err != nil { t.Fatalf("build ingress config: %v", err) }
+	for _, want := range []string{
+		"bind 172.31.0.10:6055",
+		"bind-tcp 172.31.0.10:6055",
+		"bind [2001:db8:31::10]:6055",
+		"bind-tcp [2001:db8:31::10]:6055",
+		"bind 127.0.0.1:6053",
+		"bind-tcp [::1]:6053",
+	} {
+		if !strings.Contains(got, want) { t.Errorf("ingress config missing %q:\\n%s", want, got) }
+	}
+}
+
+func TestBuildSmartDNSPerClientConfigWithIngressRejectsUnsafeOrMissingAddresses(t *testing.T) {
+	v4 := SmartDNSClientRuntimeMapping{
+		ClientCIDR: "192.168.50.0/24", ProxyName: "node-v4",
+		ListenerName: "s5m-smartdns-16000", ListenerAddress: "127.0.0.1", ListenerPort: 16000,
+	}
+	v6 := SmartDNSClientRuntimeMapping{
+		ClientCIDR: "2001:db8:50::/64", ProxyName: "node-v6",
+		ListenerName: "s5m-smartdns-16001", ListenerAddress: "127.0.0.1", ListenerPort: 16001,
+	}
+	tests := []struct{name string; mappings []SmartDNSClientRuntimeMapping; v4, v6 string}{
+		{"missing IPv4", []SmartDNSClientRuntimeMapping{v4}, "", ""},
+		{"missing IPv6", []SmartDNSClientRuntimeMapping{v6}, "", ""},
+		{"wildcard IPv4", []SmartDNSClientRuntimeMapping{v4}, "0.0.0.0", ""},
+		{"loopback IPv4", []SmartDNSClientRuntimeMapping{v4}, "127.0.0.1", ""},
+		{"wrong family", []SmartDNSClientRuntimeMapping{v4}, "2001:db8::1", ""},
+		{"extra family", []SmartDNSClientRuntimeMapping{v4}, "172.31.0.10", "2001:db8::10"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := buildSmartDNSPerClientConfigWithIngress(tc.mappings, tc.v4, tc.v6); err == nil {
+				t.Fatal("unsafe or incomplete ingress address set accepted")
+			}
+		})
+	}
+}
