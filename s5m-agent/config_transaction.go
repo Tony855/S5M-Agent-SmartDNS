@@ -173,6 +173,30 @@ func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []b
 // Runtime YAML may be sanitized for an image capability while the exact
 // controller payload is retained separately for WebSocket SHA-256 consistency.
 func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool) error {
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, controllerPayload, skipSmartDNSHealth, transactionApplySmartDNS, nil)
+}
+
+// applyAgentConfigTransactionWithIngress validates per-client configuration
+// against the explicit Master-provided ingress contract, then uses the same
+// durable Mihomo+SmartDNS transaction and rollback journal as shared mode.
+func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, contract smartDNSPerClientIngressContract) error {
+	if !smartDNSFeatureSupported() {
+		return fmt.Errorf("当前 Agent 镜像不包含 SmartDNS，拒绝应用 per-client 配置")
+	}
+	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
+	if err := validator(smartDNSConfig); err != nil {
+		return fmt.Errorf("per-client SmartDNS ingress contract validation failed: %w", err)
+	}
+	apply := func(data []byte, cleanupBackup bool) (string, error) {
+		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
+	}
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, false, apply, func() error { return waitForSmartDNSIngressListeners(contract, 5*time.Second) })
+}
+
+func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error), postApplyCheck func() error) error {
+	if applySmartDNS == nil {
+		return fmt.Errorf("SmartDNS transaction apply function is unavailable")
+	}
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
 	mihomoConfigApplyMu.Lock()
@@ -298,13 +322,18 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 	}
 
 	if updateSmartDNS {
-		if _, err := transactionApplySmartDNS(smartDNSConfig, false); err != nil {
+		if _, err := applySmartDNS(smartDNSConfig, false); err != nil {
 			return rollback(fmt.Errorf("应用 SmartDNS 配置失败: %w", err))
 		}
 	}
 	if !skipSmartDNSHealth && smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
 		if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 			return rollback(fmt.Errorf("SmartDNS 联合事务 UDP/TCP DNS 健康检查失败"))
+		}
+	}
+	if postApplyCheck != nil {
+		if err := postApplyCheck(); err != nil {
+			return rollback(fmt.Errorf("SmartDNS ingress UDP/TCP A/AAAA 健康检查失败: %w", err))
 		}
 	}
 	if err := transactionWriteControllerConfig(controllerPayload); err != nil {
@@ -422,6 +451,20 @@ var smartDNSRuntimeTransitionMu sync.Mutex
 // begins using it. Disabling commits the fallback Mihomo config before stopping
 // the daemon, and the marker survives container restarts.
 func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string) error {
+	return applyAgentSmartDNSEnabledWithValidator(enabled, mihomoYAML, smartDNSConfig, centralURL, validateSmartDNSConfig,
+		func(mihomo, smart []byte, central string) error { return applyAgentConfigTransaction(mihomo, smart, true, central) })
+}
+
+func applyAgentSmartDNSEnabledWithIngress(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string, contract smartDNSPerClientIngressContract) error {
+	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
+	return applyAgentSmartDNSEnabledWithValidator(enabled, mihomoYAML, smartDNSConfig, centralURL, validator,
+		func(mihomo, smart []byte, central string) error { return applyAgentConfigTransactionWithIngress(mihomo, smart, true, central, contract) })
+}
+
+func applyAgentSmartDNSEnabledWithValidator(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string, validator func([]byte) error, applyTransaction func([]byte, []byte, string) error) error {
+	if validator == nil || applyTransaction == nil {
+		return fmt.Errorf("SmartDNS enable validator or transaction is unavailable")
+	}
 	smartDNSRuntimeTransitionMu.Lock()
 	defer smartDNSRuntimeTransitionMu.Unlock()
 
@@ -443,7 +486,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 				return fmt.Errorf("启用 SmartDNS 前读取现有配置失败: %w", err)
 			}
 		}
-		if err := validateSmartDNSConfig(smartDNSConfig); err != nil {
+		if err := validator(smartDNSConfig); err != nil {
 			return fmt.Errorf("启用 SmartDNS 的配置未通过安全校验: %w", err)
 		}
 		if !smartDNSConfigHasDomesticListener(smartDNSConfig) {
@@ -461,7 +504,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 			}
 			return healthErr
 		}
-		if err := applyAgentConfigTransaction(mihomoYAML, smartDNSConfig, true, centralURL); err != nil {
+		if err := applyTransaction(mihomoYAML, smartDNSConfig, centralURL); err != nil {
 			transactionErr := fmt.Errorf("启用 SmartDNS 的联合配置事务失败: %w", err)
 			if !wasEnabled {
 				return rollbackFailedSmartDNSEnable(transactionErr, persistSmartDNSDisabled, smartDNSServiceStop)
