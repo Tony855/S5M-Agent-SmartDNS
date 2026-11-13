@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const smartDNSPerClientIngressContractVersion = 1
@@ -309,4 +310,35 @@ func hasPerClientSmartDNSDirectives(data []byte) bool {
 		}
 	}
 	return false
+}
+
+
+// waitForSmartDNSIngressListeners proves that every contract-bound address
+// answers real A and AAAA DNS queries over both UDP and TCP before the joint
+// Mihomo/SmartDNS transaction is committed.
+func waitForSmartDNSIngressListeners(contract smartDNSPerClientIngressContract, timeout time.Duration) error {
+	addresses := make([]string, 0, 2)
+	if strings.TrimSpace(contract.IPv4Address) != "" {
+		addresses = append(addresses, net.JoinHostPort(contract.IPv4Address, strconv.Itoa(smartDNSPerClientIngressPort)))
+	}
+	if strings.TrimSpace(contract.IPv6Address) != "" {
+		addresses = append(addresses, net.JoinHostPort(contract.IPv6Address, strconv.Itoa(smartDNSPerClientIngressPort)))
+	}
+	if len(addresses) == 0 { return fmt.Errorf("ingress contract contains no listener addresses") }
+	deadline := time.Now().Add(timeout)
+	for {
+		allHealthy := true
+		for _, address := range addresses {
+			if !probeSmartDNSDNSAtType(address, 1) ||
+				!probeSmartDNSDNSAtType(address, 28) ||
+				!probeSmartDNSDNSAtTypeTCP(address, 1) ||
+				!probeSmartDNSDNSAtTypeTCP(address, 28) {
+				allHealthy = false
+				break
+			}
+		}
+		if allHealthy { return nil }
+		if time.Now().After(deadline) { return fmt.Errorf("6055 ingress A/AAAA UDP/TCP probe failed") }
+		time.Sleep(150 * time.Millisecond)
+	}
 }
