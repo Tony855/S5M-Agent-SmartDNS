@@ -83,7 +83,7 @@ func validateSmartDNSHostIngressAttestation(attestation smartDNSHostIngressAttes
 	if attestation.UpdatedAt <= 0 || time.Since(time.Unix(attestation.UpdatedAt, 0)) > 90*time.Second || time.Since(time.Unix(attestation.UpdatedAt, 0)) < -30*time.Second {
 		return fmt.Errorf("host ingress attestation is stale")
 	}
-	if !smartDNSHostIngressInterfacePattern.MatchString(strings.TrimSpace(attestation.Interface)) {
+	if attestation.Interface != strings.TrimSpace(attestation.Interface) || !smartDNSHostIngressInterfacePattern.MatchString(attestation.Interface) {
 		return fmt.Errorf("host ingress attestation interface is invalid")
 	}
 	if strings.TrimSpace(attestation.IPv4Address) == "" && strings.TrimSpace(attestation.IPv6Address) == "" {
@@ -91,13 +91,13 @@ func validateSmartDNSHostIngressAttestation(attestation smartDNSHostIngressAttes
 	}
 	if strings.TrimSpace(attestation.IPv4Address) != "" {
 		ip, err := netip.ParseAddr(strings.TrimSpace(attestation.IPv4Address))
-		if err != nil || !ip.Is4() || ip.String() != strings.TrimSpace(attestation.IPv4Address) || !ip.IsGlobalUnicast() || ip.Zone() != "" || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+		if err != nil || !ip.Is4() || ip.String() != attestation.IPv4Address || !ip.IsGlobalUnicast() || ip.Zone() != "" || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
 			return fmt.Errorf("host ingress attestation IPv4 address is invalid")
 		}
 	}
 	if strings.TrimSpace(attestation.IPv6Address) != "" {
 		ip, err := netip.ParseAddr(strings.TrimSpace(attestation.IPv6Address))
-		if err != nil || !ip.Is6() || ip.String() != strings.TrimSpace(attestation.IPv6Address) || !ip.IsGlobalUnicast() || ip.Zone() != "" || ip.Is4In6() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+		if err != nil || !ip.Is6() || ip.String() != attestation.IPv6Address || !ip.IsGlobalUnicast() || ip.Zone() != "" || ip.Is4In6() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
 			return fmt.Errorf("host ingress attestation IPv6 address is invalid")
 		}
 	}
@@ -110,7 +110,8 @@ func validateSmartDNSHostIngressAttestation(attestation smartDNSHostIngressAttes
 	for _, raw := range attestation.ClientCIDRs {
 		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
 		if err != nil { return fmt.Errorf("host ingress attestation contains invalid client CIDR") }
-		if prefix.String() != strings.TrimSpace(raw) { return fmt.Errorf("host ingress attestation client CIDR is not canonical") }
+		if prefix.String() != raw || prefix != prefix.Masked() { return fmt.Errorf("host ingress attestation client CIDR is not canonical") }
+		prefix = prefix.Masked()
 		addr := prefix.Addr()
 		if addr.Is4() { hasIPv4CIDR = true } else { hasIPv6CIDR = true }
 		if prefix.Bits() == 0 || !addr.IsGlobalUnicast() || addr.IsUnspecified() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsMulticast() || addr.Is4In6() {
