@@ -192,12 +192,12 @@ def controller_lock():
         if fd >= 0:
             os.close(fd)
 
-def invalidate_attestation(path: Path) -> None:
+def invalidate_attestation(path: Path, *, require_root: bool = True) -> None:
     """Remove readiness before changing firewall state; stale proof must never survive a failed reconcile."""
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     parent_st = path.parent.lstat()
-    if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
-        raise ConfigError("attestation directory must be root-owned and not group/world writable")
+    if not stat.S_ISDIR(parent_st.st_mode) or (require_root and parent_st.st_uid != 0) or parent_st.st_mode & 0o022:
+        raise ConfigError("attestation directory must be trusted and not group/world writable")
     try:
         path.unlink()
     except FileNotFoundError:

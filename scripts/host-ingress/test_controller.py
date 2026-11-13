@@ -90,7 +90,7 @@ class ControllerTests(unittest.TestCase):
         path = pathlib.Path(self.tmp.name) / "ingress.json"
         path.write_text('{"source_ip_preserved":true}')
         path.chmod(0o600)
-        mod.invalidate_attestation(path)
+        mod.invalidate_attestation(path, require_root=False)
         self.assertFalse(path.exists())
 
     def test_invalidate_attestation_rejects_untrusted_parent(self):
