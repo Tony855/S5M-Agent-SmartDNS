@@ -163,3 +163,19 @@ func TestValidateSmartDNSIngressReadinessRejectsLinkLocalAddresses(t *testing.T)
 		t.Fatal("link-local ingress address accepted")
 	}
 }
+
+
+func TestValidateSmartDNSIngressReadinessRejectsNonRoutableClientCIDRs(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	for _, cidr := range []string{"127.0.0.0/8", "169.254.0.0/16", "fe80::/64", "::1/128"} {
+		t.Run(cidr, func(t *testing.T) {
+			routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+				{ClientCIDR: cidr, ProxyName: "proxy-a"},
+			}}
+			settings := readySmartDNSIngressSettings(now, cidr)
+			if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+				t.Fatalf("non-routable client CIDR %s accepted", cidr)
+			}
+		})
+	}
+}
