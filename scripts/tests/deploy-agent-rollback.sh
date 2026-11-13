@@ -105,4 +105,11 @@ bash -n "$DEPLOY"
 test_stop_failure_keeps_old_service_available
 test_stop_error_with_confirmed_exit_is_safe
 test_successful_stop_is_verified
-echo "Agent deployment stop failure and rollback fault-injection tests passed"
+# DNS_PORT used to publish host:port -> container:6053, but SmartDNS only
+# binds container loopback. Reject the misleading mapping until a dedicated
+# source-preserving LAN ingress has passed network acceptance.
+grep -Fq 'if (( DNS_PORT > 0 )); then' "$DEPLOY"
+grep -Fq 'DNS_PORT 暂不可用：当前 SmartDNS 仅监听容器回环地址' "$DEPLOY"
+grep -Fq 'args+=( -p' "$DEPLOY" && { echo "unexpected spaced port mapping syntax" >&2; exit 1; } || true
+
+echo "Agent deployment stop/rollback and DNS ingress guard tests passed"
