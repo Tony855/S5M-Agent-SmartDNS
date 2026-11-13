@@ -73,6 +73,8 @@ Create `/etc/s5m-agent-ingress/network.json` as root-owned mode `0600` (replace 
 
 Before provisioning, deploy/redeploy the Agent with `ENABLE_PER_CLIENT_INGRESS=1` in `/etc/default/s5m-agent-smartdns`. The interactive `deploy-s5m-agent.sh` offers menu item `22` to toggle the same option; save it with `19` and redeploy with `2`. The deployment script publishes UDP/TCP 6055 only on random host ports bound to `127.0.0.1`; remote clients never use those host ports and reach the stable container address directly through the routed bridge. This loopback-only mapping is required because Docker routed gateway mode filters ingress to published container ports. The lifecycle helper refuses containers whose 6055 mappings are missing or bound to wildcard/public host addresses. IPv6 per-client ingress is currently disabled. Validation showed that Docker allocates a non-loopback IPv6 host port for the `[::]::6055` mapping even when the default bridge IPv6 switch is off. Both deploy scripts and the network helper now fail closed for IPv6; do not set `ENABLE_PER_CLIENT_INGRESS_IPV6=1`. A separate IPv6 ingress design is required before re-enabling it.
 
+After both host configs exist and the helper is installed, both `deploy-agent.sh` and `deploy-s5m-agent.sh` automatically attempt `provision` after a successful redeploy (after removing the old container so its static IP is free). If that step warns/fails, shared SmartDNS remains available and per-client remains fail-closed; fix the host config and retry manually.
+
 Install the helper and provision after the Agent container is running:
 
 ```sh
