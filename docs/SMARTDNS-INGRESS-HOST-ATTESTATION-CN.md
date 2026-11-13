@@ -45,7 +45,7 @@ Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/
 
 ## 安全状态机
 
-1. Host controller 先配置 routed Docker network 和持久防火墙，写入 provisioning attestation；`source_ip_preserved=false` 时 Master 仍拒绝 provisioning。
+1. 管理员/独立部署流程先创建并附加 routed Docker network、分配稳定双栈地址并配置外部路由器静态路由；当前 host controller **不负责** Docker network 生命周期或路由器配置。随后 host controller 只安装/刷新专属 nftables allowlist，并写入 provisioning attestation；`source_ip_preserved=false` 时 Master 仍拒绝 provisioning。
 2. 完成真实 LAN UDP/TCP 源地址验证后，host controller 才能写入 `source_ip_preserved=true`。
 3. Master 下发包含合同的 Mihomo + SmartDNS 联合事务；Agent 严格验证配置，应用后确认 6055 UDP/TCP socket 精确绑定，再提交事务。
 4. Agent 新心跳报告 listener ready 后，Master 才允许常规 per-client 配置发布。
@@ -56,6 +56,6 @@ Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/
 
 ## 受限宿主机防火墙控制器（新增）
 
-仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建 Docker network、不改宿主机路由，也不接触 Docker socket。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
+仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建/附加 Docker network、不分配容器地址、不改宿主机路由或默认 bridge egress，也不接触 Docker socket。routed Docker network、稳定双栈地址和外部路由器静态路由必须由独立 provisioning 生命周期完成，并在 host firewall 安装前确认。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
 
 该组件只管理专属 nftables allowlist。`firewall_persistent` 取决于 systemd timer enabled/active；`udp_ready`、`tcp_ready`、`source_ip_preserved` 由七天有效期的物理验收证据驱动。它不会创建 routed Docker network 或配置外部路由器静态路由；这两项仍是独立阻断项。
