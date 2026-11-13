@@ -1,0 +1,135 @@
+package app
+
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/netip"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const smartDNSIngressReadinessContractVersion = 1
+
+var smartDNSIngressInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}$`)
+
+// validateSmartDNSIngressReadiness is the Master-side fail-closed gate for
+// per-client config publication. A heartbeat capability bit alone is not
+// sufficient: it must attest to the exact routed ingress, firewall, transport,
+// address-family and CIDR state that the generated config depends on.
+func validateSmartDNSIngressReadiness(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time) error {
+	machineCode = strings.TrimSpace(machineCode)
+	if machineCode == "" {
+		return fmt.Errorf("Agent 机器码为空，无法验证 DNS ingress 就绪状态")
+	}
+	lastSeen, err := strconv.ParseInt(strings.TrimSpace(settings["agent_lastseen_"+machineCode]), 10, 64)
+	if err != nil || lastSeen <= 0 {
+		return fmt.Errorf("Agent 尚未上报 DNS ingress 心跳")
+	}
+	age := now.Sub(time.Unix(lastSeen, 0))
+	if age > 90*time.Second || age < -30*time.Second {
+		return fmt.Errorf("Agent DNS ingress 就绪状态已过期")
+	}
+
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_"+machineCode]), &status); err != nil || status == nil {
+		return fmt.Errorf("Agent DNS ingress 状态缺失或格式无效")
+	}
+	if version, ok := status["dns_ingress_contract_version"].(float64); !ok || version != smartDNSIngressReadinessContractVersion {
+		return fmt.Errorf("Agent DNS ingress 就绪协议版本不匹配")
+	}
+	for _, key := range []string{
+		"dns_ingress_ready",
+		"dns_ingress_source_ip_preserved",
+		"dns_ingress_firewall_ready",
+		"dns_ingress_firewall_persistent",
+		"dns_ingress_udp_ready",
+		"dns_ingress_tcp_ready",
+		"dns_ingress_smartdns_listener_ready",
+	} {
+		if status[key] != true {
+			return fmt.Errorf("Agent DNS ingress 未满足就绪条件: %s", key)
+		}
+	}
+	if iface, ok := status["dns_ingress_interface"].(string); !ok || !smartDNSIngressInterfacePattern.MatchString(iface) {
+		return fmt.Errorf("Agent DNS ingress 网卡信息缺失或无效")
+	}
+
+	hasIPv4, hasIPv6 := false, false
+	requiredCIDRs := make(map[string]struct{}, len(routing.Clients))
+	for _, route := range routing.Clients {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(route.ClientCIDR))
+		if err != nil {
+			return fmt.Errorf("DNS ingress 映射 CIDR 无效: %q", route.ClientCIDR)
+		}
+		prefix = prefix.Masked()
+		requiredCIDRs[prefix.String()] = struct{}{}
+		if prefix.Addr().Is4() {
+			hasIPv4 = true
+		} else {
+			hasIPv6 = true
+		}
+	}
+	if len(requiredCIDRs) == 0 {
+		return fmt.Errorf("DNS ingress 没有可验收的客户端 CIDR")
+	}
+
+	reported, ok := status["dns_ingress_client_cidrs"].([]any)
+	if !ok {
+		return fmt.Errorf("Agent 未上报 DNS ingress 允许的客户端 CIDR")
+	}
+	allowed := make(map[string]struct{}, len(reported))
+	for _, item := range reported {
+		value, ok := item.(string)
+		if !ok {
+			return fmt.Errorf("Agent DNS ingress CIDR 状态包含无效项目")
+		}
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("Agent DNS ingress CIDR 状态包含无效网段")
+		}
+		allowed[prefix.Masked().String()] = struct{}{}
+	}
+	for cidr := range requiredCIDRs {
+		if _, ok := allowed[cidr]; !ok {
+			return fmt.Errorf("Agent DNS ingress 未授权当前映射网段: %s", cidr)
+		}
+	}
+
+	validateAddress := func(key string, wantIPv4 bool) error {
+		value, ok := status[key].(string)
+		if !ok {
+			return fmt.Errorf("Agent DNS ingress 地址缺失: %s", key)
+		}
+		ip := net.ParseIP(strings.TrimSpace(value))
+		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
+			return fmt.Errorf("Agent DNS ingress 地址无效: %s", key)
+		}
+		return nil
+	}
+	if hasIPv4 {
+		if status["dns_ingress_ipv4_ready"] != true {
+			return fmt.Errorf("Agent DNS ingress IPv4 尚未就绪")
+		}
+		if err := validateAddress("dns_ingress_ipv4_address", true); err != nil {
+			return err
+		}
+		if status["dns_ingress_smartdns_ipv4_bound"] != true || status["dns_ingress_smartdns_ipv4_bind_address"] != status["dns_ingress_ipv4_address"] {
+			return fmt.Errorf("SmartDNS 未在已验收的 IPv4 ingress 地址上同时监听")
+		}
+	}
+	if hasIPv6 {
+		if status["dns_ingress_ipv6_ready"] != true {
+			return fmt.Errorf("Agent DNS ingress IPv6 尚未就绪")
+		}
+		if err := validateAddress("dns_ingress_ipv6_address", false); err != nil {
+			return err
+		}
+		if status["dns_ingress_smartdns_ipv6_bound"] != true || status["dns_ingress_smartdns_ipv6_bind_address"] != status["dns_ingress_ipv6_address"] {
+			return fmt.Errorf("SmartDNS 未在已验收的 IPv6 ingress 地址上同时监听")
+		}
+	}
+	return nil
+}
