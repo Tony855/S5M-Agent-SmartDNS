@@ -187,7 +187,7 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 	apply := func(data []byte, cleanupBackup bool) (string, error) {
 		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
 	}
-	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, false, apply)
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, false, apply, func() error { return waitForSmartDNSIngressListeners(contract, 5*time.Second) })
 }
 
 func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error), postApplyCheck func() error) error {
