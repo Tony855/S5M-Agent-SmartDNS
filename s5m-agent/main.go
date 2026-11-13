@@ -2358,10 +2358,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	// telemetry write has returned. Otherwise a reconnect teardown could
 	// delete the lock while a writer is waiting on it, allowing a second
 	// mutex to be created for the same live connection.
-	defer func() {
-		stopTelemetry()
-		<-telemetryDone
-	}()
+	defer stopAndWaitAgentTelemetryPublisher(stopTelemetry, telemetryDone)
 	go runAgentRouteRefreshLoop(telemetryCtx, cfg.CentralURL, heartbeatInterval)
 
 	for {
