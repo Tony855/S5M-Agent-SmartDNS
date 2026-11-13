@@ -10,6 +10,6 @@ if [[ -x /usr/local/libexec/s5m-agent-ingress/controller.py ]]; then
 fi
 rm -f /etc/systemd/system/s5m-agent-ingress.timer /etc/systemd/system/s5m-agent-ingress.service
 systemctl daemon-reload
-rm -f /usr/local/libexec/s5m-agent-ingress/controller.py
+rm -f /usr/local/libexec/s5m-agent-ingress/controller.py /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py
 rmdir /usr/local/libexec/s5m-agent-ingress 2>/dev/null || true
 echo 'S5M host ingress controller removed; config and Docker network/routes were retained.'

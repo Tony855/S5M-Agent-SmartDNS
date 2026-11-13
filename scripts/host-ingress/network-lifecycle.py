@@ -15,6 +15,12 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 class LifecycleError(RuntimeError): pass
 
 def read_config(path: Path) -> dict:
+    current = Path("/")
+    for part in path.absolute().parts[1:-1]:
+        current = current / part
+        st_parent = current.lstat()
+        if not stat.S_ISDIR(st_parent.st_mode) or st_parent.st_uid != 0 or st_parent.st_mode & 0o022:
+            raise LifecycleError(f"config parent {current} must be root-owned, non-writable directory")
     if path.is_symlink(): raise LifecycleError("config must not be a symlink")
     st = path.lstat()
     if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
@@ -46,6 +52,10 @@ def read_config(path: Path) -> dict:
             raise LifecycleError(f"{suffix} gateway/address must be routable unicast")
         if gw == addr or addr == net.network_address or (family == 4 and addr == net.broadcast_address):
             raise LifecycleError(f"{suffix} address conflicts with gateway/network boundary")
+        if family == 4 and net.prefixlen > 30:
+            raise LifecycleError("IPv4 Docker bridge subnet must be /30 or larger")
+        if family == 6 and net.prefixlen > 120:
+            raise LifecycleError("IPv6 Docker bridge subnet must be /120 or larger")
         values[family]=(net,gw,addr)
     if 4 not in values: raise LifecycleError("IPv4 ingress is mandatory")
     if len(values)==2 and values[4][0].overlaps(values[6][0]): raise LifecycleError("overlapping address families")
@@ -110,6 +120,9 @@ def default_routes(container):
     return v4,v6
 
 def provision(cfg):
+    help_text=run(["docker","network","connect","--help"],check=False).stdout
+    if "--gw-priority" not in help_text:
+        raise LifecycleError("Docker CLI must support network connect --gw-priority to preserve default bridge egress")
     net=inspect_network(cfg["network"]); created=False; connected=False
     if net is None:
         create_network(cfg); created=True

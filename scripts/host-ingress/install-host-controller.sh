@@ -13,6 +13,9 @@ chmod 0600 "$CONFIG"
 
 install -d -o root -g root -m 0755 "$DEST" /etc/s5m-agent-ingress /run/s5m-agent-ingress
 install -o root -g root -m 0755 "$ROOT/controller.py" "$DEST/controller.py"
+install -o root -g root -m 0755 "$ROOT/network-lifecycle.py" "$DEST/network-lifecycle.py"
+python3 -m py_compile "$DEST/controller.py" "$DEST/network-lifecycle.py"
+rm -rf "$DEST/__pycache__"
 install -o root -g root -m 0644 "$ROOT/s5m-agent-ingress.service" /etc/systemd/system/s5m-agent-ingress.service
 install -o root -g root -m 0644 "$ROOT/s5m-agent-ingress.timer" /etc/systemd/system/s5m-agent-ingress.timer
 systemctl daemon-reload

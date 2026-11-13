@@ -26,7 +26,7 @@ jobs:
           rm -rf scripts/lab/smartdns-dns-ingress/__pycache__
       - name: Validate restricted host ingress controller
         run: |
-          python3 -m py_compile scripts/host-ingress/controller.py
+          python3 -m py_compile scripts/host-ingress/controller.py scripts/host-ingress/network-lifecycle.py
           python3 -m unittest discover -s scripts/host-ingress -p 'test_*.py'
           bash -n scripts/host-ingress/install-host-controller.sh
           bash -n scripts/host-ingress/uninstall-host-controller.sh
