@@ -47,7 +47,7 @@ A separate routed-network lifecycle and external router static routes are still 
 sudo ./uninstall-host-controller.sh
 ```
 
-The uninstall operation disables the refresh timer, removes the controller-owned attestation and nftables table, and removes the systemd units/controller binary. It deliberately retains the administrator configuration, Docker network, host routes, and the standalone network lifecycle helper so the administrator can later run its explicit `uninstall` action. It does not touch the default bridge.
+The uninstall operation disables the refresh timer, removes the controller-owned attestation and nftables table, and removes the systemd units/controller binary. It deliberately retains the administrator configuration, Docker network, host routes, and the standalone network lifecycle helper. After removing the firewall controller, remove the dedicated Docker ingress network explicitly with `sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py uninstall --config /etc/s5m-agent-ingress/network.json`. If a RouterOS static route was added, remove that exact route on the router as a separate administrator action. It does not touch the default bridge.
 
 ## Routed Docker ingress network lifecycle
 
