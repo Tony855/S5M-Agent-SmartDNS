@@ -83,42 +83,28 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 	if err != nil { return observed, fmt.Errorf("read IPv4 TCP socket table: %w", err) }
 	tcp6, err := deps.readFile("/proc/net/tcp6")
 	if err != nil { return observed, fmt.Errorf("read IPv6 TCP socket table: %w", err) }
-	observed.UDP = procSocketTableHasListener(udp4, false, smartDNSPerClientIngressPort, addressSet) ||
-		procSocketTableHasListener(udp6, true, smartDNSPerClientIngressPort, addressSet)
-	observed.TCP = procSocketTableHasListener(tcp4, false, smartDNSPerClientIngressPort, addressSet) ||
-		procSocketTableHasListener(tcp6, true, smartDNSPerClientIngressPort, addressSet)
+	observed.UDP = procSocketTableHasListener(udp4, false, smartDNSPerClientIngressPort, addressSet, false) ||
+		procSocketTableHasListener(udp6, true, smartDNSPerClientIngressPort, addressSet, false)
+	observed.TCP = procSocketTableHasListener(tcp4, false, smartDNSPerClientIngressPort, addressSet, true) ||
+		procSocketTableHasListener(tcp6, true, smartDNSPerClientIngressPort, addressSet, true)
 	return observed, nil
 }
 
-func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddresses map[string]bool) bool {
-	lines := strings.Split(string(data), "\n")
+func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddresses map[string]bool, requireTCPListen bool) bool {
+	lines := strings.Split(string(data), "\\n")
 	for _, line := range lines[1:] {
 		fields := strings.Fields(line)
 		if len(fields) < 4 { continue }
+		if requireTCPListen && fields[3] != "0A" { continue }
 		local := strings.Split(fields[1], ":")
 		if len(local) != 2 { continue }
 		parsedPort, err := strconv.ParseInt(local[1], 16, 32)
 		if err != nil || int(parsedPort) != port { continue }
-		// TCP state 0A is LISTEN. UDP sockets have no TCP state requirement.
-		if strings.Contains(strings.TrimSpace(string(data[:min(len(data), 16)])), "sl") {
-			// The caller identifies TCP by the table's state field below; UDP
-			// entries are accepted independently by the dedicated wrapper.
-		}
 		address, err := decodeProcSocketAddress(local[0], ipv6)
 		if err != nil { continue }
 		if address.IsUnspecified() || interfaceAddresses[address.String()] {
 			return true
 		}
-	}
-	return false
-}
-
-func procTCPTableHasListener(data []byte, ipv6 bool, port int, interfaceAddresses map[string]bool) bool {
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines[1:] {
-		fields := strings.Fields(line)
-		if len(fields) < 4 || fields[3] != "0A" { continue }
-		if procSocketTableHasListener([]byte("header\n"+line), ipv6, port, interfaceAddresses) { return true }
 	}
 	return false
 }
