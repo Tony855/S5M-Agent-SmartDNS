@@ -65,6 +65,19 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 			return fmt.Errorf("DNS ingress 映射 CIDR 无效: %q", route.ClientCIDR)
 		}
 		prefix = prefix.Masked()
+		if prefix.Bits() == 0 || !prefix.Addr().IsGlobalUnicast() || prefix.Addr().Is4In6() {
+			return fmt.Errorf("DNS ingress 客户端 CIDR 必须是具体的单播网段: %s", prefix.String())
+		}
+		if _, duplicate := requiredCIDRs[prefix.String()]; duplicate {
+			return fmt.Errorf("DNS ingress 客户端 CIDR 重复: %s", prefix.String())
+		}
+		for existingCIDR := range requiredCIDRs {
+			existing, _ := netip.ParsePrefix(existingCIDR)
+			if prefix.Addr().Is4() == existing.Addr().Is4() &&
+				(prefix.Contains(existing.Addr()) || existing.Contains(prefix.Addr())) {
+				return fmt.Errorf("DNS ingress 客户端 CIDR 存在重叠映射: %s 与 %s", prefix.String(), existingCIDR)
+			}
+		}
 		requiredCIDRs[prefix.String()] = struct{}{}
 		if prefix.Addr().Is4() {
 			hasIPv4 = true
@@ -120,7 +133,7 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 			return fmt.Errorf("Agent DNS ingress 地址缺失: %s", key)
 		}
 		ip := net.ParseIP(strings.TrimSpace(value))
-		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
+		if ip == nil || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
 			return fmt.Errorf("Agent DNS ingress 地址无效: %s", key)
 		}
 		return nil
