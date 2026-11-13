@@ -1,0 +1,32 @@
+# Real Mihomo config matching server/internal/app/smartdns_mihomo.go.
+# SmartDNS connects to the loopback listeners; each is pinned to one outbound.
+mode: rule
+log-level: debug
+allow-lan: false
+ipv6: false
+proxies:
+  - name: node-a-egress
+    type: socks5
+    server: 127.0.0.1
+    port: 19091
+    udp: true
+  - name: node-b-egress
+    type: socks5
+    server: 127.0.0.1
+    port: 19092
+    udp: true
+listeners:
+  - name: s5m-smartdns-16000
+    type: socks
+    listen: 127.0.0.1
+    port: 16000
+    udp: true
+    proxy: node-a-egress
+  - name: s5m-smartdns-16001
+    type: socks
+    listen: 127.0.0.1
+    port: 16001
+    udp: true
+    proxy: node-b-egress
+rules:
+  - MATCH,REJECT
