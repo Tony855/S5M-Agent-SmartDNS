@@ -12,9 +12,10 @@ NS_B=s5m-smart-client-b
 NS_C=s5m-smart-client-c
 PROXY_A=s5m-smart-socks-a
 PROXY_B=s5m-smart-socks-b
+MIHOMO=s5m-mihomo-real-listener-lab
 LOG_DIR=""
 cleanup() {
-  docker rm -f "$PROXY_A" "$PROXY_B" "$SERVER" >/dev/null 2>&1 || true
+  docker rm -f "$MIHOMO" "$PROXY_A" "$PROXY_B" "$SERVER" >/dev/null 2>&1 || true
   [[ -z "$LOG_DIR" ]] || rm -rf "$LOG_DIR"
   docker network rm "$NET_IN" >/dev/null 2>&1 || true
   ip netns del "$NS_A" >/dev/null 2>&1 || true
@@ -67,11 +68,24 @@ echo "PASS: container keeps default bridge egress route via $default_gateway whi
 LOG_DIR="$(mktemp -d)"
 docker run -d --name "$PROXY_A" --restart no --network "container:$SERVER" -v "$LOG_DIR:/logs" \
   --cap-drop ALL --security-opt no-new-privileges:true --entrypoint python3 \
-  s5m-smartdns-routed-lab /usr/local/bin/socks-observer.py 19081 /logs/proxy-a.log >/dev/null
+  s5m-smartdns-routed-lab /usr/local/bin/socks-observer.py 19091 /logs/proxy-a.log >/dev/null
 docker run -d --name "$PROXY_B" --restart no --network "container:$SERVER" -v "$LOG_DIR:/logs" \
   --cap-drop ALL --security-opt no-new-privileges:true --entrypoint python3 \
-  s5m-smartdns-routed-lab /usr/local/bin/socks-observer.py 19082 /logs/proxy-b.log >/dev/null
-sleep 1
+  s5m-smartdns-routed-lab /usr/local/bin/socks-observer.py 19092 /logs/proxy-b.log >/dev/null
+mkdir -p "$LOG_DIR/mihomo"
+docker run -d --name "$MIHOMO" --restart no --network "container:$SERVER" \
+  -v "$ROOT/mihomo-per-client.yaml:/etc/mihomo/config.yaml:ro" -v "$LOG_DIR:/logs" \
+  --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /usr/local/bin/mihomo \
+  s5m-smartdns-routed-lab -d /logs/mihomo -f /etc/mihomo/config.yaml >/dev/null
+sleep 2
+mihomo_state="$(docker inspect -f '{{.State.Status}}' "$MIHOMO")"
+if [[ "$mihomo_state" != running ]]; then docker logs "$MIHOMO"; echo "Mihomo daemon failed to start (state=$mihomo_state)" >&2; exit 1; fi
+for _ in $(seq 1 40); do
+  if docker exec "$SERVER" python3 -c 'import socket; [socket.create_connection(("127.0.0.1", p), timeout=.2).close() for p in (16000,16001)]' >/dev/null 2>&1; then break; fi
+  sleep 0.25
+done
+docker exec "$SERVER" python3 -c 'import socket; [socket.create_connection(("127.0.0.1", p), timeout=1).close() for p in (16000,16001)]' || { docker logs "$MIHOMO"; echo "Mihomo per-client listeners did not become ready" >&2; exit 1; }
+echo "PASS: real Mihomo started both loopback SOCKS listeners with distinct pinned outbound proxies."
 log_count() { [[ -f "$1" ]] && wc -l < "$1" || echo 0; }
 wait_for_log_increase() {
   local path="$1" before="$2"
@@ -129,5 +143,5 @@ for transport in udp tcp; do
   wait_for_quiet
   [[ "$(log_count "$LOG_DIR/proxy-a.log")" == "$a_before" && "$(log_count "$LOG_DIR/proxy-b.log")" == "$b_before" ]] || { echo "unmapped client unexpectedly reached a named SOCKS listener" >&2; exit 1; }
 done
-echo "PASS: real SmartDNS daemon selected distinct client CIDR groups, excluded unmatched clients from default upstreams, and sent mapped queries only to the matching named SOCKS listener over UDP and TCP."
-echo "LIMIT: same-host IPv4 lab only; Agent validator/deployment, IPv6, Mihomo SOCKS and real proxy egress remain separate acceptance gates."
+echo "PASS: real SmartDNS + real Mihomo selected distinct client CIDR groups, excluded unmatched clients from default upstreams, and reached only the matching Mihomo listener and pinned outbound SOCKS proxy over UDP and TCP."
+echo "LIMIT: same-host IPv4 lab only; Agent validator/deployment, IPv6, physical LAN/router acceptance and real public proxy egress remain separate acceptance gates. The Mihomo outbound endpoints in this lab are rejecting SOCKS observers, not production proxies."
