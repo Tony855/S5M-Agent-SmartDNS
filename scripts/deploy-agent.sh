@@ -99,6 +99,12 @@ valid_port() {
 valid_port "$WEB_PORT" WEB_PORT
 valid_port "$PROXY_PORT" PROXY_PORT
 valid_port "$DNS_PORT" DNS_PORT
+# SmartDNS currently binds only to container loopback (127.0.0.1/[::1]).
+# Docker port publishing targets the container interface, so publishing 6053
+# cannot reach that listener and must not be advertised as a working LAN DNS ingress.
+if (( DNS_PORT > 0 )); then
+  die "DNS_PORT 暂不可用：当前 SmartDNS 仅监听容器回环地址，Docker 端口映射无法转发到该监听。请保持 DNS_PORT=0；待独立 LAN DNS ingress 完成来源 IP 验收后再开放。"
+fi
 [[ -n "$IMAGE" && -n "$CONTAINER_NAME" && -n "$DATA_DIR" ]] || die "IMAGE、CONTAINER_NAME、DATA_DIR 不能为空。"
 [[ "$CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || die "CONTAINER_NAME 格式不合法。"
 [[ "$ENABLE_TUN" == "0" || "$ENABLE_TUN" == "1" ]] || die "ENABLE_TUN 只能是 0 或 1。"
