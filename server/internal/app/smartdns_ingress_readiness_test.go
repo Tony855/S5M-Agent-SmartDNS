@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,16 +19,23 @@ func readySmartDNSIngressSettings(now time.Time, cidrs ...string) map[string]str
 		"dns_ingress_udp_ready": true,
 		"dns_ingress_tcp_ready": true,
 		"dns_ingress_smartdns_listener_ready": true,
-		"dns_ingress_smartdns_ipv4_bound": true,
-		"dns_ingress_smartdns_ipv4_bind_address": "192.0.2.1",
-		"dns_ingress_smartdns_ipv6_bound": true,
-		"dns_ingress_smartdns_ipv6_bind_address": "2001:db8::1",
 		"dns_ingress_interface": "eth0",
 		"dns_ingress_client_cidrs": cidrs,
-		"dns_ingress_ipv4_ready": true,
-		"dns_ingress_ipv4_address": "192.0.2.1",
-		"dns_ingress_ipv6_ready": true,
-		"dns_ingress_ipv6_address": "2001:db8::1",
+	}
+	for _, cidr := range cidrs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil { continue }
+		if prefix.Addr().Is4() {
+			status["dns_ingress_smartdns_ipv4_bound"] = true
+			status["dns_ingress_smartdns_ipv4_bind_address"] = "192.0.2.1"
+			status["dns_ingress_ipv4_ready"] = true
+			status["dns_ingress_ipv4_address"] = "192.0.2.1"
+		} else {
+			status["dns_ingress_smartdns_ipv6_bound"] = true
+			status["dns_ingress_smartdns_ipv6_bind_address"] = "2001:db8::1"
+			status["dns_ingress_ipv6_ready"] = true
+			status["dns_ingress_ipv6_address"] = "2001:db8::1"
+		}
 	}
 	raw, _ := json.Marshal(status)
 	return map[string]string{
@@ -80,8 +88,6 @@ func TestValidateSmartDNSIngressReadinessChecksOnlyMappedAddressFamilies(t *test
 		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
 	}}
 	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
-	raw := strings.Replace(settings["agent_status_node-a"], `,"dns_ingress_ipv6_ready":true,"dns_ingress_ipv6_address":"2001:db8::1","dns_ingress_smartdns_ipv6_bound":true,"dns_ingress_smartdns_ipv6_bind_address":"2001:db8::1"`, "", 1)
-	settings["agent_status_node-a"] = raw
 	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err != nil {
 		t.Fatalf("IPv4-only route should not require an IPv6 ingress address: %v", err)
 	}
@@ -295,6 +301,12 @@ func TestValidateSmartDNSIngressReadinessRejectsIngressInsideClientCIDRAndExtraF
 		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
 	}}
 	settings = readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv6_address"] = "2001:db8::1"
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
 	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
 		t.Fatal("extra unmapped IPv6 ingress address was accepted")
 	}
