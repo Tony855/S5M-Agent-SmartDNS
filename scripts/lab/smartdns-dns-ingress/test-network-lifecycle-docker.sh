@@ -50,6 +50,15 @@ docker inspect "$NAME" | python3 -c 'import json,sys; n=json.load(sys.stdin)[0][
 ROUTE="$(docker exec "$NAME" ip -4 route show default)"
 BRIDGE_GW="$(docker inspect -f '{{.NetworkSettings.Networks.bridge.Gateway}}' "$NAME")"
 [[ "$ROUTE" == *"via $BRIDGE_GW"* ]] || { echo "default bridge route changed: $ROUTE expected via $BRIDGE_GW" >&2; exit 1; }
-python3 "$ROOT/scripts/host-ingress/network-lifecycle.py" uninstall --config "$TMP/network.json" --firewall-config "$TMP/firewall.json"
+# Cleanup must still work if the firewall CIDR contract has since changed.
+python3 - "$TMP/firewall.json" <<'PY'
+import json, os, sys
+path=sys.argv[1]
+with open(path,encoding="utf-8") as f: data=json.load(f)
+data["client_cidrs"]=["192.168.51.0/24"]
+with open(path,"w",encoding="utf-8") as f: json.dump(data,f)
+os.chmod(path,0o600)
+PY
+python3 "$ROOT/scripts/host-ingress/network-lifecycle.py" uninstall --config "$TMP/network.json"
 docker inspect "$NAME" | python3 -c 'import json,sys; n=json.load(sys.stdin)[0]["NetworkSettings"]["Networks"]; assert "bridge" in n and "s5m-ingress-lifecycle-ci" not in n'
 echo "PASS: routed network lifecycle create/reconcile/uninstall preserves default bridge egress"
