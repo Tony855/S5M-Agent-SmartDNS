@@ -1,0 +1,20 @@
+name: SmartDNS DNS ingress source-IP lab
+
+on:
+  pull_request:
+    paths:
+      - "scripts/lab/smartdns-dns-ingress/**"
+      - ".github/workflows/smartdns-dns-ingress-lab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-source-ip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run isolated Docker source-IP experiment
+        run: bash scripts/lab/smartdns-dns-ingress/run.sh
