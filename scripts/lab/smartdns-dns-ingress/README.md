@@ -67,3 +67,51 @@ client only on the other listener, and an unmapped client must cause no SOCKS
 attempt on either listener. The observers deliberately reject the tunnel after
 recording the target; this proves SmartDNS's group-to-proxy selection without
 pretending to verify a real public proxy exit.
+
+
+## Physical LAN acceptance capture (target Docker host)
+
+The same-host network-namespace labs above are not physical LAN acceptance.
+For a target deployment host, use the read-only capture helper and run the
+client probe from an actual LAN device. The helper does not create networks,
+change routes, touch firewall rules, restart containers, or publish ports.
+
+On the Docker host (root required; `tcpdump`, `nsenter`, `timeout`, and
+Docker CLI required):
+
+```sh
+sudo bash scripts/lab/smartdns-dns-ingress/physical-lan-capture.sh s5m-agent eth0 90
+```
+
+Replace `eth0` with the physical LAN interface that receives client traffic.
+The script captures DNS ingress TCP/UDP port 6055 on that interface and inside
+the Agent container network namespace. Capture files are created under
+`/var/tmp` with directory mode 0700 and file mode 0600. The script is
+read-only with respect to Docker, routes, firewall and service state.
+
+On each physical client, run the probe directly against the Agent's routed
+container ingress address (not the router's DNS forwarder):
+
+```sh
+python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 172.31.0.10 example.com --transport udp --qtype A
+python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 172.31.0.10 example.com --transport tcp --qtype A
+python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 2001:db8:31::10 example.com --transport udp --qtype AAAA
+python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 2001:db8:31::10 example.com --transport tcp --qtype AAAA
+```
+
+The example addresses are documentation placeholders; replace them with the
+actual routed ingress addresses. Run the IPv6 probes only when IPv6 routing
+and an IPv6 ingress listener have been explicitly configured.
+
+For each client, record the probe's `SOURCE_ADDR`, the packet source seen on
+the host LAN capture, and the packet source seen inside the Agent namespace.
+The latter must equal the real client address. Repeat with at least two
+distinct client CIDRs, over UDP and TCP, and separately for IPv4 and IPv6.
+A router DNS forwarder/cache is not an equivalent test because SmartDNS may
+then see only the router address.
+
+This is capture tooling only: it cannot turn the host attestation's
+`source_ip_preserved` flag true, and a successful packet capture still does
+not prove firewall persistence, SmartDNS client-group selection, or real
+proxy CONNECT/public egress. Keep per-client mode fail-closed until the
+complete evidence chain has been reviewed.
