@@ -15,7 +15,9 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 mkdir -m 0700 "$TMP"
-docker run -d --name "$NAME" --network bridge alpine:3.24 sleep 3600 >/dev/null
+docker run -d --name "$NAME" --network bridge \
+  -p "127.0.0.1::6055/udp" -p "127.0.0.1::6055/tcp" \
+  alpine:3.24 sleep 3600 >/dev/null
 IFACE=docker0
 ip link show dev "$IFACE" >/dev/null
 cat >"$TMP/network.json" <<EOF

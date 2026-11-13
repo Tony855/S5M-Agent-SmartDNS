@@ -60,6 +60,15 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
 
 class NetworkSafetyTests(unittest.TestCase):
+    def test_dns_port_bindings_are_loopback_only(self):
+        cfg=self.write_config()
+        container={"NetworkSettings":{"Ports":{
+            "6055/udp":[{"HostIp":"127.0.0.1","HostPort":"32768"}],
+            "6055/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}]}}}
+        nl.validate_dns_port_bindings(container,cfg)
+        container["NetworkSettings"]["Ports"]["6055/udp"][0]["HostIp"]="0.0.0.0"
+        with self.assertRaises(nl.LifecycleError): nl.validate_dns_port_bindings(container,cfg)
+
     def test_host_next_hop_requires_global_address_for_each_family(self):
         cfg=self.write_config()
         fake={"stdout":json.dumps([{"addr_info":[

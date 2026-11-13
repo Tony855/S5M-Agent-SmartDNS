@@ -70,6 +70,9 @@ DNS_PORT="0"
 DATA_DIR="/opt/s5m-agent/data"
 RESTART_POLICY="unless-stopped"
 ENABLE_TUN="1"
+# Optional source-preserving routed DNS ingress. Disabled by default.
+ENABLE_PER_CLIENT_INGRESS="0"
+ENABLE_PER_CLIENT_INGRESS_IPV6="0"
 EXTRA_ENV_FILE=""
 PULL_IMAGE="1"
 CONFIG
@@ -96,6 +99,8 @@ DNS_PORT="${DNS_PORT:-0}"
 DATA_DIR="${DATA_DIR:-/opt/s5m-agent/data}"
 RESTART_POLICY="${RESTART_POLICY:-unless-stopped}"
 ENABLE_TUN="${ENABLE_TUN:-1}"
+ENABLE_PER_CLIENT_INGRESS="${ENABLE_PER_CLIENT_INGRESS:-0}"
+ENABLE_PER_CLIENT_INGRESS_IPV6="${ENABLE_PER_CLIENT_INGRESS_IPV6:-0}"
 EXTRA_ENV_FILE="${EXTRA_ENV_FILE:-}"
 PULL_IMAGE="${PULL_IMAGE:-1}"
 
@@ -116,6 +121,9 @@ fi
 [[ -n "$IMAGE" && -n "$CONTAINER_NAME" && -n "$DATA_DIR" ]] || die "IMAGE、CONTAINER_NAME、DATA_DIR 不能为空。"
 [[ "$CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || die "CONTAINER_NAME 格式不合法。"
 [[ "$ENABLE_TUN" == "0" || "$ENABLE_TUN" == "1" ]] || die "ENABLE_TUN 只能是 0 或 1。"
+[[ "$ENABLE_PER_CLIENT_INGRESS" == "0" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || die "ENABLE_PER_CLIENT_INGRESS 只能是 0 或 1。"
+[[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || die "ENABLE_PER_CLIENT_INGRESS_IPV6 只能是 0 或 1。"
+[[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || die "启用 IPv6 ingress 前必须启用 ENABLE_PER_CLIENT_INGRESS=1。"
 [[ "$PULL_IMAGE" == "0" || "$PULL_IMAGE" == "1" ]] || die "PULL_IMAGE 只能是 0 或 1。"
 [[ "$BIND_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "BIND_IP 格式不正确。"
 if (( WEB_PORT > 0 )); then
@@ -174,6 +182,19 @@ if (( DNS_PORT > 0 )); then
 fi
 if [[ "$ENABLE_TUN" == "1" ]]; then
   args+=(--cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun)
+fi
+if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+  # Docker routed bridge mode opens only published container ports. These
+  # IPv4 mappings use random host ports bound strictly to loopback; remote
+  # LAN clients reach the stable container IP directly via the routed bridge.
+  args+=(-p "127.0.0.1::6055/udp" -p "127.0.0.1::6055/tcp")
+  if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
+    bridge_ipv6="$(docker network inspect bridge --format '{{.EnableIPv6}}')"
+    [[ "$bridge_ipv6" == "false" ]] || die "默认 Docker bridge 已启用 IPv6 NAT，无法安全建立无宿主机端口的 IPv6 routed ingress；保持 ENABLE_PER_CLIENT_INGRESS_IPV6=0。"
+    # IPv6 routed mode consumes this mapping on the routed endpoint without
+    # allocating a host port when the default bridge has IPv6 disabled.
+    args+=(-p "[::]::6055/udp" -p "[::]::6055/tcp")
+  fi
 fi
 
 # A failed docker stop can still leave the container stopped (for example,
