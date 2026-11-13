@@ -19,4 +19,4 @@ jobs:
       - name: Run isolated Docker source-IP experiment
         run: |
           bash scripts/lab/smartdns-dns-ingress/run.sh
-          bash scripts/lab/smartdns-dns-ingress/run-routed.sh
+          sudo bash scripts/lab/smartdns-dns-ingress/run-routed.sh
