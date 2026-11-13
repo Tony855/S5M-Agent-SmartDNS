@@ -705,7 +705,11 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 			perClientConfig = configErr == nil
 		}
 		if configErr != nil {
-			appendSmartDNSStatusError(status, "SmartDNS 配置未通过当前运行模式校验: "+safeSmartDNSDiagnostic(configErr.Error()))
+			message := "SmartDNS 配置未通过加密上游策略校验: "
+			if hasPerClientSmartDNSDirectives(data) && hostIngressAttestationAvailable {
+				message = "SmartDNS 配置未通过当前运行模式校验: "
+			}
+			appendSmartDNSStatusError(status, message+safeSmartDNSDiagnostic(configErr.Error()))
 		} else {
 			configHealthy = true
 		}

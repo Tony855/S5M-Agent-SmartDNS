@@ -95,6 +95,10 @@ func TestCollectSmartDNSStatusUsesPerClientHealthWithoutDefaultResolverProbe(t *
 	}
 	info, err := os.Stat(os.Args[0])
 	if err != nil { t.Fatal(err) }
+	contract := smartDNSPerClientIngressContract{Version: 1, Ready: true, IPv4Address: "172.31.0.10", ClientCIDRs: []string{"192.168.50.10/32"}}
+	if !smartDNSFeatureSupported() { t.Fatal("SmartDNS feature should be present in this test build") }
+	if !hasPerClientSmartDNSDirectives([]byte(configText)) { t.Fatalf("per-client directives not detected: %s", configText) }
+	if err := validateSmartDNSConfigWithIngress([]byte(configText), contract); err != nil { t.Fatalf("per-client test fixture invalid: %v", err) }
 	sharedProbeCalled, perClientProbeCalled := false, false
 	collectSmartDNSStatusWithDependencies(status, smartDNSStatusDependencies{
 		enabled: func() bool { return true },
