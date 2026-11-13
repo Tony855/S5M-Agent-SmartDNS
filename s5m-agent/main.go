@@ -2349,8 +2349,19 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 	// heartbeat/config/command exchanges so DNS or route operations cannot stall
 	// the control-plane read/write cycle.
 	telemetryCtx, stopTelemetry := context.WithCancel(context.Background())
-	defer stopTelemetry()
-	go runAgentTelemetryPublisher(telemetryCtx, conn)
+	telemetryDone := make(chan struct{})
+	go func() {
+		defer close(telemetryDone)
+		runAgentTelemetryPublisher(telemetryCtx, conn)
+	}()
+	// The per-connection write lock must remain registered until every
+	// telemetry write has returned. Otherwise a reconnect teardown could
+	// delete the lock while a writer is waiting on it, allowing a second
+	// mutex to be created for the same live connection.
+	defer func() {
+		stopTelemetry()
+		<-telemetryDone
+	}()
 	go runAgentRouteRefreshLoop(telemetryCtx, cfg.CentralURL, heartbeatInterval)
 
 	for {
