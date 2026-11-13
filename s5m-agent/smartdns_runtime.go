@@ -1164,6 +1164,8 @@ func smartDNSResponseHasAnswer(message []byte, transactionID, qtype uint16) bool
 	flags := binary.BigEndian.Uint16(message[2:4])
 	questionCount := binary.BigEndian.Uint16(message[4:6])
 	answerCount := binary.BigEndian.Uint16(message[6:8])
+	authorityCount := binary.BigEndian.Uint16(message[8:10])
+	additionalCount := binary.BigEndian.Uint16(message[10:12])
 	if flags&0x8000 == 0 || flags&0x0200 != 0 ||
 		flags&0x7800 != 0 || flags&0x000f != 0 ||
 		questionCount != 1 || answerCount == 0 {
@@ -1199,9 +1201,37 @@ func smartDNSResponseHasAnswer(message []byte, transactionID, qtype uint16) bool
 		}
 		offset += rdataLength
 	}
-	// Do not accept a DNS response merely because an early answer matched:
-	// every answer RR declared by ANCOUNT must have a complete, valid envelope.
+	// Validate the remaining declared RR sections too. A matching answer must
+	// not mask a truncated Authority or Additional record (including EDNS OPT).
+	var sectionOK bool
+	offset, sectionOK = skipSmartDNSResourceRecords(message, offset, authorityCount)
+	if !sectionOK {
+		return false
+	}
+	offset, sectionOK = skipSmartDNSResourceRecords(message, offset, additionalCount)
+	if !sectionOK {
+		return false
+	}
 	return foundRequestedAnswer
+}
+
+// skipSmartDNSResourceRecords validates the generic RR envelope for a DNS
+// section. RDATA is opaque here; its declared length must still fit the packet.
+func skipSmartDNSResourceRecords(message []byte, offset int, count uint16) (int, bool) {
+	for i := 0; i < int(count); i++ {
+		var ok bool
+		offset, ok = skipSmartDNSName(message, offset)
+		if !ok || offset+10 > len(message) {
+			return 0, false
+		}
+		rdataLength := int(binary.BigEndian.Uint16(message[offset+8 : offset+10]))
+		offset += 10
+		if offset+rdataLength > len(message) {
+			return 0, false
+		}
+		offset += rdataLength
+	}
+	return offset, true
 }
 
 // skipSmartDNSName advances over a DNS name, including compressed names.

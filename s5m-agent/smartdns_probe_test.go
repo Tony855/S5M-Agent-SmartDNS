@@ -168,6 +168,33 @@ func TestSmartDNSResponseRejectsMalformedTrailingAnswerAfterMatchingRecord(t *te
 	}
 }
 
+func TestSmartDNSResponseRejectsMalformedAuthorityAndAdditionalRecords(t *testing.T) {
+	for _, section := range []struct {
+		name string
+		headerOffset int
+	}{
+		{name: "authority", headerOffset: 8},
+		{name: "additional", headerOffset: 10},
+	} {
+		t.Run(section.name, func(t *testing.T) {
+			message := make([]byte, 12)
+			binary.BigEndian.PutUint16(message[0:2], 0x534d)
+			binary.BigEndian.PutUint16(message[2:4], 0x8180)
+			binary.BigEndian.PutUint16(message[4:6], 1)
+			binary.BigEndian.PutUint16(message[6:8], 1)
+			binary.BigEndian.PutUint16(message[section.headerOffset:section.headerOffset+2], 1)
+			message = append(message, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+			message = append(message, 0, 1, 0, 1)
+			// A valid requested A answer, followed by a declared but truncated RR.
+			message = append(message, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+			message = append(message, 0xc0, 0x0c, 0, 2)
+			if smartDNSResponseHasAnswer(message, 0x534d, 1) {
+				t.Fatal("matching answer must not hide a malformed trailing resource record")
+			}
+		})
+	}
+}
+
 func TestSmartDNSResponseValidatesAllAnswersBeforeAcceptingMatch(t *testing.T) {
 	message := make([]byte, 12)
 	binary.BigEndian.PutUint16(message[0:2], 0x534d)
