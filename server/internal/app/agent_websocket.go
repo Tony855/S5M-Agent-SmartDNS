@@ -712,7 +712,7 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 	if len(config) > 8<<10 { return fmt.Errorf("SmartDNS 配置超过 Agent 允许的 8 KiB 限制") }
 	var ingressContract *SmartDNSAgentIngressContract
 	if enabled && perClient {
-		ingressContract, err = a.smartDNSIngressContractForMachine(machineCode)
+		ingressContract, err = a.smartDNSIngressProvisioningContractForMachine(machineCode)
 		if err != nil { return err }
 		if ingressContract == nil { return fmt.Errorf("per-client SmartDNS 启用缺少 ingress contract") }
 	}
