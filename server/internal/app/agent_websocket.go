@@ -743,7 +743,8 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
 		return fmt.Errorf("机器码格式无效")
 	}
-	if err := a.requireSmartDNSIngressReady(machineCode); err != nil {
+	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
+	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
@@ -753,7 +754,10 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if err != nil {
 		return err
 	}
-	command := map[string]string{"id": commandID, "type": "configure_smartdns", "config": config}
+	command := map[string]any{"id": commandID, "type": "configure_smartdns", "config": config}
+	if ingressContract != nil {
+		command["ingress_contract"] = ingressContract
+	}
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return fmt.Errorf("生成 SmartDNS 配置命令失败")
@@ -1214,7 +1218,8 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	}
 
 	// Keep config publication and explicit apply commands behind one identical per-client ingress gate.
-	if err := a.requireSmartDNSIngressReady(machineCode); err != nil {
+	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
+	if err != nil {
 		return err
 	}
 
@@ -1253,7 +1258,7 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	if err := a.store.UpdateSettings(map[string]string{"agent_lastseen_" + machineCode: strconv.FormatInt(time.Now().Unix(), 10)}); err != nil {
 		return err
 	}
-	if clientHash == hash && (smartDNSHash == "" || clientSmartDNSHash == smartDNSHash) {
+	if ingressContract == nil && clientHash == hash && (smartDNSHash == "" || clientSmartDNSHash == smartDNSHash) {
 		if err := writeAgentWSJSON(conn, machineCode, map[string]any{
 			"type": "config.unchanged", "id": requestID, "sha256": hash,
 			"smartdns_sha256": smartDNSHash,
@@ -1267,6 +1272,12 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	if smartDNSHash != "" {
 		payload["smartdns_sha256"] = smartDNSHash
 		payload["smartdns_yaml"] = smartDNSYAML
+	}
+	if ingressContract != nil {
+		if strings.TrimSpace(smartDNSYAML) == "" {
+			return fmt.Errorf("per-client ingress 已就绪，但缺少主控托管的 SmartDNS 配置；拒绝只发布 Mihomo 配置")
+		}
+		payload["ingress_contract"] = ingressContract
 	}
 	if err := writeAgentWSJSON(conn, machineCode, payload); err != nil {
 		return fmt.Errorf("发送配置失败: %w", err)
