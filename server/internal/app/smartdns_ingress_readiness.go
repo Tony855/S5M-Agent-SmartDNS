@@ -155,74 +155,36 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 }
 
 
-// requireSmartDNSIngressReady centralizes the production fail-closed gate so
-// both periodic config publication and direct SmartDNS apply commands enforce
-// the same per-client ingress contract.
-func (a *App) requireSmartDNSIngressReady(machineCode string) error {
+// smartDNSIngressContractForMachine returns a fresh, validated contract for
+// authenticated Agent publication. Shared mode intentionally returns nil.
+func (a *App) smartDNSIngressContractForMachine(machineCode string) (*SmartDNSAgentIngressContract, error) {
 	raw, err := a.store.GetSetting("smartdns_routing_config")
 	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("读取 SmartDNS 路由模式失败: %w", err)
+		return nil, fmt.Errorf("读取 SmartDNS 路由模式失败: %w", err)
 	}
 	if err == sql.ErrNoRows || strings.TrimSpace(raw) == "" {
-		return nil
+		return nil, nil
 	}
 	var routing SmartDNSRoutingConfig
 	if err := json.Unmarshal([]byte(raw), &routing); err != nil {
-		return fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+		return nil, fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 	}
 	if !strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
-		return nil
+		return nil, nil
 	}
 	settings, err := a.store.GetSettings()
 	if err != nil {
-		return fmt.Errorf("读取 Agent DNS ingress 就绪状态失败: %w", err)
+		return nil, fmt.Errorf("读取 Agent DNS ingress 就绪状态失败: %w", err)
 	}
-	if err := validateSmartDNSIngressReadiness(settings, machineCode, routing, time.Now()); err != nil {
-		return fmt.Errorf("Agent DNS ingress 尚未通过生产就绪校验，拒绝发布 per-client 配置: %w", err)
+	contract, err := buildSmartDNSAgentIngressContract(settings, machineCode, routing, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("Agent DNS ingress 尚未通过生产就绪校验，拒绝发布 per-client 配置: %w", err)
 	}
-	return nil
+	return &contract, nil
 }
 
-
-// SmartDNSAgentIngressContract is the minimal, versioned contract copied into
-// the authenticated Agent WebSocket config/command payload after the Master
-// validates the fresh host-backed readiness report.
-type SmartDNSAgentIngressContract struct {
-	Version int      `json:"version"`
-	Ready bool       `json:"ready"`
-	IPv4Address string `json:"ipv4_address,omitempty"`
-	IPv6Address string `json:"ipv6_address,omitempty"`
-	ClientCIDRs []string `json:"client_cidrs"`
-}
-
-func buildSmartDNSAgentIngressContract(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time) (SmartDNSAgentIngressContract, error) {
-	var contract SmartDNSAgentIngressContract
-	if err := validateSmartDNSIngressReadiness(settings, machineCode, routing, now); err != nil {
-		return contract, err
-	}
-	var status map[string]any
-	if err := json.Unmarshal([]byte(settings["agent_status_"+strings.TrimSpace(machineCode)]), &status); err != nil {
-		return contract, fmt.Errorf("解析 Agent DNS ingress 状态失败: %w", err)
-	}
-	contract.Version = smartDNSIngressReadinessContractVersion
-	contract.Ready = true
-	hasIPv4, hasIPv6 := false, false
-	for _, route := range routing.Clients {
-		prefix, err := netip.ParsePrefix(strings.TrimSpace(route.ClientCIDR))
-		if err != nil { return SmartDNSAgentIngressContract{}, fmt.Errorf("DNS ingress 映射 CIDR 无效") }
-		prefix = prefix.Masked()
-		contract.ClientCIDRs = append(contract.ClientCIDRs, prefix.String())
-		if prefix.Addr().Is4() { hasIPv4 = true } else { hasIPv6 = true }
-	}
-	if hasIPv4 {
-		value, ok := status["dns_ingress_ipv4_address"].(string)
-		if !ok || strings.TrimSpace(value) == "" { return SmartDNSAgentIngressContract{}, fmt.Errorf("Agent DNS ingress IPv4 地址缺失") }
-		contract.IPv4Address = strings.TrimSpace(value)
-	}
-	if hasIPv6 {
-		value, ok := status["dns_ingress_ipv6_address"].(string)
-		if !ok || strings.TrimSpace(value) == "" { return SmartDNSAgentIngressContract{}, fmt.Errorf("Agent DNS ingress IPv6 地址缺失") }
-		contract.IPv6Address = strings.TrimSpace(value)
-	}
-	return contract, nil
+// requireSmartDNSIngressReady is retained for callers that only need the gate.
+func (a *App) requireSmartDNSIngressReady(machineCode string) error {
+	_, err := a.smartDNSIngressContractForMachine(machineCode)
+	return err
 }
