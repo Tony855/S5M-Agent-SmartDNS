@@ -14,9 +14,11 @@ PROXY_A=s5m-smart-socks-a
 PROXY_B=s5m-smart-socks-b
 MIHOMO=s5m-mihomo-real-listener-lab
 LOG_DIR=""
+LIFECYCLE_DIR=""
 cleanup() {
   docker rm -f "$MIHOMO" "$PROXY_A" "$PROXY_B" "$SERVER" >/dev/null 2>&1 || true
   [[ -z "$LOG_DIR" ]] || rm -rf "$LOG_DIR"
+  [[ -z "$LIFECYCLE_DIR" ]] || rm -rf "$LIFECYCLE_DIR"
   docker network rm "$NET_IN" >/dev/null 2>&1 || true
   ip netns del "$NS_A" >/dev/null 2>&1 || true
   ip netns del "$NS_B" >/dev/null 2>&1 || true
@@ -43,21 +45,48 @@ for spec in "$NS_A 192.168.50.10 vsa" "$NS_B 192.168.50.20 vsb" "$NS_C 192.168.5
   ip -n "$ns" link set eth0 up
   ip -n "$ns" route add 172.31.0.0/24 via 192.168.50.1
 done
-docker network create --driver bridge --subnet 172.31.0.0/24 --gateway 172.31.0.1 \
-  --opt com.docker.network.bridge.gateway_mode_ipv4=routed \
-  --opt "com.docker.network.bridge.trusted_host_interfaces=$LAN_BR" \
-  --opt com.docker.network.bridge.name=br-s5m-real "$NET_IN" >/dev/null
-# Keep the ordinary Docker bridge as the default egress network. Attach the
-# routed LAN-ingress network before start so SmartDNS can bind its static IP
-# without changing the container's default route.
+# Keep the ordinary Docker bridge as the default egress network. Start a
+# harmless placeholder first, then use the production host helper to attach
+# the routed endpoint before SmartDNS binds its exact ingress address.
 docker create --name "$SERVER" --restart no --network bridge \
   -p 127.0.0.1::6055/udp -p 127.0.0.1::6055/tcp \
-  --cap-drop ALL --security-opt no-new-privileges:true s5m-smartdns-routed-lab >/dev/null
-docker network connect --ip 172.31.0.10 "$NET_IN" "$SERVER"
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --entrypoint /bin/sh s5m-smartdns-routed-lab -c 'sleep 3600' >/dev/null
 docker start "$SERVER" >/dev/null
+sleep 1
+LIFECYCLE_DIR="$(mktemp -d /run/s5m-smartdns-lifecycle.XXXXXX)"
+cat >"$LIFECYCLE_DIR/network.json" <<EOF
+{
+  "version": 1,
+  "network": "$NET_IN",
+  "container": "$SERVER",
+  "interface": "$LAN_BR",
+  "ipv4_subnet": "172.31.0.0/24",
+  "ipv4_gateway": "172.31.0.1",
+  "ipv4_address": "172.31.0.10",
+  "ipv6_subnet": null,
+  "ipv6_gateway": null,
+  "ipv6_address": null,
+  "client_cidrs": ["192.168.50.0/24"]
+}
+EOF
+cat >"$LIFECYCLE_DIR/firewall.json" <<EOF
+{
+  "version": 1,
+  "interface": "$LAN_BR",
+  "ipv4_address": "172.31.0.10",
+  "ipv6_address": null,
+  "client_cidrs": ["192.168.50.0/24"]
+}
+EOF
+chmod 0600 "$LIFECYCLE_DIR/network.json" "$LIFECYCLE_DIR/firewall.json"
+python3 "$ROOT/../../host-ingress/network-lifecycle.py" provision \
+  --config "$LIFECYCLE_DIR/network.json" --firewall-config "$LIFECYCLE_DIR/firewall.json"
+docker exec -d "$SERVER" /bin/sh -c '/usr/sbin/smartdns -f -c /etc/smartdns/smartdns.conf >/tmp/smartdns.log 2>&1'
 sleep 2
 state="$(docker inspect -f '{{.State.Status}}' "$SERVER")"
-if [[ "$state" != running ]]; then docker logs "$SERVER"; echo "SmartDNS daemon failed to start (state=$state)" >&2; exit 1; fi
+if [[ "$state" != running ]]; then docker logs "$SERVER"; echo "SmartDNS container failed to start (state=$state)" >&2; exit 1; fi
+docker exec "$SERVER" python3 -c 'import socket; s=socket.create_connection(("172.31.0.10",6055),timeout=2); s.close()' || { docker exec "$SERVER" cat /tmp/smartdns.log; echo "SmartDNS did not bind routed TCP ingress" >&2; exit 1; }
 networks="$(docker inspect -f '{{range $name, $net := .NetworkSettings.Networks}}{{$name}}={{$net.IPAddress}} {{end}}' "$SERVER")"
 [[ "$networks" == *"bridge="* && "$networks" == *"$NET_IN=172.31.0.10"* ]] || { echo "container is not attached to both default and routed networks: $networks" >&2; exit 1; }
 default_gateway="$(docker inspect -f '{{.NetworkSettings.Networks.bridge.Gateway}}' "$SERVER")"
