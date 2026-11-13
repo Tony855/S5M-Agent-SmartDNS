@@ -69,49 +69,73 @@ recording the target; this proves SmartDNS's group-to-proxy selection without
 pretending to verify a real public proxy exit.
 
 
-## Physical LAN acceptance capture (target Docker host)
+## Physical LAN source-IP acceptance
 
-The same-host network-namespace labs above are not physical LAN acceptance.
-For a target deployment host, use the read-only capture helper and run the
-client probe from an actual LAN device. The helper does not create networks,
-change routes, touch firewall rules, restart containers, or publish ports.
+The same-host labs do not prove physical LAN routing. The following two-stage
+acceptance proves that actual client packets traverse the host and reach the
+Agent network namespace with the original source address. It does not require
+SmartDNS to be listening yet, so it can be completed before enabling per-client
+mode.
 
-On the Docker host (root required; `tcpdump`, `nsenter`, `timeout`, and
-Docker CLI required):
+1. On the Docker host, start simultaneous captures (root required):
 
 ```sh
 sudo bash scripts/lab/smartdns-dns-ingress/physical-lan-capture.sh s5m-agent eth0 90
 ```
 
 Replace `eth0` with the physical LAN interface that receives client traffic.
-The script captures DNS ingress TCP/UDP port 6055 on that interface and inside
-the Agent container network namespace. Capture files are created under
-`/var/tmp` with directory mode 0700 and file mode 0600. The script is
-read-only with respect to Docker, routes, firewall and service state.
+The capture helper is read-only and captures both directions on port 6055 on
+the physical interface and inside the Agent namespace. Files are stored with
+directory mode 0700 and file mode 0600.
 
-On each physical client, run the probe directly against the Agent's routed
-container ingress address (not the router's DNS forwarder):
+2. On each physical client, send both UDP and TCP probes to its family-matched
+routed Agent ingress address. The probe sends a harmless UDP marker and a TCP
+connection attempt; a refused TCP connection is acceptable because the goal
+at this stage is to prove packet delivery, not resolver health.
+
+```sh
+python3 scripts/lab/smartdns-dns-ingress/physical-ingress-packet-probe.py 172.31.0.10 --result-file ./s5m-ingress-probes.jsonl
+```
+
+Run it from at least one actual client in every configured CIDR. For IPv6
+CIDRs, use the actual routed IPv6 ingress address. Copy the JSONL result file
+to the Docker host after the capture finishes.
+
+3. On the Docker host, verify the paired pcaps and create the root-owned
+physical evidence file:
+
+```sh
+sudo python3 scripts/lab/smartdns-dns-ingress/physical-ingress-verify.py \
+  --config /etc/s5m-agent-ingress/config.json \
+  --host-pcap /var/tmp/<capture-dir>/host-lan.pcap \
+  --container-pcap /var/tmp/<capture-dir>/container-ingress.pcap \
+  --probe-results ./s5m-ingress-probes.jsonl
+```
+
+The verifier requires each configured client CIDR to have both UDP and TCP
+probe tuples present in both captures, with identical source/destination
+addresses and source ports. It writes
+`/etc/s5m-agent-ingress/physical-evidence.json` atomically, root-owned mode
+0600, bound to the exact host config hash. Evidence expires after seven days
+and is invalidated by any config change. Re-run it after changing router
+routes, Docker networks, ingress addresses, or client CIDRs.
+
+The host controller consumes only this verifier-generated evidence. Without
+valid evidence, `source_ip_preserved`, `udp_ready`, and `tcp_ready` remain
+false. This proves routed packet delivery/source preservation only; it does
+not prove SmartDNS DNS answers or proxy egress.
+
+4. After per-client mode is enabled, run the DNS probe from every physical
+client for A/AAAA over UDP/TCP to verify actual resolver behavior:
 
 ```sh
 python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 172.31.0.10 example.com --transport udp --qtype A
-python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 172.31.0.10 example.com --transport tcp --qtype A
-python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 2001:db8:31::10 example.com --transport udp --qtype AAAA
-python3 scripts/lab/smartdns-dns-ingress/physical-client-probe.py 2001:db8:31::10 example.com --transport tcp --qtype AAAA
+python3 physical-client-probe.py 172.31.0.10 example.com --transport tcp --qtype A
+python3 physical-client-probe.py 172.31.0.10 example.com --transport udp --qtype AAAA
+python3 physical-client-probe.py 172.31.0.10 example.com --transport tcp --qtype AAAA
 ```
 
-The example addresses are documentation placeholders; replace them with the
-actual routed ingress addresses. Run the IPv6 probes only when IPv6 routing
-and an IPv6 ingress listener have been explicitly configured.
-
-For each client, record the probe's `SOURCE_ADDR`, the packet source seen on
-the host LAN capture, and the packet source seen inside the Agent namespace.
-The latter must equal the real client address. Repeat with at least two
-distinct client CIDRs, over UDP and TCP, and separately for IPv4 and IPv6.
-A router DNS forwarder/cache is not an equivalent test because SmartDNS may
-then see only the router address.
-
-This is capture tooling only: it cannot turn the host attestation's
-`source_ip_preserved` flag true, and a successful packet capture still does
-not prove firewall persistence, SmartDNS client-group selection, or real
-proxy CONNECT/public egress. Keep per-client mode fail-closed until the
-complete evidence chain has been reviewed.
+Repeat with the actual IPv6 ingress address and IPv6 client CIDRs. The
+physical DNS probe must return RCODE=0. Separately verify the selected proxy's
+real CONNECT and public egress IP; the local SOCKS observer lab is not proof
+of public proxy egress.

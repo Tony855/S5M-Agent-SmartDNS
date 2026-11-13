@@ -45,6 +45,32 @@ class ControllerTests(unittest.TestCase):
         link=self.path.with_name("link.json"); link.symlink_to(self.path)
         with self.assertRaises(mod.ConfigError): mod.load_config(link, require_root=False)
 
+    def test_physical_evidence_requires_matching_config_and_fresh_dual_transport_proof(self):
+        import hashlib
+        import ipaddress
+        cfg = {
+            "addresses": [ipaddress.ip_address("172.31.10.2")],
+            "networks": [ipaddress.ip_network("192.168.50.0/24")],
+        }
+        raw = b'{"version":1,"interface":"eth1"}\\n'
+        evidence = {
+            "version": 1, "verified_at": 1000,
+            "config_sha256": hashlib.sha256(raw).hexdigest(),
+            "client_cidrs": ["192.168.50.0/24"],
+            "ipv4_address": "172.31.10.2", "ipv6_address": None,
+            "coverage": [{"cidr": "192.168.50.0/24", "transports": ["tcp", "udp"]}],
+            "verified_client_sources": ["192.168.50.10"],
+            "source_ip_preserved": True, "udp_ready": True, "tcp_ready": True,
+            "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
+            "probe_results_sha256": "c" * 64,
+        }
+        self.assertTrue(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001))
+        stale = dict(evidence); stale["verified_at"] = 0
+        self.assertFalse(mod.physical_evidence_payload_valid(stale, raw, cfg, now=1001))
+        wrong = dict(evidence); wrong["config_sha256"] = "d" * 64
+        self.assertFalse(mod.physical_evidence_payload_valid(wrong, raw, cfg, now=1001))
+        incomplete = dict(evidence); incomplete["udp_ready"] = False
+        self.assertFalse(mod.physical_evidence_payload_valid(incomplete, raw, cfg, now=1001))
     def test_systemd_preserves_attestation_directory_after_oneshot_exit(self):
         unit = pathlib.Path(__file__).with_name("s5m-agent-ingress.service").read_text()
         self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)

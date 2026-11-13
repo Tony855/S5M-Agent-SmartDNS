@@ -51,11 +51,11 @@ Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/
 4. Agent 新心跳报告 listener ready 后，Master 才允许常规 per-client 配置发布。
 5. 任何 attestation 过期、CIDR 变化、接口/地址变化、firewall 失效或监听丢失均必须 fail closed。
 
-**注意：当前仓库已实现 Agent 对该文件的安全读取和状态合并，但受限 host controller、routed Docker lifecycle、nftables reconcile/rollback 和真实 LAN 源地址证明仍未完成。没有这些证据时文件缺失或字段为 false，per-client 必须保持禁用。**
+**注意：当前仓库已实现 Agent 对该文件的安全读取和状态合并，并新增受限 nftables host controller。`source_ip_preserved`、`udp_ready`、`tcp_ready` 只有在物理 LAN verifier 生成的 root-owned 证据文件与当前配置 SHA256 匹配且未超过 7 天时才会置 true。routed Docker lifecycle 和外部路由器静态路由仍未完成；没有真实 LAN 抓包证据时 per-client 必须保持禁用。**
 
 
 ## 受限宿主机防火墙控制器（新增）
 
 仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建 Docker network、不改宿主机路由，也不接触 Docker socket。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
 
-该组件当前只证明专属 nftables allowlist 已应用；attestation 仅在 systemd timer 同时 enabled/active 时报告 `firewall_persistent=true`；否则为 false。它始终报告 `udp_ready=false`、`tcp_ready=false`、`source_ip_preserved=false`。因此它不会单独通过 Master provisioning gate，更不会开启 per-client。真实 routed Docker lifecycle、外部路由和物理 LAN 源地址验收仍是独立阻断项。
+该组件只管理专属 nftables allowlist。`firewall_persistent` 取决于 systemd timer enabled/active；`udp_ready`、`tcp_ready`、`source_ip_preserved` 由七天有效期的物理验收证据驱动。它不会创建 routed Docker network 或配置外部路由器静态路由；这两项仍是独立阻断项。

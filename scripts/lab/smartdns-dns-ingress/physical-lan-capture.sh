@@ -34,7 +34,7 @@ HOST_PCAP="$OUT_DIR/host-lan.pcap"
 CONTAINER_PCAP="$OUT_DIR/container-ingress.pcap"
 HOST_LOG="$OUT_DIR/host-lan.txt"
 CONTAINER_LOG="$OUT_DIR/container-ingress.txt"
-FILTER='(udp dst port 6055) or (tcp dst port 6055)'
+FILTER='port 6055'
 HOST_PID=""
 CONTAINER_PID=""
 cleanup() {

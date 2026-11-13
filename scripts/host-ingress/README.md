@@ -32,9 +32,9 @@ The service validates the full nftables transaction before applying it, serializ
 
 ## Deliberate fail-closed boundary
 
-The generated attestation sets `firewall_ready=true` only after the owned allowlist table was applied. It sets `firewall_persistent=true` only when the systemd timer is both enabled and active; otherwise it remains false. It always sets `udp_ready=false`, `tcp_ready=false`, and `source_ip_preserved=false`. This component does not create/attach routed Docker networks, install router static routes, prove forwarding or socket reachability, or perform physical LAN source-IP capture. Therefore it cannot make the Master provisioning gate pass and cannot enable per-client SmartDNS by itself. Never edit the attestation manually to turn these flags on.
+The generated attestation sets `firewall_ready=true` only after the owned allowlist table was applied. It sets `firewall_persistent=true` only when the systemd timer is both enabled and active; otherwise it remains false. It sets `udp_ready`, `tcp_ready`, and `source_ip_preserved` true only when `/etc/s5m-agent-ingress/physical-evidence.json` is root-owned mode 0600, fresh (maximum age seven days), matches the exact config SHA256, and records paired physical host/Agent namespace captures for every configured client CIDR. Generate it only with `scripts/lab/smartdns-dns-ingress/physical-ingress-verify.py`; never edit it manually. This controller still does not create/attach routed Docker networks or install router static routes.
 
-A separate routed-network lifecycle and real LAN UDP/TCP capture/verification are still required. In particular, `source_ip_preserved=true` requires a real client on the configured LAN and matching client source addresses in the Agent network namespace capture; local Docker simulations are not sufficient.
+A separate routed-network lifecycle and external router static routes are still required. Physical evidence must come from actual LAN clients, with identical UDP/TCP source tuples observed on the host LAN interface and inside the Agent namespace; local Docker simulations are not sufficient. After enabling per-client mode, separately run the DNS A/AAAA UDP/TCP probe and real proxy CONNECT/public-egress acceptance.
 
 
 ## Uninstall
