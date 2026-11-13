@@ -70,17 +70,17 @@ Install the helper and provision after the Agent container is running:
 
 ```sh
 sudo install -o root -g root -m 0600 network.json /etc/s5m-agent-ingress/network.json
-sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision
+sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision --config /etc/s5m-agent-ingress/network.json --firewall-config /etc/s5m-agent-ingress/config.json
 ```
 
-It creates a labeled, dedicated bridge in routed gateway mode, restricts direct routing to the configured trusted host interface, attaches the Agent with fixed addresses and gateway priority `-1`, then checks that the normal Docker `bridge` network and its default IPv4 egress gateway remain in place. Docker CLI versions without `network connect --gw-priority` are rejected before any network mutation. If attach or post-attach checks fail, a newly attached interface and newly created network are rolled back. Existing same-name networks are never adopted unless their ownership label, subnets, gateways and routed-mode options match exactly.
+Before touching Docker, it verifies that the interface, ingress addresses and exact client CIDR set match the firewall controller config; mismatches fail closed. It creates a labeled, dedicated bridge in routed gateway mode, restricts direct routing to the configured trusted host interface, attaches the Agent with fixed addresses and gateway priority `-1`, then checks that the normal Docker `bridge` network and its default IPv4 egress gateway remain in place. Docker CLI versions without `network connect --gw-priority` are rejected before any network mutation. If attach or post-attach checks fail, a newly attached interface and newly created network are rolled back. Existing same-name networks are never adopted unless their ownership label, subnets, gateways and routed-mode options match exactly.
 
 Configure matching static routes on the upstream LAN router for each client subnet to the Docker host's LAN address. This helper deliberately does not SSH into or modify routers and does not install host routes. The physical LAN packet-capture verifier remains mandatory before the attestation can claim source preservation.
 
 To remove only the dedicated network, first stop the Agent or ensure no other containers are attached, then run:
 
 ```sh
-sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py uninstall
+sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py uninstall --config /etc/s5m-agent-ingress/network.json --firewall-config /etc/s5m-agent-ingress/config.json
 ```
 
 The helper refuses to remove a network not carrying its ownership label or one with unexpected attached containers. It does not touch the default Docker bridge.

@@ -28,6 +28,17 @@ class ConfigTests(unittest.TestCase):
         cfg=nl.read_config(self.write(valid_config()), require_root=False)
         self.assertEqual(set(cfg["_networks"]),{4,6})
 
+    def test_firewall_contract_must_match_exactly(self):
+        td=tempfile.TemporaryDirectory(); self.addCleanup(td.cleanup)
+        path=Path(td.name)/"firewall.json"
+        firewall={"version":1,"interface":"eth1","ipv4_address":"172.31.10.2","ipv6_address":"2001:db8:31::2","client_cidrs":["192.168.50.0/24","2001:db8:50::/64"]}
+        path.write_text(json.dumps(firewall)); os.chmod(path,0o600)
+        cfg=nl.read_config(self.write(valid_config()),require_root=False)
+        nl.validate_firewall_contract(cfg,path)
+        firewall["ipv4_address"]="172.31.10.99"
+        path.write_text(json.dumps(firewall)); os.chmod(path,0o600)
+        with self.assertRaises(nl.LifecycleError): nl.validate_firewall_contract(cfg,path)
+
     def test_unknown_key_rejected(self):
         cfg=valid_config(); cfg["extra"]=True
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg), require_root=False)

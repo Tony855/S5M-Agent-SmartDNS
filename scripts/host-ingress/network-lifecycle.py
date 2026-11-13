@@ -69,6 +69,25 @@ def run(args, *, check=True):
     if check and p.returncode: raise LifecycleError(f"command failed ({p.returncode}): {' '.join(args)}: {p.stderr.strip()}")
     return p
 
+def validate_firewall_contract(cfg: dict, path: Path) -> None:
+    if path.is_symlink(): raise LifecycleError("firewall config must not be a symlink")
+    st=path.lstat()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid!=0 or st.st_mode & 0o077 or st.st_size>16384:
+        raise LifecycleError("firewall config must be root-owned, regular, mode 0600 or stricter, and <=16 KiB")
+    raw=path.read_bytes()
+    try: fw=json.loads(raw)
+    except (UnicodeDecodeError,json.JSONDecodeError) as e: raise LifecycleError("firewall config must be valid UTF-8 JSON") from e
+    required={"version","interface","ipv4_address","ipv6_address","client_cidrs"}
+    if not isinstance(fw,dict) or set(fw)!=required or type(fw["version"]) is not int or fw["version"]!=1:
+        raise LifecycleError("firewall config schema/version mismatch")
+    expected4=str(cfg["_networks"][4][2])
+    expected6=str(cfg["_networks"][6][2]) if 6 in cfg["_networks"] else None
+    cidrs=sorted(str(net) for net,_,_ in cfg["_networks"].values() for net in [net])
+    if fw["interface"]!=cfg["interface"] or fw["ipv4_address"]!=expected4 or fw["ipv6_address"]!=expected6:
+        raise LifecycleError("firewall config interface/ingress addresses do not match routed Docker network config")
+    if not isinstance(fw["client_cidrs"],list) or sorted(fw["client_cidrs"])!=cidrs:
+        raise LifecycleError("firewall config client CIDRs do not exactly match routed Docker network config")
+
 def inspect_network(name):
     p=run(["docker","network","inspect",name],check=False)
     if p.returncode: return None
@@ -190,10 +209,11 @@ def uninstall(cfg):
     print(f"REMOVED managed ingress network {cfg['network']}")
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("action",choices=("provision","uninstall")); p.add_argument("--config",type=Path,default=Path("/etc/s5m-agent-ingress/network.json"))
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("action",choices=("provision","uninstall")); p.add_argument("--config",type=Path,default=Path("/etc/s5m-agent-ingress/network.json")); p.add_argument("--firewall-config",type=Path,default=Path("/etc/s5m-agent-ingress/config.json"))
     a=p.parse_args()
     if os.geteuid()!=0: raise LifecycleError("run on Docker host as root")
     cfg=read_config(a.config)
+    validate_firewall_contract(cfg,a.firewall_config)
     if a.action=="provision": provision(cfg)
     else: uninstall(cfg)
 
