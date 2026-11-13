@@ -91,13 +91,13 @@ func validateSmartDNSHostIngressAttestation(attestation smartDNSHostIngressAttes
 	}
 	if strings.TrimSpace(attestation.IPv4Address) != "" {
 		ip, err := netip.ParseAddr(strings.TrimSpace(attestation.IPv4Address))
-		if err != nil || !ip.Is4() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+		if err != nil || !ip.Is4() || ip.Zone() != "" || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
 			return fmt.Errorf("host ingress attestation IPv4 address is invalid")
 		}
 	}
 	if strings.TrimSpace(attestation.IPv6Address) != "" {
 		ip, err := netip.ParseAddr(strings.TrimSpace(attestation.IPv6Address))
-		if err != nil || !ip.Is6() || ip.Is4In6() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+		if err != nil || !ip.Is6() || ip.Zone() != "" || ip.Is4In6() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
 			return fmt.Errorf("host ingress attestation IPv6 address is invalid")
 		}
 	}
