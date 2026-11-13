@@ -20,6 +20,7 @@ jobs:
         run: |
           bash -n scripts/lab/smartdns-dns-ingress/physical-lan-capture.sh
           python3 -m py_compile scripts/lab/smartdns-dns-ingress/physical-client-probe.py
+          python3 -m unittest discover -s scripts/lab/smartdns-dns-ingress -p 'test_*.py'
           rm -rf scripts/lab/smartdns-dns-ingress/__pycache__
       - name: Run isolated Docker source-IP experiment
         run: |
