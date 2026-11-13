@@ -502,6 +502,7 @@ type agentWSMessage struct {
 	ID            string         `json:"id,omitempty"`
 	Status        map[string]any `json:"status,omitempty"`
 	ConfigHash    string         `json:"config_sha256,omitempty"`
+	SmartDNSHash  string         `json:"smartdns_config_sha256,omitempty"`
 	CommandStatus string         `json:"command_status,omitempty"`
 	Message       string         `json:"message,omitempty"`
 	Config        string         `json:"config,omitempty"`
@@ -1036,7 +1037,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			switch msg.Type {
 			case "config.request":
-				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash)
+				err = a.sendAgentWSConfig(conn, machineCode, msg.ID, msg.ConfigHash, msg.SmartDNSHash)
 			case "command.request":
 				err = a.sendAgentWSCommand(conn, machineCode, msg.ID)
 			case "command.ack":
@@ -1156,7 +1157,7 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // sendAgentWSConfig returns only the configuration assigned to the authenticated machine.
-func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, clientHash string) error {
+func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, clientHash, clientSmartDNSHash string) error {
 	nodeConfig, err := a.store.GetNodeConfig(machineCode)
 	if err != nil {
 		return err
@@ -1223,20 +1224,46 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	}
 	sum := sha256.Sum256([]byte(yml))
 	hash := hex.EncodeToString(sum[:])
+	// A controller-managed SmartDNS document participates in the same
+	// compare-and-sync decision as Mihomo. If no managed document exists,
+	// preserve the legacy Agent-local SmartDNS behavior.
+	smartDNSYAML, smartDNSErr := a.store.GetSetting("smartdns_config_" + machineCode)
+	if smartDNSErr != nil && smartDNSErr != sql.ErrNoRows {
+		return fmt.Errorf("读取主控端 SmartDNS 配置失败: %w", smartDNSErr)
+	}
+	if smartDNSErr == sql.ErrNoRows {
+		smartDNSYAML = ""
+	}
+	if len(smartDNSYAML) > 8<<10 {
+		return fmt.Errorf("主控端 SmartDNS 配置超过 8 KiB 限制")
+	}
+	smartDNSHash := ""
+	if strings.TrimSpace(smartDNSYAML) != "" {
+		smartSum := sha256.Sum256([]byte(smartDNSYAML))
+		smartDNSHash = hex.EncodeToString(smartSum[:])
+	}
 	if err := a.store.UpdateSettings(map[string]string{"agent_lastseen_" + machineCode: strconv.FormatInt(time.Now().Unix(), 10)}); err != nil {
 		return err
 	}
-	if clientHash == hash {
-		if err := writeAgentWSJSON(conn, machineCode, map[string]any{"type": "config.unchanged", "id": requestID, "sha256": hash}); err != nil {
+	if clientHash == hash && (smartDNSHash == "" || clientSmartDNSHash == smartDNSHash) {
+		if err := writeAgentWSJSON(conn, machineCode, map[string]any{
+			"type": "config.unchanged", "id": requestID, "sha256": hash,
+			"smartdns_sha256": smartDNSHash,
+		}); err != nil {
 			return fmt.Errorf("发送配置未变更确认失败: %w", err)
 		}
-		fmt.Printf("agent_ws: config unchanged machine_code=%q request_id=%q sha256=%s\n", machineCode, requestID, hash)
+		fmt.Printf("agent_ws: config unchanged machine_code=%q request_id=%q sha256=%s smartdns_sha256=%s\n", machineCode, requestID, hash, smartDNSHash)
 		return nil
 	}
-	if err := writeAgentWSJSON(conn, machineCode, map[string]any{"type": "config.sync", "id": requestID, "sha256": hash, "yaml": yml}); err != nil {
+	payload := map[string]any{"type": "config.sync", "id": requestID, "sha256": hash, "yaml": yml}
+	if smartDNSHash != "" {
+		payload["smartdns_sha256"] = smartDNSHash
+		payload["smartdns_yaml"] = smartDNSYAML
+	}
+	if err := writeAgentWSJSON(conn, machineCode, payload); err != nil {
 		return fmt.Errorf("发送配置失败: %w", err)
 	}
-	fmt.Printf("agent_ws: config delivered machine_code=%q request_id=%q bytes=%d sha256=%s\n", machineCode, requestID, len(yml), hash)
+	fmt.Printf("agent_ws: config delivered machine_code=%q request_id=%q bytes=%d sha256=%s smartdns_bytes=%d smartdns_sha256=%s\n", machineCode, requestID, len(yml), hash, len(smartDNSYAML), smartDNSHash)
 	return nil
 }
 
