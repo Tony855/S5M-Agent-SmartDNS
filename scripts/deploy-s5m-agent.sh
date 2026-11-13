@@ -278,6 +278,10 @@ validate_ingress_options() {
   [[ "$ENABLE_PER_CLIENT_INGRESS" == "0" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS 必须是 0 或 1"; return 1; }
   [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS_IPV6 必须是 0 或 1"; return 1; }
   [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || { err "启用 IPv6 ingress 前必须启用 IPv4 per-client ingress"; return 1; }
+  if [[ "$IMAGE" == "$NO_SMARTDNS_IMAGE" && "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    err "当前选择的是无 SmartDNS 镜像，不能启用 per-client DNS ingress"
+    return 1
+  fi
   local spec
   for spec in "${PORT_MAP[@]}"; do
     [[ "$spec" == "-p" ]] && continue
@@ -395,7 +399,9 @@ do_pull_no_smartdns() {
   fi
 
   IMAGE="${NO_SMARTDNS_IMAGE}"
-  log "已切换当前部署镜像为：${IMAGE}"
+  ENABLE_PER_CLIENT_INGRESS="0"
+  ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+  log "已切换当前部署镜像为：${IMAGE}；无 SmartDNS 镜像自动关闭 per-client DNS ingress"
   save_config
   warn "当前运行中的容器不会被更改；如需使用无 SmartDNS 镜像，请执行“2) 重新部署”"
   warn "重新部署会保留 ${DATA_DIR} 中的数据"
