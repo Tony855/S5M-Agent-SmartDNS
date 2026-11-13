@@ -26,3 +26,22 @@ correlate client IP, SmartDNS group, Mihomo proxy, and observed egress IP.
 Requirements: Linux Docker Engine, IPv4 bridge networking,
 and non-overlapping 172.30.10.0/24 and 172.30.20.0/24 networks. The lab never
 binds a public/wildcard host address and does not alter production containers.
+
+
+## Routed bridge direct-routing experiment
+
+Run the companion experiment:
+
+    bash scripts/lab/smartdns-dns-ingress/run-routed.sh
+
+It creates a target bridge in IPv4 routed gateway mode, disables masquerading
+on two client bridges, restricts trusted host interfaces to those client
+bridges, and routes directly to the target container IP without a host
+published-port NAT hop. The expected result is that the receiver observes each
+original client IP for UDP and TCP.
+
+This is a same-host routed Docker lab, not physical LAN acceptance. Production
+still requires an external LAN route to the container subnet, explicit trusted
+LAN interface, IPv6, firewall restrictions, and the actual Agent/SmartDNS/
+Mihomo egress chain. Docker Engine must support routed bridge gateway mode and
+trusted_host_interfaces.
