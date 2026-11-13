@@ -9,11 +9,13 @@ NET_IN=s5m-smartdns-real-ingress
 LAN_BR=br-s5m-lan
 NS_A=s5m-smart-client-a
 NS_B=s5m-smart-client-b
+NS_C=s5m-smart-client-c
 cleanup() {
   docker rm -f "$SERVER" >/dev/null 2>&1 || true
   docker network rm "$NET_IN" >/dev/null 2>&1 || true
   ip netns del "$NS_A" >/dev/null 2>&1 || true
   ip netns del "$NS_B" >/dev/null 2>&1 || true
+  ip netns del "$NS_C" >/dev/null 2>&1 || true
   ip link del "$LAN_BR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -24,7 +26,7 @@ ip link set "$LAN_BR" up
 if [[ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]]; then
   sysctl -w net.ipv4.ip_forward=1 >/dev/null
 fi
-for spec in "$NS_A 192.168.50.10 vsa" "$NS_B 192.168.50.20 vsb"; do
+for spec in "$NS_A 192.168.50.10 vsa" "$NS_B 192.168.50.20 vsb" "$NS_C 192.168.50.30 vsc"; do
   read -r ns address veth <<<"$spec"
   host_veth="${veth}-host"
   ip netns add "$ns"
@@ -49,6 +51,7 @@ if [[ "$state" != running ]]; then docker logs "$SERVER"; echo "SmartDNS daemon 
 for transport in udp tcp; do
   ip netns exec "$NS_A" python3 "$ROOT/client-query.py" probe-a.test 192.0.2.10 "$transport"
   ip netns exec "$NS_B" python3 "$ROOT/client-query.py" probe-b.test 192.0.2.20 "$transport"
+  ip netns exec "$NS_C" python3 "$ROOT/client-query.py" probe-a.test NONE "$transport"
 done
-echo "PASS: real SmartDNS daemon accepted generated proxy-server/server-tls/group-match directives and selected distinct CIDR groups over routed ingress for UDP and TCP."
+echo "PASS: real SmartDNS daemon accepted generated proxy-server/server-tls/group-match directives and selected distinct CIDR groups for mapped clients and returned no default-group answer to an unmapped client over UDP and TCP."
 echo "LIMIT: same-host IPv4 lab only; Agent validator/deployment, IPv6, Mihomo SOCKS and real proxy egress remain separate acceptance gates."
