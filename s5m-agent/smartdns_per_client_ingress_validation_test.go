@@ -95,3 +95,19 @@ func TestValidateSmartDNSConfigWithIngressRequiresExactNonOverlappingCIDRs(t *te
 		t.Fatal("overlapping CIDRs in readiness contract accepted")
 	}
 }
+
+func TestValidateSmartDNSConfigWithIngressRejectsDuplicateListenersAndReservedCIDRs(t *testing.T) {
+	config, contract := validPerClientIngressFixture()
+	duplicate := strings.Replace(string(config), "bind 172.31.0.10:6055\\n", "bind 172.31.0.10:6055\\nbind 172.31.0.10:6055\\n", 1)
+	if err := validateSmartDNSConfigWithIngress([]byte(duplicate), contract); err == nil {
+		t.Fatal("duplicate UDP ingress listener accepted")
+	}
+	for _, cidr := range []string{"0.0.0.0/0", "::/0", "::ffff:192.0.2.0/120"} {
+		contract.ClientCIDRs = []string{cidr}
+		contract.IPv4Address = "172.31.0.10"
+		contract.IPv6Address = ""
+		if err := validateSmartDNSConfigWithIngress(config, contract); err == nil {
+			t.Errorf("reserved/default/mapped CIDR accepted: %s", cidr)
+		}
+	}
+}
