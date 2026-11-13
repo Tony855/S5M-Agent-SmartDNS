@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,13 +26,10 @@ func readySmartDNSIngressSettings(now time.Time, cidrs ...string) map[string]str
 	}
 	raw, _ := json.Marshal(status)
 	return map[string]string{
-		"agent_lastseen_node-a": now.UnixStringForTest(),
+		"agent_lastseen_node-a": strconv.FormatInt(now.Unix(), 10),
 		"agent_status_node-a": string(raw),
 	}
 }
-
-func (t testUnixTime) UnixStringForTest() string { return fmt.Sprintf("%d", time.Time(t).Unix()) }
-type testUnixTime time.Time
 
 func TestValidateSmartDNSIngressReadinessRequiresCompleteFreshAttestation(t *testing.T) {
 	now := time.Unix(1794560000, 0)
