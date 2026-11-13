@@ -40,6 +40,10 @@ func readSmartDNSHostIngressAttestation() (smartDNSHostIngressAttestation, error
 }
 
 func readSmartDNSHostIngressAttestationFromPath(path string) (smartDNSHostIngressAttestation, error) {
+	return readSmartDNSHostIngressAttestationFromPathWithOwner(path, true)
+}
+
+func readSmartDNSHostIngressAttestationFromPathWithOwner(path string, requireRootOwner bool) (smartDNSHostIngressAttestation, error) {
 	var attestation smartDNSHostIngressAttestation
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil { return attestation, fmt.Errorf("open host ingress attestation: %w", err) }
@@ -54,7 +58,7 @@ func readSmartDNSHostIngressAttestationFromPath(path string) (smartDNSHostIngres
 	if info.Mode().Perm()&0022 != 0 {
 		return attestation, fmt.Errorf("host ingress attestation must not be group/world writable")
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Uid != 0 {
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || (requireRootOwner && stat.Uid != 0) {
 		return attestation, fmt.Errorf("host ingress attestation must be owned by root")
 	}
 	decoder := json.NewDecoder(io.LimitReader(file, 8<<10))
