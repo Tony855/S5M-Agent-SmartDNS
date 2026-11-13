@@ -40,12 +40,23 @@ docker network create --driver bridge --subnet 172.31.0.0/24 --gateway 172.31.0.
   --opt com.docker.network.bridge.gateway_mode_ipv4=routed \
   --opt "com.docker.network.bridge.trusted_host_interfaces=$LAN_BR" \
   --opt com.docker.network.bridge.name=br-s5m-real "$NET_IN" >/dev/null
-docker run -d --name "$SERVER" --restart no --network "$NET_IN" --ip 172.31.0.10 \
+# Keep the ordinary Docker bridge as the default egress network. Attach the
+# routed LAN-ingress network before start so SmartDNS can bind its static IP
+# without changing the container's default route.
+docker create --name "$SERVER" --restart no --network bridge \
   -p 127.0.0.1::6055/udp -p 127.0.0.1::6055/tcp \
   --cap-drop ALL --security-opt no-new-privileges:true s5m-smartdns-routed-lab >/dev/null
+docker network connect --ip 172.31.0.10 "$NET_IN" "$SERVER"
+docker start "$SERVER" >/dev/null
 sleep 2
 state="$(docker inspect -f '{{.State.Status}}' "$SERVER")"
 if [[ "$state" != running ]]; then docker logs "$SERVER"; echo "SmartDNS daemon failed to start (state=$state)" >&2; exit 1; fi
+networks="$(docker inspect -f '{{range $name, $net := .NetworkSettings.Networks}}{{$name}}={{$net.IPAddress}} {{end}}' "$SERVER")"
+[[ "$networks" == *"bridge="* && "$networks" == *"$NET_IN=172.31.0.10"* ]] || { echo "container is not attached to both default and routed networks: $networks" >&2; exit 1; }
+default_gateway="$(docker inspect -f '{{.NetworkSettings.Networks.bridge.Gateway}}' "$SERVER")"
+route="$(docker exec "$SERVER" ip route show default)"
+[[ "$route" == *"via $default_gateway"* ]] || { echo "default egress route changed after routed network attach: $route (expected gateway $default_gateway)" >&2; exit 1; }
+echo "PASS: container keeps default bridge egress route via $default_gateway while routed LAN ingress is attached at 172.31.0.10."
 for transport in udp tcp; do
   ip netns exec "$NS_A" python3 "$ROOT/client-query.py" probe-a.test 192.0.2.10 "$transport"
   ip netns exec "$NS_B" python3 "$ROOT/client-query.py" probe-b.test 192.0.2.20 "$transport"
