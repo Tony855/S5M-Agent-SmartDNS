@@ -287,7 +287,7 @@ func TestRecoverInterruptedConfigTransactionStopsSmartDNSWhenNoPriorConfigExiste
 
 	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("uncommitted-smartdns"))
 	record := configTransactionRecoveryRecord{
-		Version: 1, Phase: "prepared", SmartDNSUpdated: true,
+		Version: 1, Phase: "prepared",
 		SmartDNS: transactionRecoveryFile{Existed: false},
 		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
 		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
