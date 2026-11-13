@@ -53,12 +53,15 @@ func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMap
 		return ip, nil
 	}
 	var ipv4, ipv6 netip.Addr
+	ingressRequested := strings.TrimSpace(ingressIPv4) != "" || strings.TrimSpace(ingressIPv6) != ""
 	if hasIPv4 && strings.TrimSpace(ingressIPv4) != "" {
 		var err error
 		ipv4, err = validateIngress(ingressIPv4, true)
 		if err != nil { return "", err }
 	} else if !hasIPv4 && strings.TrimSpace(ingressIPv4) != "" {
 		return "", fmt.Errorf("没有 IPv4 客户端 CIDR，不能配置 IPv4 ingress 地址")
+	} else if hasIPv4 && ingressRequested {
+		return "", fmt.Errorf("存在 IPv4 客户端 CIDR，但缺少已验收的 IPv4 ingress 地址")
 	}
 	if hasIPv6 && strings.TrimSpace(ingressIPv6) != "" {
 		var err error
@@ -66,6 +69,8 @@ func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMap
 		if err != nil { return "", err }
 	} else if !hasIPv6 && strings.TrimSpace(ingressIPv6) != "" {
 		return "", fmt.Errorf("没有 IPv6 客户端 CIDR，不能配置 IPv6 ingress 地址")
+	} else if hasIPv6 && ingressRequested {
+		return "", fmt.Errorf("存在 IPv6 客户端 CIDR，但缺少已验收的 IPv6 ingress 地址")
 	}
 
 	var b strings.Builder
