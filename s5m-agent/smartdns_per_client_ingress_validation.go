@@ -46,6 +46,9 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			return fmt.Errorf("invalid client CIDR in ingress contract")
 		}
 		prefix = prefix.Masked()
+		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
+			return fmt.Errorf("client CIDR is too broad or uses a reserved address family")
+		}
 		cidr := prefix.String()
 		if cidrs[cidr] {
 			return fmt.Errorf("duplicate client CIDR in ingress contract: %s", cidr)
