@@ -99,7 +99,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if len(fields) < 2 && fields[0] != "group-end" {
 			return fmt.Errorf("line %d has invalid directive syntax", lineNo+1)
 		}
 
