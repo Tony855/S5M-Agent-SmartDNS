@@ -186,6 +186,8 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 				return fmt.Errorf("line %d: invalid group-end", lineNo+1)
 			}
 			activeGroup = ""
+		case "server-https", "server-quic":
+			return fmt.Errorf("line %d: per-client mode currently permits only pinned DoT upstreams", lineNo+1)
 		case "server-tls":
 			if activeGroup != "" {
 				return fmt.Errorf("line %d: server upstream cannot be nested inside a client match block", lineNo+1)
@@ -194,6 +196,9 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			groupCount, proxyCount, excludedCount := 0, 0, 0
 			for i := 2; i < len(fields); i++ {
 				switch fields[i] {
+				case "-host-name", "-tls-host-verify":
+					if i+1 >= len(fields) { return fmt.Errorf("line %d: missing TLS hostname option value", lineNo+1) }
+					i++
 				case "-group":
 					groupCount++
 					if i+1 >= len(fields) { return fmt.Errorf("line %d: missing upstream group", lineNo+1) }
@@ -207,7 +212,22 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 				case "-exclude-default-group":
 					excludedCount++
 					excluded = true
+				default:
+					return fmt.Errorf("line %d: unsupported per-client DoT option %q", lineNo+1, fields[i])
 				}
+			}
+			// The option scan above has already counted all security-sensitive
+			// flags; do not accept unknown SmartDNS upstream options here.
+
+			if group == "china-dot" {
+				if groupCount != 1 || proxyCount != 0 || excludedCount != 1 || !excluded {
+					return fmt.Errorf("line %d: china-dot upstream must use its fixed group, no proxy, and exclude the default group", lineNo+1)
+				}
+				if endpointErr := validateSmartDNSUpstreamEndpoint("server-tls", fields[1], fields[2:]); endpointErr != nil {
+					return fmt.Errorf("line %d: invalid china-dot encrypted upstream: %w", lineNo+1, endpointErr)
+				}
+				sharedConfig.WriteString(line + "\n")
+				continue
 			}
 			if groupCount != 1 || proxyCount != 1 || excludedCount != 1 || !excluded {
 				return fmt.Errorf("line %d: every per-client DoT upstream must be pinned to one group/proxy and exclude the default group", lineNo+1)

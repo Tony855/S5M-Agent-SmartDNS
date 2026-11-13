@@ -10,6 +10,9 @@ func validPerClientIngressFixture() ([]byte, smartDNSPerClientIngressContract) {
 	config := strings.Join([]string{
 		"bind 127.0.0.1:6053",
 		"bind-tcp 127.0.0.1:6053",
+		"bind 127.0.0.1:6054 -group china-dot",
+		"bind-tcp 127.0.0.1:6054 -group china-dot",
+		"server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group",
 		"bind 172.31.0.10:6055",
 		"bind-tcp 172.31.0.10:6055",
 		"proxy-server socks5://127.0.0.1:16000 -name s5m-smartdns-16000",
@@ -193,5 +196,19 @@ func TestSmartDNSIngressContractJSONSchema(t *testing.T) {
 	if err := json.Unmarshal(data, &roundTrip); err != nil { t.Fatal(err) }
 	if roundTrip.Version != want.Version || roundTrip.IPv4Address != want.IPv4Address || len(roundTrip.ClientCIDRs) != 1 || roundTrip.ClientCIDRs[0] != want.ClientCIDRs[0] {
 		t.Fatalf("contract JSON round trip mismatch: %#v", roundTrip)
+	}
+}
+
+func TestValidateSmartDNSConfigWithIngressRejectsDefaultDoHAndUnknownDoTOptions(t *testing.T) {
+	config, contract := validPerClientIngressFixture()
+	withDoH := string(config) + "\nserver-https https://1.1.1.1/dns-query -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com\n"
+	if err := validateSmartDNSConfigWithIngress([]byte(withDoH), contract); err == nil {
+		t.Fatal("ungrouped DoH upstream accepted in per-client mode")
+	}
+	withUnknownOption := strings.Replace(string(config),
+		"-proxy s5m-smartdns-16000 -exclude-default-group",
+		"-proxy s5m-smartdns-16000 -exclude-default-group -bootstrap-dns 1.1.1.1", 1)
+	if err := validateSmartDNSConfigWithIngress([]byte(withUnknownOption), contract); err == nil {
+		t.Fatal("unknown per-client DoT option accepted")
 	}
 }

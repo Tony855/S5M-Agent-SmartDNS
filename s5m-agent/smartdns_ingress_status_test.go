@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"os"
-	"strings"
 	"testing"
 	"time"
 )
@@ -86,8 +85,7 @@ func TestCollectSmartDNSStatusCombinesHostAttestationAndExactListenerObservation
 func TestCollectSmartDNSStatusUsesPerClientHealthWithoutDefaultResolverProbe(t *testing.T) {
 	status := map[string]any{}
 	config, _ := validPerClientIngressFixture()
-	configText := strings.Replace(string(config), "bind-tcp 127.0.0.1:6053\n",
-		"bind-tcp 127.0.0.1:6053\nbind 127.0.0.1:6054 -group china-dot\nbind-tcp 127.0.0.1:6054 -group china-dot\nserver-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group\n", 1)
+	configText := string(config)
 	attestation := smartDNSHostIngressAttestation{
 		Version: 1, UpdatedAt: time.Now().Unix(), Interface: "eno1", IPv4Address: "172.31.0.10",
 		ClientCIDRs: []string{"192.168.50.10/32"}, SourceIPPreserved: true,
