@@ -56,6 +56,16 @@ log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 
+prepare_ingress_attestation_dir() {
+  local path="/run/s5m-agent-ingress"
+  if [[ -L "$path" || ( -e "$path" && ! -d "$path" ) ]]; then
+    err "宿主机 ingress attestation 路径不安全：$path"
+    return 1
+  fi
+  install -d -o root -g root -m 0755 -- "$path" || return 1
+  [[ -d "$path" && ! -L "$path" ]] || { err "无法安全创建 ingress attestation 目录：$path"; return 1; }
+}
+
 validate_data_dir_path() {
   local path="${DATA_DIR}" current="" component
   local -a components=()
@@ -457,14 +467,12 @@ do_recreate() {
       rm -rf -- "${DATA_DIR}"
     fi
     install -d -m 0700 -- "${DATA_DIR}"
-    install -d -o root -g root -m 0755 -- /run/s5m-agent-ingress
   else
     warn "保留现有数据目录 ${DATA_DIR}"
     if ! install -d -m 0700 -- "${DATA_DIR}"; then
       err "无法创建数据目录，现有容器保持不变"
       return 1
     fi
-    install -d -o root -g root -m 0755 -- /run/s5m-agent-ingress
     if container_exists; then
       backup_container="${CONTAINER_NAME}-rollback-$(date +%s)-${BASHPID}"
       log "停止旧容器并保留回滚副本：${backup_container}"
@@ -487,6 +495,7 @@ do_recreate() {
     fi
   fi
 
+  prepare_ingress_attestation_dir || return 1
   log "启动新容器 ${CONTAINER_NAME}"
   if ! docker run -d \
       --name "${CONTAINER_NAME}" \
