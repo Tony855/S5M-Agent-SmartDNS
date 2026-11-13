@@ -247,6 +247,9 @@ jobs:
       - name: Test deployment rollback fault injection
         run: bash scripts/tests/deploy-rollback-faults.sh
 
+      - name: Test Agent DNS ingress fail-closed preflight
+        run: bash scripts/tests/deploy-agent-dns-ingress-guard.sh
+
       - name: Test RouterOS persistent-volume initialization security
         run: sh s5m-agent/routeros/tests/persistent-volume-init.sh
 
