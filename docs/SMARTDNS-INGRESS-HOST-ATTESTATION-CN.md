@@ -22,8 +22,8 @@ Agent 容器只读挂载到相同路径。文件必须满足：
   "updated_at": 1794560000,
   "interface": "eth1",
   "ipv4_address": "172.31.0.10",
-  "ipv6_address": "2001:db8:31::10",
-  "client_cidrs": ["192.168.50.0/24", "2001:db8:50::/64"],
+  "ipv6_address": null,
+  "client_cidrs": ["192.168.50.0/24"],
   "source_ip_preserved": false,
   "firewall_ready": true,
   "firewall_persistent": true,
@@ -32,7 +32,7 @@ Agent 容器只读挂载到相同路径。文件必须满足：
 }
 ```
 
-地址族可按实际客户端 CIDR 省略。CIDR 必须规范化、不可重复或重叠；拒绝默认路由、loopback、link-local、multicast、unspecified 和 IPv4-mapped IPv6。
+CIDR 必须规范化、不可重复或重叠；拒绝默认路由、loopback、link-local、multicast、unspecified 和 IPv4-mapped IPv6。**当前生产部署仅允许 IPv4 per-client ingress**：Docker 双网络 routed 模式的 IPv6 publish 实测仍分配非 loopback 宿主机端口，因此 Agent 部署脚本和 host network helper 对 IPv6 fail-closed。不要配置 IPv6 ingress CIDR，直到独立的无宿主机端口 IPv6 方案完成。
 
 ## 证明含义
 
@@ -56,6 +56,6 @@ Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/
 
 ## 受限宿主机防火墙控制器（新增）
 
-仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建/附加 Docker network、不分配容器地址、不改宿主机路由或默认 bridge egress，也不接触 Docker socket。routed Docker network、稳定双栈地址和外部路由器静态路由必须由独立 provisioning 生命周期完成，并在 host firewall 安装前确认。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
+仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建/附加 Docker network、不分配容器地址、不改宿主机路由或默认 bridge egress，也不接触 Docker socket。独立 network lifecycle helper 负责 IPv4 routed Docker network、稳定 ingress 地址和默认 bridge egress 保留，并输出上游路由器静态路由命令；IPv6 当前明确禁用。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
 
 该组件只管理专属 nftables allowlist。`firewall_persistent` 取决于 systemd timer enabled/active；`udp_ready`、`tcp_ready`、`source_ip_preserved` 由七天有效期的物理验收证据驱动。它不会创建 routed Docker network 或配置外部路由器静态路由；这两项仍是独立阻断项。
