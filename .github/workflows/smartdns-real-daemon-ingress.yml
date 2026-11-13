@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "scripts/lab/smartdns-dns-ingress/**"
+      - "docs/SMARTDNS-PER-CLIENT-DNS-INGRESS-ADR-CN.md"
       - "s5m-agent/Dockerfile.smartdns"
       - ".github/workflows/smartdns-real-daemon-ingress.yml"
   workflow_dispatch:

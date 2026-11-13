@@ -1916,3 +1916,41 @@ func TestHandleRestoreBackupKeepsDurablePreviousDatabase(t *testing.T) {
 		t.Fatalf("previous database backup lost old admin: user=%v error=%v", user, err)
 	}
 }
+
+func TestHandleUpdateSettingsRejectsPerClientUntilIngressRuntimeIsReady(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "settings-per-client-fail-closed.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.db.Close()
+
+	app := &App{store: store}
+	routing, err := json.Marshal(SmartDNSRoutingConfig{
+		Mode: SmartDNSProxyModePerClient, Strategy: SmartDNSStrategyFallback,
+		Clients: []SmartDNSClientRoute{{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal SmartDNS routing config: %v", err)
+	}
+	body, err := json.Marshal(map[string]string{"smartdns_routing_config": string(routing)})
+	if err != nil {
+		t.Fatalf("marshal settings request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	app.handleUpdateSettings(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "暂不允许启用") {
+		t.Fatalf("response must explain per-client mode is still gated: %s", rec.Body.String())
+	}
+	settings, err := store.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if _, exists := settings["smartdns_routing_config"]; exists {
+		t.Fatal("per-client mode must not be persisted while Agent ingress runtime is unavailable")
+	}
+}

@@ -44,6 +44,8 @@ error=None
 for _ in range(20):
     try:
         got=parse(exchange())
+        if EXPECTED=="NONE" and len(got)==0:
+            print(f"PASS {TRANSPORT} {NAME} returned no A answer for an unmapped client"); sys.exit(0)
         if got==[EXPECTED]:
             print(f"PASS {TRANSPORT} {NAME} -> {EXPECTED}"); sys.exit(0)
         error=f"unexpected answers {got!r}"

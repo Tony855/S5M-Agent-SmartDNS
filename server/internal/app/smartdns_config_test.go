@@ -27,13 +27,13 @@ func TestBuildSmartDNSPerClientConfigUsesExactLoopbackListenerMappings(t *testin
 		"dualstack-ip-selection-threshold 10",
 		"dualstack-ip-allow-force-AAAA yes",
 		"proxy-server socks5://127.0.0.1:16000 -name s5m-smartdns-16000",
-		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
-		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
-		"server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
-		"server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000",
-		"group-match -client-ip 192.168.10.0/24 -g s5m-smartdns-group-16000",
+		"server-tls 1.1.1.1:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000 -exclude-default-group",
+		"server-tls [2606:4700:4700::1111]:853 -host-name cloudflare-dns.com -tls-host-verify cloudflare-dns.com -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000 -exclude-default-group",
+		"server-tls 8.8.8.8:853 -host-name dns.google -tls-host-verify dns.google -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000 -exclude-default-group",
+		"server-tls [2001:4860:4860::8888]:853 -host-name dns.google -tls-host-verify dns.google -group s5m-smartdns-group-16000 -proxy s5m-smartdns-16000 -exclude-default-group",
+		"group-begin s5m-smartdns-group-16000\ngroup-match -client-ip 192.168.10.0/24\ngroup-end",
 		"proxy-server socks5://127.0.0.1:16001 -name s5m-smartdns-16001",
-		"group-match -client-ip 192.168.20.0/24 -g s5m-smartdns-group-16001",
+		"group-begin s5m-smartdns-group-16001\ngroup-match -client-ip 192.168.20.0/24\ngroup-end",
 		"No default upstream",
 		"cache-size 16384",
 		"prefetch-domain yes",
@@ -108,7 +108,7 @@ func TestBuildSmartDNSPerClientConfigSupportsIPv6ClientCIDR(t *testing.T) {
 	for _, want := range []string{
 		"bind [::1]:6053", "bind-tcp [::1]:6053",
 		"dualstack-ip-allow-force-AAAA yes",
-		"group-match -client-ip 2001:db8:1234::/64 -g s5m-smartdns-group-16010",
+		"group-begin s5m-smartdns-group-16010\ngroup-match -client-ip 2001:db8:1234::/64\ngroup-end",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated IPv6 config missing %q:\\n%s", want, got)
