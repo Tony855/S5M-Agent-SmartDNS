@@ -88,21 +88,21 @@ for transport in udp tcp; do
 
   a_before="$(log_count "$LOG_DIR/proxy-a.log")"
   b_before="$(log_count "$LOG_DIR/proxy-b.log")"
-  ip netns exec "$NS_A" python3 "$ROOT/client-probe.py" upstream-check.test "$transport"
+  ip netns exec "$NS_A" python3 "$ROOT/client-probe.py" example.com "$transport"
   wait_for_log_increase "$LOG_DIR/proxy-a.log" "$a_before" || { echo "client A did not use its named SOCKS listener" >&2; exit 1; }
   sleep 1
   [[ "$(log_count "$LOG_DIR/proxy-b.log")" == "$b_before" ]] || { echo "client A unexpectedly used client B SOCKS listener" >&2; exit 1; }
 
   a_before="$(log_count "$LOG_DIR/proxy-a.log")"
   b_before="$(log_count "$LOG_DIR/proxy-b.log")"
-  ip netns exec "$NS_B" python3 "$ROOT/client-probe.py" upstream-check.test "$transport"
+  ip netns exec "$NS_B" python3 "$ROOT/client-probe.py" example.com "$transport"
   wait_for_log_increase "$LOG_DIR/proxy-b.log" "$b_before" || { echo "client B did not use its named SOCKS listener" >&2; exit 1; }
   sleep 1
   [[ "$(log_count "$LOG_DIR/proxy-a.log")" == "$a_before" ]] || { echo "client B unexpectedly used client A SOCKS listener" >&2; exit 1; }
 
   a_before="$(log_count "$LOG_DIR/proxy-a.log")"
   b_before="$(log_count "$LOG_DIR/proxy-b.log")"
-  ip netns exec "$NS_C" python3 "$ROOT/client-probe.py" upstream-check.test "$transport"
+  ip netns exec "$NS_C" python3 "$ROOT/client-probe.py" example.com "$transport"
   sleep 1
   [[ "$(log_count "$LOG_DIR/proxy-a.log")" == "$a_before" && "$(log_count "$LOG_DIR/proxy-b.log")" == "$b_before" ]] || { echo "unmapped client unexpectedly reached a named SOCKS listener" >&2; exit 1; }
 done
