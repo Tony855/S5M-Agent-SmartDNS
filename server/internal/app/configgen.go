@@ -1058,7 +1058,7 @@ func (a *App) buildConfigForMachineWithSmartDNSOverrideAndPerClient(machineCode 
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
 		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) && !allowPerClient {
-			return "", fmt.Errorf("按客户端独立出口尚未通过 Agent ingress 合同发布，拒绝生成普通配置")
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时或通过 Agent ingress 合同发布，拒绝生成普通配置")
 		}
 		applySharedFallback = strings.TrimSpace(machineCode) != "" && !nodeSmartDNSDisabled && !noSmartDNSAgent
 	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
@@ -1073,7 +1073,7 @@ func (a *App) buildConfigForMachineWithSmartDNSOverrideAndPerClient(machineCode 
 			routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
 		}
 		if routing.Mode == SmartDNSProxyModePerClient && !allowPerClient {
-			return "", fmt.Errorf("按客户端独立出口尚未通过 Agent ingress 合同发布，拒绝生成普通配置")
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时或通过 Agent ingress 合同发布，拒绝生成普通配置")
 		}
 		refs := make([]SmartDNSProxyRef, 0, len(proxies))
 		for _, p := range proxies {
