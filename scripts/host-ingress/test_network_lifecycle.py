@@ -60,6 +60,19 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
 
 class NetworkSafetyTests(unittest.TestCase):
+    def test_host_next_hop_requires_global_address_for_each_family(self):
+        cfg=self.write_config()
+        fake={"stdout":json.dumps([{"addr_info":[
+            {"family":"inet","scope":"global","local":"192.168.50.2"},
+            {"family":"inet6","scope":"global","local":"2001:db8:50::2"},
+            {"family":"inet6","scope":"link","local":"fe80::1"}]}]),"returncode":0}
+        with patch.object(nl,"run",return_value=type("Result",(),fake)()):
+            self.assertEqual(nl.host_next_hops(cfg),{4:"192.168.50.2",6:"2001:db8:50::2"})
+        cfg["_networks"].pop(6)
+        fake["stdout"]=json.dumps([{"addr_info":[{"family":"inet","scope":"global","local":"192.168.50.2"}]}])
+        with patch.object(nl,"run",return_value=type("Result",(),fake)()):
+            self.assertEqual(nl.host_next_hops(cfg),{4:"192.168.50.2"})
+
     def test_single_default_route_must_use_bridge_gateway(self):
         self.assertTrue(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0"],"172.17.0.1"))
         self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0","default via 172.31.10.1 dev eth1"],"172.17.0.1"))

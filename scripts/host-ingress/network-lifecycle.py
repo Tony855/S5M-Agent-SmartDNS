@@ -162,6 +162,26 @@ def create_network(cfg):
     args += [cfg["network"]]
     run(args)
 
+def host_next_hops(cfg):
+    result=run(["ip","-j","addr","show","dev",cfg["interface"]])
+    try: devices=json.loads(result.stdout)
+    except json.JSONDecodeError as e: raise LifecycleError("cannot parse host interface addresses") from e
+    candidates={4:[],6:[]}
+    for device in devices:
+        for item in device.get("addr_info",[]):
+            if item.get("scope")!="global": continue
+            try: address=ipaddress.ip_address(item.get("local",""))
+            except ValueError: continue
+            if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast:
+                continue
+            candidates[address.version].append(str(address))
+    next_hops={}
+    for family in cfg["_networks"]:
+        if not candidates[family]:
+            raise LifecycleError(f"trusted ingress interface {cfg['interface']} has no global IPv{family} address for the upstream router static route")
+        next_hops[family]=candidates[family][0]
+    return next_hops
+
 def container_networks(name):
     p=run(["docker","inspect",name])
     try: return json.loads(p.stdout)[0]["NetworkSettings"]["Networks"]
@@ -179,6 +199,7 @@ def preserves_single_default_route(routes, gateway):
 def provision(cfg):
     if run(["ip","link","show","dev",cfg["interface"]],check=False).returncode:
         raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
+    next_hops=host_next_hops(cfg)
     help_result=run(["docker","network","connect","--help"],check=False)
     help_text=help_result.stdout + help_result.stderr
     if "--gw-priority" not in help_text:
@@ -240,7 +261,10 @@ def provision(cfg):
         if created: run(["docker","network","rm",cfg["network"]],check=False)
         raise
     print(f"ROUTED_INGRESS_READY network={cfg['network']} container={cfg['container']} default_bridge_egress=preserved")
-    print("External router static routes and physical LAN source-IP acceptance remain separate mandatory steps.")
+    for family,(subnet,_,_) in cfg["_networks"].items():
+        print(f"UPSTREAM_ROUTER_STATIC_ROUTE IPv{family}: route {subnet} via {next_hops[family]} on {cfg['interface']}")
+    print("Apply the displayed static routes on the upstream router; this helper does not change router or host routes.")
+    print("Physical LAN source-IP acceptance remains a separate mandatory step.")
 
 def uninstall(cfg):
     net=inspect_network(cfg["network"])
