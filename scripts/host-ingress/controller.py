@@ -76,9 +76,9 @@ def load_config(path: Path = CONFIG) -> dict:
     if len(set(networks)) != len(networks): raise ConfigError("duplicate client CIDR")
     for i, left in enumerate(networks):
         for right in networks[i+1:]:
-            if left.version == right.version and left.overlaps(right): raise ConfigError(overlapping client CIDRs)
+            if left.version == right.version and left.overlaps(right): raise ConfigError("overlapping client CIDRs")
     if {n.version for n in networks} - {a.version for a in addresses}:
-        raise ConfigError(the client CIDR family needs an address)
+        raise ConfigError("the client CIDR family needs an address")
     return {"interface": iface, "addresses": addresses, "networks": networks}
 
 def render_nft(cfg: dict) -> str:
@@ -91,13 +91,13 @@ def render_nft(cfg: dict) -> str:
             if nets:
                 set_text = ", ".join(str(n) for n in nets)
                 lines.append(f'    iifname "{iface}" {family} daddr {addr} {family} saddr {{ {set_text} }} {proto} dport 6055 accept')
-            lines.append(d'    iifname "{iface}" {family} daddr {addr} {proto} dport 6055 drop')
+            lines.append(f'    iifname "{iface}" {family} daddr {addr} {proto} dport 6055 drop')
     lines += ["  }", "}"]
     return "\n".join(lines) + "\n"
 
 def atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    if path.parent.is_symlink(): raise ConfigError(attestation directory cannot be a symlink)
+    if path.parent.is_symlink(): raise ConfigError("attestation directory cannot be a symlink")
     fd, tmp = tempfile.mkstemp(prefix=".ingress.", dir=path.parent)
     try:
         os.fchmod(fd, 0o600)
