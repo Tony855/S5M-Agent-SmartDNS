@@ -128,3 +128,131 @@ func TestValidateSmartDNSIngressReadinessRequiresExactFirewallCIDRSet(t *testing
 		})
 	}
 }
+
+
+func TestValidateSmartDNSIngressReadinessRejectsDefaultAndMappedCIDRs(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	for _, cidr := range []string{"0.0.0.0/0", "::/0", "::ffff:192.0.2.0/120"} {
+		t.Run(cidr, func(t *testing.T) {
+			routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+				{ClientCIDR: cidr, ProxyName: "proxy-a"},
+			}}
+			settings := readySmartDNSIngressSettings(now, cidr)
+			if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+				t.Fatalf("unsafe CIDR %s accepted by production readiness gate", cidr)
+			}
+		})
+	}
+}
+
+
+func TestValidateSmartDNSIngressReadinessRejectsLinkLocalAddresses(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv4_address"] = "169.254.10.1"
+	status["dns_ingress_smartdns_ipv4_bind_address"] = "169.254.10.1"
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("link-local ingress address accepted")
+	}
+}
+
+
+func TestValidateSmartDNSIngressReadinessRejectsNonRoutableClientCIDRs(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	for _, cidr := range []string{"127.0.0.0/8", "169.254.0.0/16", "fe80::/64", "::1/128"} {
+		t.Run(cidr, func(t *testing.T) {
+			routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+				{ClientCIDR: cidr, ProxyName: "proxy-a"},
+			}}
+			settings := readySmartDNSIngressSettings(now, cidr)
+			if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+				t.Fatalf("non-routable client CIDR %s accepted", cidr)
+			}
+		})
+	}
+}
+
+
+func TestBuildSmartDNSAgentIngressContractFromFreshReadiness(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-v4"},
+		{ClientCIDR: "2001:db8:50::/64", ProxyName: "proxy-v6"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24", "2001:db8:50::/64")
+	contract, err := buildSmartDNSAgentIngressContract(settings, "node-a", routing, now)
+	if err != nil { t.Fatalf("build ingress contract: %v", err) }
+	if contract.Version != 1 || !contract.Ready || contract.IPv4Address != "192.0.2.1" || contract.IPv6Address != "2001:db8::1" {
+		t.Fatalf("unexpected ingress contract: %#v", contract)
+	}
+	if len(contract.ClientCIDRs) != 2 || contract.ClientCIDRs[0] != "192.168.50.0/24" || contract.ClientCIDRs[1] != "2001:db8:50::/64" {
+		t.Fatalf("unexpected contract CIDR set: %#v", contract.ClientCIDRs)
+	}
+}
+
+func TestBuildSmartDNSAgentIngressContractRejectsStaleOrIncompleteStatus(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-v4"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	delete(settings, "agent_status_node-a")
+	if _, err := buildSmartDNSAgentIngressContract(settings, "node-a", routing, now); err == nil {
+		t.Fatal("contract builder accepted missing Agent readiness status")
+	}
+}
+
+
+func TestValidateSmartDNSIngressReadinessRejectsIPv4MappedIPv6Addresses(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv4_address"] = "::ffff:192.0.2.1"
+	status["dns_ingress_smartdns_ipv4_bind_address"] = "::ffff:192.0.2.1"
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("IPv4-mapped IPv6 ingress address accepted as IPv4")
+	}
+}
+
+
+func TestSmartDNSIngressProvisioningAllowsFirstBindButPublicationRequiresRuntimeReady(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ready"] = false
+	status["dns_ingress_smartdns_listener_ready"] = false
+	status["dns_ingress_smartdns_ipv4_bound"] = false
+	status["dns_ingress_smartdns_ipv4_bind_address"] = ""
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressProvisioning(settings, "node-a", routing, now); err != nil {
+		t.Fatalf("valid host-side provisioning state rejected before first SmartDNS bind: %v", err)
+	}
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("runtime publication gate accepted an Agent before SmartDNS ingress bind")
+	}
+	contract, err := buildSmartDNSAgentIngressProvisioningContract(settings, "node-a", routing, now)
+	if err != nil || !contract.Ready || contract.IPv4Address != "192.0.2.1" {
+		t.Fatalf("provisioning contract = %#v, err=%v", contract, err)
+	}
+}
