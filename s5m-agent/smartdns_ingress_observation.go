@@ -91,7 +91,7 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 }
 
 func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddresses map[string]bool, requireTCPListen bool) bool {
-	lines := strings.Split(string(data), "\\n")
+	lines := strings.Split(string(data), "\n")
 	for _, line := range lines[1:] {
 		fields := strings.Fields(line)
 		if len(fields) < 4 { continue }
