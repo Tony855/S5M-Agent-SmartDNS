@@ -12,7 +12,7 @@ func TestDecodeProcSocketAddress(t *testing.T) {
 		ipv6 bool
 		want string
 	}{
-		{name: "ipv4", raw: "0A02C000", want: "192.0.2.10"},
+		{name: "ipv4", raw: "0A0200C0", want: "192.0.2.10"},
 		{name: "ipv6", raw: "b80d0120000000000000000001000000", ipv6: true, want: "2001:db8::1"},
 	}
 	for _, tc := range cases {
@@ -26,7 +26,7 @@ func TestDecodeProcSocketAddress(t *testing.T) {
 
 func TestProcSocketTableObservesOnlyIngressPortAndCorrectTCPState(t *testing.T) {
 	addresses := map[string]bool{"192.0.2.10": true}
-	udp := []byte("sl local_address rem_address st tx_queue\n 0: 0A02C000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	udp := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
 	if !procSocketTableHasListener(udp, false, 6055, addresses, false) {
 		t.Fatal("UDP socket bound to an observed interface address should be detected")
 	}
@@ -34,11 +34,11 @@ func TestProcSocketTableObservesOnlyIngressPortAndCorrectTCPState(t *testing.T) 
 		t.Fatal("shared loopback port must not be mistaken for the dedicated ingress port")
 	}
 
-	tcpListen := []byte("sl local_address rem_address st tx_queue\n 0: 0A02C000:17A7 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n")
+	tcpListen := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n")
 	if !procSocketTableHasListener(tcpListen, false, 6055, addresses, true) {
 		t.Fatal("TCP LISTEN socket bound to an observed interface address should be detected")
 	}
-	tcpEstablished := []byte("sl local_address rem_address st tx_queue\n 0: 0A02C000:17A7 00000000:0000 01 00000000:00000000 00:00000000 00000000 1000 0 12347\n")
+	tcpEstablished := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 01 00000000:00000000 00:00000000 00000000 1000 0 12347\n")
 	if procSocketTableHasListener(tcpEstablished, false, 6055, addresses, true) {
 		t.Fatal("an established TCP socket must not be reported as a listener")
 	}
@@ -49,7 +49,7 @@ func TestProcSocketTableAcceptsWildcardBindButNotUnrelatedAddress(t *testing.T) 
 	if !procSocketTableHasListener(wildcard, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
 		t.Fatal("wildcard UDP bind should be visible on the interface")
 	}
-	other := []byte("sl local_address rem_address st tx_queue\n 0: 0B02C000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	other := []byte("sl local_address rem_address st tx_queue\n 0: 0B0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
 	if procSocketTableHasListener(other, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
 		t.Fatal("socket bound to an address not assigned to the Agent must not be attributed to ingress")
 	}
