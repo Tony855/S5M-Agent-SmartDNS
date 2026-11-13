@@ -1172,16 +1172,10 @@ func probeSmartDNSDNSAt(address string) bool {
 }
 
 func probeSmartDNSDNSAtType(address string, qtype uint16) bool {
-	return probeSmartDNSDNSAtTypeTransport(address, qtype, "udp")
-}
-
-func probeSmartDNSDNSAtTypeTCP(address string, qtype uint16) bool {
-	return probeSmartDNSDNSAtTypeTransport(address, qtype, "tcp")
-}
-
-func probeSmartDNSDNSAtTypeTransport(address string, qtype uint16, network string) bool {
-	conn, err := net.DialTimeout(network, address, 800*time.Millisecond)
-	if err != nil { return false }
+	conn, err := net.DialTimeout("udp", address, 800*time.Millisecond)
+	if err != nil {
+		return false
+	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(800 * time.Millisecond))
 	query := make([]byte, 12)
@@ -1193,26 +1187,16 @@ func probeSmartDNSDNSAtTypeTransport(address string, qtype uint16, network strin
 		query = append(query, label...)
 	}
 	query = append(query, 0, byte(qtype>>8), byte(qtype), 0, 1)
-	if network == "tcp" {
-		frame := make([]byte, 2+len(query))
-		binary.BigEndian.PutUint16(frame[:2], uint16(len(query)))
-		copy(frame[2:], query)
-		if _, err := io.Copy(conn, bytes.NewReader(frame)); err != nil { return false }
-		var size [2]byte
-		if _, err := io.ReadFull(conn, size[:]); err != nil { return false }
-		length := int(binary.BigEndian.Uint16(size[:]))
-		if length < 12 || length > 4096 { return false }
-		response := make([]byte, length)
-		if _, err := io.ReadFull(conn, response); err != nil { return false }
-		return smartDNSResponseHasAnswer(response, binary.BigEndian.Uint16(query[:2]), qtype)
+	if _, err := conn.Write(query); err != nil {
+		return false
 	}
-	if _, err := conn.Write(query); err != nil { return false }
 	response := make([]byte, 1500)
 	n, err := conn.Read(response)
-	if err != nil || n < 12 { return false }
+	if err != nil || n < 12 {
+		return false
+	}
 	return smartDNSResponseHasAnswer(response[:n], binary.BigEndian.Uint16(query[:2]), qtype)
 }
-
 
 // smartDNSResponseHasAnswer validates the DNS envelope and requires an actual
 // IN answer RR of the requested type. A CNAME-only response must not make an
