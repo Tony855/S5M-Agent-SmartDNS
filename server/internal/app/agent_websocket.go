@@ -747,6 +747,13 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if err != nil {
 		return err
 	}
+	if ingressContract != nil {
+		settings, settingsErr := a.store.GetSettings()
+		if settingsErr != nil { return settingsErr }
+		if strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false") {
+			return fmt.Errorf("该 Agent 已显式禁用 SmartDNS，不能直接应用 per-client 配置")
+		}
+	}
 	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
 		return fmt.Errorf("SmartDNS 配置不能为空且不能超过 8 KiB（Agent 安全限制）")
 	}
@@ -1168,6 +1175,13 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
 	if err != nil {
 		return err
+	}
+	if ingressContract != nil {
+		settings, settingsErr := a.store.GetSettings()
+		if settingsErr != nil { return settingsErr }
+		if strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false") {
+			return fmt.Errorf("该 Agent 已显式禁用 SmartDNS，拒绝发布 per-client 配置")
+		}
 	}
 	nodeConfig, err := a.store.GetNodeConfig(machineCode)
 	if err != nil {
