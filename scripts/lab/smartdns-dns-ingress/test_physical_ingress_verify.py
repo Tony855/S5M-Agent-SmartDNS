@@ -85,7 +85,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         packet={"src":key[0],"sport":key[1],"dst":key[2],"dport":key[3],"proto":"udp",
             "payload":b"S5M-INGRESS-PROBE:nonce","timestamp":10.0}
         VERIFY.correlate_probe_packets([packet],[dict(packet)],key,"udp",b"S5M-INGRESS-PROBE:nonce","sent",9,11)
-        altered=dict(packet); altered["payload"]=b"S5M-INGRESS-PROBE:other"
+        altered=dict(packet); altered["payload"]=b"S5M-INGRESS-PROBE:nonce-but-altered"
         with self.assertRaisesRegex(ValueError,"payload differs"):
             VERIFY.correlate_probe_packets([packet],[altered],key,"udp",b"S5M-INGRESS-PROBE:nonce","sent",9,11)
         late=dict(packet); late["timestamp"]=20
