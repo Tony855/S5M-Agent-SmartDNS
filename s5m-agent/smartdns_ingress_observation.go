@@ -15,6 +15,7 @@ type smartDNSIngressObservation struct {
 	Interfaces []string
 	IPv4       []string
 	IPv6       []string
+	AddressInterfaces map[string]string
 	UDP        bool
 	TCP        bool
 }
@@ -35,7 +36,7 @@ func defaultSmartDNSIngressObservationDependencies() smartDNSIngressObservationD
 // Agent network namespace. It intentionally does not attest host firewall
 // persistence, source-IP preservation, routed reachability, or proxy egress.
 func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependencies) (smartDNSIngressObservation, error) {
-	var observed smartDNSIngressObservation
+	observed := smartDNSIngressObservation{AddressInterfaces: make(map[string]string)}
 	if deps.interfaces == nil || deps.readFile == nil {
 		return observed, fmt.Errorf("ingress observation dependencies are unavailable")
 	}
@@ -60,6 +61,7 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 			}
 			value := ip.String()
 			addressSet[value] = true
+			observed.AddressInterfaces[value] = iface.Name
 			ifaceAddresses = append(ifaceAddresses, value)
 			if ip.To4() != nil {
 				observed.IPv4 = append(observed.IPv4, value)
