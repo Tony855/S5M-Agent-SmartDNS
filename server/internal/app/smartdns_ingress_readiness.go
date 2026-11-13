@@ -136,7 +136,7 @@ func validateSmartDNSIngressState(settings map[string]string, machineCode string
 			return fmt.Errorf("Agent DNS ingress 地址缺失: %s", key)
 		}
 		ip, err := netip.ParseAddr(strings.TrimSpace(value))
-		if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (wantIPv4 && !ip.Is4()) || (!wantIPv4 && !ip.Is6()) {
+		if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (wantIPv4 && !ip.Is4()) || (!wantIPv4 && !ip.Is6()) {
 			return fmt.Errorf("Agent DNS ingress 地址无效: %s", key)
 		}
 		return nil
