@@ -25,8 +25,6 @@ type smartDNSPerClientIngressContract struct {
 
 type smartDNSPerClientGroup struct {
 	cidr       string
-	proxyName  string
-	upstreams  int
 }
 
 func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIngressContract) error {
@@ -88,7 +86,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	var sharedConfig strings.Builder
-	ingressUDP, ingressTCP := map[string]bool{}, map[string]bool{}
+	ingressUDP, ingressTCP := map[string]int{}, map[string]int{}
 	proxies := make(map[string]int)
 	groups := make(map[string]*smartDNSPerClientGroup)
 	var activeGroup string
@@ -120,9 +118,9 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 					return fmt.Errorf("line %d: ingress bind is not an attested address", lineNo+1)
 				}
 				if fields[0] == "bind" {
-					ingressUDP[ip.String()] = true
+					ingressUDP[ip.String()]++
 				} else {
-					ingressTCP[ip.String()] = true
+					ingressTCP[ip.String()]++
 				}
 				continue
 			}
@@ -224,7 +222,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 		return fmt.Errorf("unterminated per-client group")
 	}
 	for address := range ingressAddresses {
-		if !ingressUDP[address] || !ingressTCP[address] {
+		if ingressUDP[address] != 1 || ingressTCP[address] != 1 {
 			return fmt.Errorf("ingress address %s must have both UDP and TCP listeners", address)
 		}
 	}
