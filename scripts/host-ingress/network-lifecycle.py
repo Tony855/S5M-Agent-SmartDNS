@@ -66,8 +66,8 @@ def read_config(path: Path, *, require_root: bool = True) -> dict:
             raise LifecycleError(f"{suffix} family/range mismatch")
         if any(x.is_unspecified or x.is_loopback or x.is_link_local or x.is_multicast for x in (gw,addr)):
             raise LifecycleError(f"{suffix} gateway/address must be routable unicast")
-        if gw == addr or addr == net.network_address or (family == 4 and addr == net.broadcast_address):
-            raise LifecycleError(f"{suffix} address conflicts with gateway/network boundary")
+        if gw == addr or gw == net.network_address or addr == net.network_address or (family == 4 and (gw == net.broadcast_address or addr == net.broadcast_address)):
+            raise LifecycleError(f"{suffix} gateway/address conflicts with network boundary")
         if family == 4 and net.prefixlen > 30:
             raise LifecycleError("IPv4 Docker bridge subnet must be /30 or larger")
         if family == 6 and net.prefixlen > 120:
