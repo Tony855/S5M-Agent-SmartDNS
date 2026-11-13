@@ -173,7 +173,7 @@ ports_display() {
   done
   if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
     out+=("127.0.0.1::6055/udp" "127.0.0.1::6055/tcp")
-    [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" ]] || out+=("[::]::6055/udp" "[::]::6055/tcp")
+    :
   fi
   if [[ ${#out[@]} -eq 0 ]]; then
     echo "（无）"
@@ -277,7 +277,7 @@ save_config() {
 validate_ingress_options() {
   [[ "$ENABLE_PER_CLIENT_INGRESS" == "0" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS 必须是 0 或 1"; return 1; }
   [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS_IPV6 必须是 0 或 1"; return 1; }
-  [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || { err "启用 IPv6 ingress 前必须启用 IPv4 per-client ingress"; return 1; }
+  [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" ]] || { err "IPv6 per-client ingress 当前被安全策略禁用：Docker routed 双网络会分配 IPv6 宿主机端口，存在公网暴露风险"; return 1; }
   if [[ "$IMAGE" == "$NO_SMARTDNS_IMAGE" && "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
     err "当前选择的是无 SmartDNS 镜像，不能启用 per-client DNS ingress"
     return 1
@@ -295,11 +295,8 @@ validate_ingress_options() {
     ingress_help="$(docker network connect --help 2>&1)" || true
     [[ "$ingress_help" == *"--gw-priority"* ]] || { err "当前 Docker CLI 不支持 network connect --gw-priority"; return 1; }
   fi
-  if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
-    local bridge_ipv6
-    bridge_ipv6="$(docker network inspect bridge --format '{{.EnableIPv6}}')" || { err "无法检查默认 Docker bridge IPv6 状态"; return 1; }
-    [[ "$bridge_ipv6" == "false" ]] || { err "默认 Docker bridge 已启用 IPv6 NAT，拒绝创建可能公开的 IPv6 DNS host port"; return 1; }
-  fi
+  # IPv6 DNS publication remains disabled until a no-host-port routed
+  # mapping is proven across Docker bridge gateway modes.
 }
 
 validate_ingress_port_publication() {
@@ -571,9 +568,8 @@ do_recreate() {
   local -a effective_port_map=("${PORT_MAP[@]}")
   if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
     effective_port_map+=("-p" "127.0.0.1::6055/udp" "-p" "127.0.0.1::6055/tcp")
-    if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
-      effective_port_map+=("-p" "[::]::6055/udp" "-p" "[::]::6055/tcp")
-    fi
+    # IPv6 publication is intentionally omitted until a safe routed-only
+    # mapping can be proven without allocating a public host port.
   fi
 
   log "启动新容器 ${CONTAINER_NAME}"
@@ -778,16 +774,8 @@ toggle_per_client_ingress() {
   read -rp "启用 per-client routed DNS ingress？[y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
     ENABLE_PER_CLIENT_INGRESS="1"
-    read -rp "同时启用 IPv6 ingress？默认 n [y/N]: " v6
-    if [[ "$v6" =~ ^[Yy]$ ]]; then
-      ENABLE_PER_CLIENT_INGRESS_IPV6="1"
-      if ! validate_ingress_options; then
-        ENABLE_PER_CLIENT_INGRESS_IPV6="0"
-        warn "IPv6 ingress 暂不启用；已保留 IPv4 ingress 选项"
-      fi
-    else
-      ENABLE_PER_CLIENT_INGRESS_IPV6="0"
-    fi
+    ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+    warn "IPv6 per-client ingress 当前不可安全发布；本次仅启用 IPv4 ingress"
     if ! validate_ingress_options; then
       ENABLE_PER_CLIENT_INGRESS="0"
       ENABLE_PER_CLIENT_INGRESS_IPV6="0"

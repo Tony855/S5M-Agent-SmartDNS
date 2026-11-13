@@ -7,9 +7,8 @@ command -v ip >/dev/null
 NAME=s5m-ingress-lifecycle-ci
 NETWORK=s5m-ingress-lifecycle-ci
 TMP="$(mktemp -d /run/s5m-ingress-lifecycle.XXXXXX)"
-IPV6_NAME=s5m-ingress-ipv6-port-ci
 cleanup() {
-  docker rm -f "$NAME" "$IPV6_NAME" >/dev/null 2>&1 || true
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
@@ -67,24 +66,4 @@ python3 "$ROOT/scripts/host-ingress/network-lifecycle.py" uninstall --config "$T
 docker inspect "$NAME" | python3 -c 'import json,sys; n=json.load(sys.stdin)[0]["NetworkSettings"]["Networks"]; assert "bridge" in n and "s5m-ingress-lifecycle-ci" not in n'
 echo "PASS: routed network lifecycle create/reconcile/uninstall preserves default bridge egress"
 
-# Verify the optional IPv6 publish syntax cannot allocate a public host port
-# when the default bridge has IPv6 disabled. If Docker allocates one, the
-# deployment script's post-create guard will reject IPv6 ingress.
-bridge_ipv6="$(docker network inspect bridge --format '{{.EnableIPv6}}')"
-if [[ "$bridge_ipv6" == "false" ]]; then
-  docker run -d --name "$IPV6_NAME" --network bridge \
-    -p "127.0.0.1::6055/udp" -p "127.0.0.1::6055/tcp" \
-    -p "[::]::6055/udp" -p "[::]::6055/tcp" alpine:3.24 sleep 3600 >/dev/null
-  docker inspect "$IPV6_NAME" | python3 -c '
-import json,sys
-ports=(json.load(sys.stdin)[0].get("NetworkSettings",{}).get("Ports") or {})
-for proto in ("udp","tcp"):
-    entries=ports.get(f"6055/{proto}") or []
-    v4=[x for x in entries if x.get("HostIp")=="127.0.0.1" and str(x.get("HostPort","")).isdigit()]
-    v6=[x for x in entries if x.get("HostIp")=="::" and x.get("HostPort","") in ("",None)]
-    assert len(v4)==1 and len(v6)==1 and len(entries)==2, (proto,entries)
-print("PASS: IPv6 routed DNS mapping has no host port; IPv4 host mapping is loopback-only")
-'
-else
-  echo "SKIP: default bridge IPv6 is enabled; IPv6 routed ingress is intentionally blocked by deployment preflight"
-fi
+echo "SKIP: IPv6 per-client ingress is explicitly fail-closed; Docker dual-network IPv6 host-port allocation was observed and is not considered safe."

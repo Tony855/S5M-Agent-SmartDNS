@@ -123,7 +123,7 @@ fi
 [[ "$ENABLE_TUN" == "0" || "$ENABLE_TUN" == "1" ]] || die "ENABLE_TUN 只能是 0 或 1。"
 [[ "$ENABLE_PER_CLIENT_INGRESS" == "0" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || die "ENABLE_PER_CLIENT_INGRESS 只能是 0 或 1。"
 [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || die "ENABLE_PER_CLIENT_INGRESS_IPV6 只能是 0 或 1。"
-[[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || die "启用 IPv6 ingress 前必须启用 ENABLE_PER_CLIENT_INGRESS=1。"
+[[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" ]] || die "IPv6 per-client ingress 当前被安全策略禁用：Docker routed 双网络会分配 IPv6 宿主机端口，存在公网暴露风险。"
 if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
   ingress_help="$(docker network connect --help 2>&1)"
   [[ "$ingress_help" == *"--gw-priority"* ]] || die "当前 Docker CLI 不支持 network connect --gw-priority，拒绝启用 routed ingress。"
@@ -192,13 +192,8 @@ if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
   # IPv4 mappings use random host ports bound strictly to loopback; remote
   # LAN clients reach the stable container IP directly via the routed bridge.
   args+=(-p "127.0.0.1::6055/udp" -p "127.0.0.1::6055/tcp")
-  if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
-    bridge_ipv6="$(docker network inspect bridge --format '{{.EnableIPv6}}')"
-    [[ "$bridge_ipv6" == "false" ]] || die "默认 Docker bridge 已启用 IPv6 NAT，无法安全建立无宿主机端口的 IPv6 routed ingress；保持 ENABLE_PER_CLIENT_INGRESS_IPV6=0。"
-    # IPv6 routed mode consumes this mapping on the routed endpoint without
-    # allocating a host port when the default bridge has IPv6 disabled.
-    args+=(-p "[::]::6055/udp" -p "[::]::6055/tcp")
-  fi
+  # IPv6 routed publication is deliberately not emitted until Docker can
+  # prove a routed-only IPv6 mapping without allocating any host port.
 fi
 
 # A failed docker stop can still leave the container stopped (for example,

@@ -223,6 +223,8 @@ def preserves_single_default_route(routes, gateway):
     return len(entries)==1 and f"via {gateway}" in entries[0]
 
 def provision(cfg):
+    if 6 in cfg["_networks"]:
+        raise LifecycleError("IPv6 per-client ingress is disabled: Docker dual-network routed publication allocated a non-loopback IPv6 host port in validation; use IPv4-only ingress until a no-host-port IPv6 path is implemented")
     if run(["ip","link","show","dev",cfg["interface"]],check=False).returncode:
         raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
     next_hops=host_next_hops(cfg)
