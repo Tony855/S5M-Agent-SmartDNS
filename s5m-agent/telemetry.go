@@ -248,6 +248,11 @@ func forgetAgentWSWriteLock(conn *websocket.Conn) {
 	agentWSWriteLocks.Delete(conn)
 }
 
+func stopAndWaitAgentTelemetryPublisher(stop context.CancelFunc, done <-chan struct{}) {
+	stop()
+	<-done
+}
+
 // A Gorilla WebSocket connection cannot be safely reused after a write error.
 // Closing it wakes the session's reader so the normal reconnect loop can
 // establish a fresh authenticated session instead of leaving heartbeats alive
