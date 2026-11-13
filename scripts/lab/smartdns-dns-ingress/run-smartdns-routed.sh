@@ -10,8 +10,12 @@ LAN_BR=br-s5m-lan
 NS_A=s5m-smart-client-a
 NS_B=s5m-smart-client-b
 NS_C=s5m-smart-client-c
+PROXY_A=s5m-smart-socks-a
+PROXY_B=s5m-smart-socks-b
+LOG_DIR=""
 cleanup() {
-  docker rm -f "$SERVER" >/dev/null 2>&1 || true
+  docker rm -f "$PROXY_A" "$PROXY_B" "$SERVER" >/dev/null 2>&1 || true
+  [[ -z "$LOG_DIR" ]] || rm -rf "$LOG_DIR"
   docker network rm "$NET_IN" >/dev/null 2>&1 || true
   ip netns del "$NS_A" >/dev/null 2>&1 || true
   ip netns del "$NS_B" >/dev/null 2>&1 || true
@@ -59,10 +63,48 @@ default_gateway="$(docker inspect -f '{{.NetworkSettings.Networks.bridge.Gateway
 route="$(docker exec "$SERVER" ip route show default)"
 [[ "$route" == *"via $default_gateway"* ]] || { echo "default egress route changed after routed network attach: $route (expected gateway $default_gateway)" >&2; exit 1; }
 echo "PASS: container keeps default bridge egress route via $default_gateway while routed LAN ingress is attached at 172.31.0.10."
+
+LOG_DIR="$(mktemp -d)"
+docker run -d --name "$PROXY_A" --restart no --network "container:$SERVER" -v "$LOG_DIR:/logs" \
+  --cap-drop ALL --security-opt no-new-privileges:true --entrypoint python3 \
+  s5m-smartdns-routed-lab /usr/local/bin/socks-observer.py 19081 /logs/proxy-a.log >/dev/null
+docker run -d --name "$PROXY_B" --restart no --network "container:$SERVER" -v "$LOG_DIR:/logs" \
+  --cap-drop ALL --security-opt no-new-privileges:true --entrypoint python3 \
+  s5m-smartdns-routed-lab /usr/local/bin/socks-observer.py 19082 /logs/proxy-b.log >/dev/null
+sleep 1
+log_count() { [[ -f "$1" ]] && wc -l < "$1" || echo 0; }
+wait_for_log_increase() {
+  local path="$1" before="$2"
+  for _ in $(seq 1 40); do
+    if (( $(log_count "$path") > before )); then return 0; fi
+    sleep 0.25
+  done
+  return 1
+}
 for transport in udp tcp; do
   ip netns exec "$NS_A" python3 "$ROOT/client-query.py" probe-a.test 192.0.2.10 "$transport"
   ip netns exec "$NS_B" python3 "$ROOT/client-query.py" probe-b.test 192.0.2.20 "$transport"
   ip netns exec "$NS_C" python3 "$ROOT/client-query.py" probe-a.test NONE "$transport"
+
+  a_before="$(log_count "$LOG_DIR/proxy-a.log")"
+  b_before="$(log_count "$LOG_DIR/proxy-b.log")"
+  ip netns exec "$NS_A" python3 "$ROOT/client-probe.py" upstream-check.test "$transport"
+  wait_for_log_increase "$LOG_DIR/proxy-a.log" "$a_before" || { echo "client A did not use its named SOCKS listener" >&2; exit 1; }
+  sleep 1
+  [[ "$(log_count "$LOG_DIR/proxy-b.log")" == "$b_before" ]] || { echo "client A unexpectedly used client B SOCKS listener" >&2; exit 1; }
+
+  a_before="$(log_count "$LOG_DIR/proxy-a.log")"
+  b_before="$(log_count "$LOG_DIR/proxy-b.log")"
+  ip netns exec "$NS_B" python3 "$ROOT/client-probe.py" upstream-check.test "$transport"
+  wait_for_log_increase "$LOG_DIR/proxy-b.log" "$b_before" || { echo "client B did not use its named SOCKS listener" >&2; exit 1; }
+  sleep 1
+  [[ "$(log_count "$LOG_DIR/proxy-a.log")" == "$a_before" ]] || { echo "client B unexpectedly used client A SOCKS listener" >&2; exit 1; }
+
+  a_before="$(log_count "$LOG_DIR/proxy-a.log")"
+  b_before="$(log_count "$LOG_DIR/proxy-b.log")"
+  ip netns exec "$NS_C" python3 "$ROOT/client-probe.py" upstream-check.test "$transport"
+  sleep 1
+  [[ "$(log_count "$LOG_DIR/proxy-a.log")" == "$a_before" && "$(log_count "$LOG_DIR/proxy-b.log")" == "$b_before" ]] || { echo "unmapped client unexpectedly reached a named SOCKS listener" >&2; exit 1; }
 done
-echo "PASS: real SmartDNS daemon accepted generated proxy-server/server-tls/group-match directives and selected distinct CIDR groups for mapped clients and returned no default-group answer to an unmapped client over UDP and TCP."
+echo "PASS: real SmartDNS daemon selected distinct client CIDR groups, excluded unmatched clients from default upstreams, and sent mapped queries only to the matching named SOCKS listener over UDP and TCP."
 echo "LIMIT: same-host IPv4 lab only; Agent validator/deployment, IPv6, Mihomo SOCKS and real proxy egress remain separate acceptance gates."
