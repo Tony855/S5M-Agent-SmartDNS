@@ -93,6 +93,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 	groups := make(map[string]*smartDNSPerClientGroup)
 	var activeGroup string
 	serverGroups := make(map[string]bool)
+	upstreamCounts := make(map[string]int)
 
 	for lineNo, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -213,9 +214,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 				return fmt.Errorf("line %d: invalid encrypted upstream: %w", lineNo+1, endpointErr)
 			}
 			serverGroups[group] = true
-			if groups[group] != nil {
-				groups[group].upstreams++
-			}
+			upstreamCounts[group]++
 			sharedConfig.WriteString(line + "\n")
 		default:
 			sharedConfig.WriteString(line + "\n")
@@ -237,7 +236,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 	}
 	seenCIDRs := make(map[string]bool, len(groups))
 	for group, entry := range groups {
-		if entry.cidr == "" || entry.upstreams == 0 || !serverGroups[group] {
+		if entry.cidr == "" || upstreamCounts[group] == 0 || !serverGroups[group] {
 			return fmt.Errorf("group %s has no matching CIDR or encrypted upstream", group)
 		}
 		if seenCIDRs[entry.cidr] {
