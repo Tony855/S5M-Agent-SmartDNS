@@ -265,6 +265,7 @@ func TestConfigTransactionRecoverySurvivesAgentProcessRestart(t *testing.T) {
 
 
 func TestRecoverInterruptedConfigTransactionStopsSmartDNSWhenNoPriorConfigExisted(t *testing.T) {
+	if !smartDNSFeatureSupported() { t.Skip("SmartDNS runtime is not included in this Agent build") }
 	dir, _ := setupConfigTransactionFixture(t)
 	oldStop := transactionStopSmartDNS
 	oldRunning := transactionSmartDNSProcessRunning
@@ -310,6 +311,7 @@ func TestRecoverInterruptedConfigTransactionStopsSmartDNSWhenNoPriorConfigExiste
 }
 
 func TestRecoverInterruptedConfigTransactionRetainsJournalIfResidualSmartDNSCannotStop(t *testing.T) {
+	if !smartDNSFeatureSupported() { t.Skip("SmartDNS runtime is not included in this Agent build") }
 	dir, _ := setupConfigTransactionFixture(t)
 	oldStop := transactionStopSmartDNS
 	oldRunning := transactionSmartDNSProcessRunning
