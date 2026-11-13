@@ -2122,3 +2122,60 @@ func TestAgentWebSocketManagedSmartDNSRequiresBothHashes(t *testing.T) {
 		t.Fatalf("both matching hashes should be unchanged: %#v", third)
 	}
 }
+
+func TestAgentWebSocketPublishesPerClientRuntimeAsJointConfig(t *testing.T) {
+	app, code, token := websocketTestApp(t)
+	baseYAML := `mixed-port: 7890
+allow-lan: false
+proxies:
+  - name: node-a-egress
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+rules:
+  - MATCH,REJECT
+`
+	if err := app.store.SaveNodeConfig(code, baseYAML); err != nil { t.Fatalf("SaveNodeConfig: %v", err) }
+	proxy := Proxy{Name:"node-a-egress", Type:"socks5", Server:"192.0.2.10", Port:1080, MachineCode:code, Enabled:true}
+	if err := app.store.CreateProxy(&proxy); err != nil { t.Fatalf("CreateProxy: %v", err) }
+	routing := `{"mode":"per_client","clients":[{"client_cidr":"192.168.50.0/24","proxy_name":"node-a-egress"}]}`
+	if err := app.store.UpdateSettings(map[string]string{
+		"smartdns_routing_config": routing,
+		"smartdns_enabled_"+code: "true",
+	}); err != nil { t.Fatalf("UpdateSettings: %v", err) }
+
+	server := httptest.NewServer(http.HandlerFunc(app.handleAgentWebSocket))
+	defer server.Close()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):], header)
+	if err != nil { t.Fatalf("dial authenticated WebSocket: %v", err) }
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(3*time.Second))
+	var welcome map[string]any
+	if err := conn.ReadJSON(&welcome); err != nil || welcome["type"] != "welcome" {
+		t.Fatalf("read welcome: %#v, err=%v", welcome, err)
+	}
+	if err := conn.WriteJSON(map[string]string{"type":"config.request","id":"per-client-runtime","config_sha256":"","smartdns_config_sha256":""}); err != nil {
+		t.Fatalf("request config: %v", err)
+	}
+	var response map[string]any
+	if err := conn.ReadJSON(&response); err != nil { t.Fatalf("read config response: %v", err) }
+	if response["type"] != "config.sync" { t.Fatalf("expected joint config.sync, got %#v", response) }
+	mihomo, _ := response["yaml"].(string)
+	smartDNS, _ := response["smartdns_yaml"].(string)
+	if !strings.Contains(mihomo, "s5m-smartdns-") || !strings.Contains(mihomo, "proxy: node-a-egress") {
+		t.Fatalf("Mihomo per-client listener was not published: %s", mihomo)
+	}
+	if !strings.Contains(smartDNS, "group-match -client-ip 192.168.50.0/24") ||
+		!strings.Contains(smartDNS, "proxy-server socks5://127.0.0.1:") ||
+		strings.Contains(smartDNS, "server-tls 1.1.1.1:853") && !strings.Contains(smartDNS, "-proxy s5m-smartdns-") {
+		t.Fatalf("SmartDNS per-client upstream was not pinned to the generated listener: %s", smartDNS)
+	}
+	mihomoSum := sha256.Sum256([]byte(mihomo))
+	smartDNSSum := sha256.Sum256([]byte(smartDNS))
+	if response["sha256"] != hex.EncodeToString(mihomoSum[:]) ||
+		response["smartdns_sha256"] != hex.EncodeToString(smartDNSSum[:]) {
+		t.Fatalf("joint payload hashes do not match the generated documents: %#v", response)
+	}
+}

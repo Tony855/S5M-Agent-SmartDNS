@@ -249,13 +249,47 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, "SmartDNS 路由设置必须是有效 JSON: "+err.Error())
 				return
 			}
-			if cfg.Mode == SmartDNSProxyModePerClient {
-				writeErr(w, http.StatusBadRequest, "按客户端独立出口尚未完成隔离 DNS 运行时，暂不允许启用")
+			if cfg.Mode != SmartDNSProxyModeShared && cfg.Mode != SmartDNSProxyModePerClient {
+				writeErr(w, http.StatusBadRequest, "SmartDNS 模式必须是 shared 或 per_client；留空可恢复旧行为")
 				return
 			}
-			if cfg.Mode != SmartDNSProxyModeShared {
-				writeErr(w, http.StatusBadRequest, "SmartDNS 模式必须是 shared；留空可恢复旧行为")
-				return
+			if cfg.Mode == SmartDNSProxyModePerClient {
+				proxies, proxyErr := a.store.ListProxies()
+				if proxyErr != nil {
+					writeErr(w, http.StatusInternalServerError, "读取代理节点失败")
+					return
+				}
+				refs := make([]SmartDNSProxyRef, 0, len(proxies))
+				for _, proxy := range proxies {
+					refs = append(refs, SmartDNSProxyRef{Name: proxy.Name, Enabled: proxy.Enabled})
+				}
+				if _, planErr := BuildSmartDNSRoutingPlan(cfg, refs); planErr != nil {
+					writeErr(w, http.StatusBadRequest, "SmartDNS 按客户端映射无效: "+planErr.Error())
+					return
+				}
+				// The routing setting is global, but proxy eligibility is per Agent.
+				// Validate every currently authorized machine before persisting it;
+				// otherwise one node could make syncAuthorizedNodeConfigs partially fail.
+				storedSettings, settingsErr := a.store.GetSettings()
+				if settingsErr != nil {
+					writeErr(w, http.StatusInternalServerError, "读取 Agent 授权列表失败")
+					return
+				}
+				for key := range storedSettings {
+					if !strings.HasPrefix(key, "agent_machine_") { continue }
+					machineCode := strings.TrimPrefix(key, "agent_machine_")
+					machineRefs := make([]SmartDNSProxyRef, 0, len(proxies))
+					for _, proxy := range proxies {
+						machine := strings.TrimSpace(proxy.MachineCode)
+						if machine == "__GLOBAL__" || machine == machineCode {
+							machineRefs = append(machineRefs, SmartDNSProxyRef{Name: proxy.Name, Enabled: proxy.Enabled})
+						}
+					}
+					if _, planErr := BuildSmartDNSRoutingPlan(cfg, machineRefs); planErr != nil {
+						writeErr(w, http.StatusBadRequest, "节点 "+machineCode+" 的 SmartDNS 按客户端映射无效: "+planErr.Error())
+						return
+					}
+				}
 			}
 			if cfg.Strategy != "" && cfg.Strategy != SmartDNSStrategyFallback && cfg.Strategy != SmartDNSStrategyURLTest && cfg.Strategy != SmartDNSStrategySelect {
 				writeErr(w, http.StatusBadRequest, "SmartDNS 策略必须是 fallback、url-test 或 select")

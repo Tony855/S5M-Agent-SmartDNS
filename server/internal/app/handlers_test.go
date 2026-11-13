@@ -1916,3 +1916,32 @@ func TestHandleRestoreBackupKeepsDurablePreviousDatabase(t *testing.T) {
 		t.Fatalf("previous database backup lost old admin: user=%v error=%v", user, err)
 	}
 }
+
+func TestHandleUpdateSettingsRejectsPerClientProxyMissingOnAnyAgent(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-per-client-agent-scope.db"))
+	if err != nil { t.Fatalf("OpenStore: %v", err) }
+	defer store.db.Close()
+	if err := store.UpdateSettings(map[string]string{
+		"agent_machine_node-a": "token-a",
+		"agent_machine_node-b": "token-b",
+	}); err != nil { t.Fatalf("seed Agents: %v", err) }
+	proxy := Proxy{Name:"node-a-only", Type:"socks5", Server:"192.0.2.10", Port:1080, MachineCode:"node-a", Enabled:true}
+	if err := store.CreateProxy(&proxy); err != nil { t.Fatalf("CreateProxy: %v", err) }
+
+	routing := SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient, Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.50.0/24", ProxyName:"node-a-only"}}}
+	raw, err := json.Marshal(routing)
+	if err != nil { t.Fatal(err) }
+	body, err := json.Marshal(map[string]string{"smartdns_routing_config":string(raw)})
+	if err != nil { t.Fatal(err) }
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	(&App{store:store}).handleUpdateSettings(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "node-b") {
+		t.Fatalf("per-client setting should be rejected before persistence when any Agent lacks the proxy: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	settings, err := store.GetSettings()
+	if err != nil { t.Fatal(err) }
+	if _, exists := settings["smartdns_routing_config"]; exists {
+		t.Fatalf("invalid per-client routing setting was persisted: %#v", settings["smartdns_routing_config"])
+	}
+}
