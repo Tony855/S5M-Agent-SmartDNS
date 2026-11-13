@@ -86,3 +86,17 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("RuntimeDirectoryPreserve=yes", unit)
 
 if __name__ == "__main__": unittest.main()
+
+    def test_invalidate_attestation_removes_stale_readiness_and_fsyncs_parent(self):
+        path = pathlib.Path(self.tmp.name) / "ingress.json"
+        path.write_text('{"source_ip_preserved":true}')
+        path.chmod(0o600)
+        mod.invalidate_attestation(path)
+        self.assertFalse(path.exists())
+
+    def test_invalidate_attestation_rejects_untrusted_parent(self):
+        parent = pathlib.Path(self.tmp.name) / "unsafe"
+        parent.mkdir()
+        parent.chmod(0o777)
+        with self.assertRaises(mod.ConfigError):
+            mod.invalidate_attestation(parent / "ingress.json")

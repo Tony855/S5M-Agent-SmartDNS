@@ -192,6 +192,22 @@ def controller_lock():
         if fd >= 0:
             os.close(fd)
 
+def invalidate_attestation(path: Path) -> None:
+    """Remove readiness before changing firewall state; stale proof must never survive a failed reconcile."""
+    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    parent_st = path.parent.lstat()
+    if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
+        raise ConfigError("attestation directory must be root-owned and not group/world writable")
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    dfd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
 def atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     parent_st = path.parent.lstat()
@@ -223,20 +239,16 @@ def main(argv=None) -> int:
         if os.geteuid() != 0: raise ConfigError("must run as root")
         if a.command == "remove":
             with controller_lock():
+                # Invalidate readiness first. If nft deletion fails, the host remains
+                # fail-closed from the Agent/Master perspective rather than advertising
+                # a firewall that may no longer exist.
+                invalidate_attestation(a.attestation)
                 exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
                 if exists.returncode == 0:
                     if "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
                         raise ConfigError("refusing to remove an nftables table not owned by this controller")
                     removed = subprocess.run(["nft", "delete", "table", "inet", TABLE], text=True, capture_output=True)
                     if removed.returncode: raise ConfigError(f"nft table removal failed: {removed.stderr.strip()}")
-                if a.attestation.parent.exists():
-                    parent_st = a.attestation.parent.lstat()
-                    if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
-                        raise ConfigError("attestation directory is not trusted")
-                    a.attestation.unlink(missing_ok=True)
-                    dfd = os.open(a.attestation.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-                    try: os.fsync(dfd)
-                    finally: os.close(dfd)
             print("owned ingress firewall table and attestation removed; Docker networks/routes were not changed")
             return 0
         cfg = load_config(a.config)
@@ -256,6 +268,9 @@ def main(argv=None) -> int:
             transaction = (f"delete table inet {TABLE}\n" if exists.returncode == 0 else "") + rules
             check = subprocess.run(["nft", "-c", "-f", "-"], input=transaction, text=True, capture_output=True)
             if check.returncode: raise ConfigError(f"nft validation failed: {check.stderr.strip()}")
+            # Never leave a fresh old attestation in place while replacing the
+            # firewall policy. Any apply/write failure now remains fail-closed.
+            invalidate_attestation(a.attestation)
             applied = subprocess.run(["nft", "-f", "-"], input=transaction, text=True, capture_output=True)
             if applied.returncode: raise ConfigError(f"nft apply failed: {applied.stderr.strip()}")
             now = int(time.time())
