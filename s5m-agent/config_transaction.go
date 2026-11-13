@@ -443,6 +443,20 @@ var smartDNSRuntimeTransitionMu sync.Mutex
 // begins using it. Disabling commits the fallback Mihomo config before stopping
 // the daemon, and the marker survives container restarts.
 func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string) error {
+	return applyAgentSmartDNSEnabledWithValidator(enabled, mihomoYAML, smartDNSConfig, centralURL, validateSmartDNSConfig,
+		func(mihomo, smart []byte, central string) error { return applyAgentConfigTransaction(mihomo, smart, true, central) })
+}
+
+func applyAgentSmartDNSEnabledWithIngress(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string, contract smartDNSPerClientIngressContract) error {
+	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
+	return applyAgentSmartDNSEnabledWithValidator(enabled, mihomoYAML, smartDNSConfig, centralURL, validator,
+		func(mihomo, smart []byte, central string) error { return applyAgentConfigTransactionWithIngress(mihomo, smart, true, central, contract) })
+}
+
+func applyAgentSmartDNSEnabledWithValidator(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string, validator func([]byte) error, applyTransaction func([]byte, []byte, string) error) error {
+	if validator == nil || applyTransaction == nil {
+		return fmt.Errorf("SmartDNS enable validator or transaction is unavailable")
+	}
 	smartDNSRuntimeTransitionMu.Lock()
 	defer smartDNSRuntimeTransitionMu.Unlock()
 
@@ -464,7 +478,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 				return fmt.Errorf("启用 SmartDNS 前读取现有配置失败: %w", err)
 			}
 		}
-		if err := validateSmartDNSConfig(smartDNSConfig); err != nil {
+		if err := validator(smartDNSConfig); err != nil {
 			return fmt.Errorf("启用 SmartDNS 的配置未通过安全校验: %w", err)
 		}
 		if !smartDNSConfigHasDomesticListener(smartDNSConfig) {
@@ -482,7 +496,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 			}
 			return healthErr
 		}
-		if err := applyAgentConfigTransaction(mihomoYAML, smartDNSConfig, true, centralURL); err != nil {
+		if err := applyTransaction(mihomoYAML, smartDNSConfig, centralURL); err != nil {
 			transactionErr := fmt.Errorf("启用 SmartDNS 的联合配置事务失败: %w", err)
 			if !wasEnabled {
 				return rollbackFailedSmartDNSEnable(transactionErr, persistSmartDNSDisabled, smartDNSServiceStop)
