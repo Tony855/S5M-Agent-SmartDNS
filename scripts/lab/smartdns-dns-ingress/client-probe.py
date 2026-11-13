@@ -2,6 +2,7 @@
 import socket
 import struct
 import sys
+import time
 
 HOST, PORT = "172.31.0.10", 6055
 NAME, TRANSPORT = sys.argv[1], sys.argv[2]
@@ -12,7 +13,9 @@ if TRANSPORT == "udp":
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(0.5)
         sock.sendto(question, (HOST, PORT))
+        time.sleep(0.25)
 else:
     with socket.create_connection((HOST, PORT), timeout=2) as sock:
         sock.sendall(struct.pack("!H", len(question)) + question)
+        time.sleep(0.25)
 print(f"SENT {TRANSPORT} {NAME}")
