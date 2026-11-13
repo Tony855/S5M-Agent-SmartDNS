@@ -560,6 +560,30 @@ func collectSmartDNSStatus(status map[string]any) {
 // collectSmartDNSStatusWithDependencies keeps host interactions injectable so
 // every status and failure path can be tested without a live SmartDNS daemon.
 func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSStatusDependencies) {
+	// Per-client DNS ingress is deliberately unavailable until the Agent can
+	// provision and observe the complete routed dataplane. Publish an explicit
+	// fail-closed contract state rather than allowing stale/omitted fields to be
+	// mistaken for readiness by dashboards or future protocol consumers.
+	status["dns_ingress_contract_version"] = 0
+	status["dns_ingress_ready"] = false
+	status["dns_ingress_reason"] = "agent_ingress_lifecycle_not_implemented"
+	status["dns_ingress_source_ip_preserved"] = false
+	status["dns_ingress_firewall_ready"] = false
+	status["dns_ingress_firewall_persistent"] = false
+	status["dns_ingress_udp_ready"] = false
+	status["dns_ingress_tcp_ready"] = false
+	status["dns_ingress_smartdns_listener_ready"] = false
+	status["dns_ingress_ipv4_ready"] = false
+	status["dns_ingress_ipv6_ready"] = false
+	status["dns_ingress_smartdns_ipv4_bound"] = false
+	status["dns_ingress_smartdns_ipv6_bound"] = false
+	status["dns_ingress_interface"] = ""
+	status["dns_ingress_ipv4_address"] = ""
+	status["dns_ingress_ipv6_address"] = ""
+	status["dns_ingress_smartdns_ipv4_bind_address"] = ""
+	status["dns_ingress_smartdns_ipv6_bind_address"] = ""
+	status["dns_ingress_client_cidrs"] = []string{}
+
 	status["smartdns_available"] = false
 	status["smartdns_control_supported"] = false
 	status["smartdns_domestic_listener"] = false
