@@ -265,7 +265,9 @@ func TestConfigTransactionRecoverySurvivesAgentProcessRestart(t *testing.T) {
 
 
 func TestRecoverInterruptedConfigTransactionStopsSmartDNSWhenNoPriorConfigExisted(t *testing.T) {
-	if !smartDNSFeatureSupported() { t.Skip("SmartDNS runtime is not included in this Agent build") }
+	if !smartDNSFeatureSupported() {
+		t.Skip("SmartDNS runtime is not included in this Agent build")
+	}
 	dir, _ := setupConfigTransactionFixture(t)
 	oldStop := transactionStopSmartDNS
 	oldRunning := transactionSmartDNSProcessRunning
@@ -328,7 +330,7 @@ func TestRecoverInterruptedConfigTransactionRetainsJournalIfResidualSmartDNSCann
 
 	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("uncommitted-smartdns"))
 	record := configTransactionRecoveryRecord{
-		Version: 1, Phase: "prepared", SmartDNSUpdated: true,
+		Version: 1, Phase: "prepared",
 		SmartDNS: transactionRecoveryFile{Existed: false},
 		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
 		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
