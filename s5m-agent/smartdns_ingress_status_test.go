@@ -66,7 +66,7 @@ func TestCollectSmartDNSStatusCombinesHostAttestationAndExactListenerObservation
 		binaryInfo: func() (os.FileInfo, error) { return nil, errors.New("not installed") },
 		ingressAttestation: func() (smartDNSHostIngressAttestation, error) { return attestation, nil },
 		ingressObservation: func() (smartDNSIngressObservation, error) {
-			return smartDNSIngressObservation{Interfaces: []string{"eth1"}, IPv4: []string{"172.31.0.10"}}, nil
+			return smartDNSIngressObservation{Interfaces: []string{"eth1"}, IPv4: []string{"172.31.0.10"}, AddressInterfaces: map[string]string{"172.31.0.10": "eth1"}}, nil
 		},
 		ingressSocketBound: func(address string) (bool, error) { return address == "172.31.0.10", nil },
 	})
