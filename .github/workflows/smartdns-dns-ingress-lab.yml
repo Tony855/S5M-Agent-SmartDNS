@@ -39,3 +39,4 @@ jobs:
         run: |
           bash scripts/lab/smartdns-dns-ingress/run.sh
           sudo bash scripts/lab/smartdns-dns-ingress/run-routed.sh
+          sudo bash scripts/lab/smartdns-dns-ingress/test-network-lifecycle-docker.sh
