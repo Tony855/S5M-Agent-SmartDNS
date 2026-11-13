@@ -67,7 +67,7 @@ func TestCollectSmartDNSIngressObservationFailsWhenNoNonLoopbackInterfaceExists(
 
 func TestProcSocketTableRejectsConnectedUDPAndWrongState(t *testing.T) {
 	addresses := map[string]bool{"192.0.2.10": true}
-	connected := []byte("sl local_address rem_address st tx_queue\\n 0: 0A0200C0:17A7 01010101:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12348\\n")
+	connected := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 01010101:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12348\n")
 	if procSocketTableHasListener(connected, false, 6055, addresses, false) {
 		t.Fatal("connected UDP socket must not be reported as an unconnected DNS listener")
 	}
