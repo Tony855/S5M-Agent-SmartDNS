@@ -284,3 +284,29 @@ func addValidatedIngressAddress(addresses map[string]bool, raw string, wantIPv4 
 	addresses[ip.String()] = true
 	return nil
 }
+
+
+// hasPerClientSmartDNSDirectives identifies configs that must never pass
+// through the legacy shared-mode validator/transaction without an ingress
+// contract. It is a conservative detector, not a replacement for validation.
+func hasPerClientSmartDNSDirectives(data []byte) bool {
+	for _, raw := range strings.Split(strings.ReplaceAll(string(data), "\\r\\n", "\\n"), "\\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "proxy-server", "group-begin", "group-match":
+			return true
+		case "bind", "bind-tcp":
+			if len(fields) > 1 && strings.HasSuffix(fields[1], ":6055") {
+				return true
+			}
+		}
+	}
+	return false
+}
