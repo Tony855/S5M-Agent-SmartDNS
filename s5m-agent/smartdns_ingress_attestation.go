@@ -36,10 +36,14 @@ type smartDNSHostIngressAttestation struct {
 }
 
 func readSmartDNSHostIngressAttestation() (smartDNSHostIngressAttestation, error) {
+	return readSmartDNSHostIngressAttestationFromPath(smartDNSHostIngressAttestationPath)
+}
+
+func readSmartDNSHostIngressAttestationFromPath(path string) (smartDNSHostIngressAttestation, error) {
 	var attestation smartDNSHostIngressAttestation
-	fd, err := syscall.Open(smartDNSHostIngressAttestationPath, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil { return attestation, fmt.Errorf("open host ingress attestation: %w", err) }
-	file := os.NewFile(uintptr(fd), smartDNSHostIngressAttestationPath)
+	file := os.NewFile(uintptr(fd), path)
 	if file == nil { _ = syscall.Close(fd); return attestation, fmt.Errorf("invalid host ingress attestation file descriptor") }
 	defer file.Close()
 	info, err := file.Stat()
