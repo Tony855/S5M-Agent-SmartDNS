@@ -1084,6 +1084,10 @@ func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smar
 			}
 			if err != nil { return "", err }
 		} else {
+			// Per-client routing uses one dedicated SOCKS listener per CIDR;
+			// the generic process-level SmartDNS rule would bypass that isolation.
+			yml, err = removeGeneratedSmartDNSProcessRules(yml)
+			if err != nil { return "", fmt.Errorf("清理 per-client 共享 SmartDNS 进程规则失败: %w", err) }
 			if _, planErr := BuildSmartDNSRoutingPlan(routing, refs); planErr != nil {
 				return "", fmt.Errorf("SmartDNS 路由计划无效: %w", planErr)
 			}
