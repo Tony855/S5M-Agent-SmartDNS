@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const smartDNSHostIngressAttestationPath = "/run/s5m-agent-ingress/ingress.json"
@@ -22,6 +23,7 @@ var smartDNSHostIngressInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1
 // required before runtime readiness can become true.
 type smartDNSHostIngressAttestation struct {
 	Version int `json:"version"`
+	UpdatedAt int64 `json:"updated_at"`
 	Interface string `json:"interface"`
 	IPv4Address string `json:"ipv4_address,omitempty"`
 	IPv6Address string `json:"ipv6_address,omitempty"`
@@ -69,6 +71,9 @@ func readSmartDNSHostIngressAttestation() (smartDNSHostIngressAttestation, error
 func validateSmartDNSHostIngressAttestation(attestation smartDNSHostIngressAttestation) error {
 	if attestation.Version != smartDNSHostIngressAttestationVersion {
 		return fmt.Errorf("unsupported host ingress attestation version")
+	}
+	if attestation.UpdatedAt <= 0 || time.Since(time.Unix(attestation.UpdatedAt, 0)) > 90*time.Second || time.Since(time.Unix(attestation.UpdatedAt, 0)) < -30*time.Second {
+		return fmt.Errorf("host ingress attestation is stale")
 	}
 	if !smartDNSHostIngressInterfacePattern.MatchString(strings.TrimSpace(attestation.Interface)) {
 		return fmt.Errorf("host ingress attestation interface is invalid")
