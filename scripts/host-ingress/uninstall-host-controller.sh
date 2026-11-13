@@ -10,6 +10,9 @@ if [[ -x /usr/local/libexec/s5m-agent-ingress/controller.py ]]; then
 fi
 rm -f /etc/systemd/system/s5m-agent-ingress.timer /etc/systemd/system/s5m-agent-ingress.service
 systemctl daemon-reload
-rm -f /usr/local/libexec/s5m-agent-ingress/controller.py /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py
+rm -f /usr/local/libexec/s5m-agent-ingress/controller.py
 rmdir /usr/local/libexec/s5m-agent-ingress 2>/dev/null || true
-echo 'S5M host ingress controller removed; config and Docker network/routes were retained.'
+echo 'S5M host firewall controller removed; config and Docker network/routes were retained.'
+if [[ -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py ]]; then
+  echo 'The standalone network lifecycle helper was retained so the administrator can explicitly remove the dedicated Docker network later.'
+fi

@@ -43,7 +43,7 @@ A separate routed-network lifecycle and external router static routes are still 
 sudo ./uninstall-host-controller.sh
 ```
 
-The uninstall operation disables the refresh timer, removes the controller-owned attestation and nftables table, and removes the systemd units/binary. It deliberately retains the administrator configuration and does not touch Docker networks, host routes, or the default bridge.
+The uninstall operation disables the refresh timer, removes the controller-owned attestation and nftables table, and removes the systemd units/controller binary. It deliberately retains the administrator configuration, Docker network, host routes, and the standalone network lifecycle helper so the administrator can later run its explicit `uninstall` action. It does not touch the default bridge.
 
 ## Routed Docker ingress network lifecycle
 
