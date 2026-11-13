@@ -122,6 +122,8 @@ def default_routes(container):
     return v4,v6
 
 def provision(cfg):
+    if run(["ip","link","show","dev",cfg["interface"]],check=False).returncode:
+        raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
     help_text=run(["docker","network","connect","--help"],check=False).stdout
     if "--gw-priority" not in help_text:
         raise LifecycleError("Docker CLI must support network connect --gw-priority to preserve default bridge egress")
@@ -130,8 +132,12 @@ def provision(cfg):
         create_network(cfg); created=True
         net=inspect_network(cfg["network"])
         if net is None: raise LifecycleError("Docker did not create the requested network")
-    validate_existing(net,cfg)
-    attached=container_networks(cfg["container"])
+    try:
+        validate_existing(net,cfg)
+        attached=container_networks(cfg["container"])
+    except Exception:
+        if created: run(["docker","network","rm",cfg["network"]],check=False)
+        raise
     if cfg["network"] in attached:
         actual=attached[cfg["network"]]
         for family,(_,_,address) in cfg["_networks"].items():

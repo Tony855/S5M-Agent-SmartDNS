@@ -33,11 +33,11 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg), require_root=False)
 
     def test_world_readable_config_rejected(self):
-        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(valid_config(),0o644))
+        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(valid_config(),0o644), require_root=False)
 
     def test_noncanonical_or_overlapping_subnet_rejected(self):
         cfg=valid_config(); cfg["ipv4_subnet"]="172.31.10.1/24"
-        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
+        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg), require_root=False)
 
     def test_gateway_address_collision_rejected(self):
         cfg=valid_config(); cfg["ipv4_address"]=cfg["ipv4_gateway"]
