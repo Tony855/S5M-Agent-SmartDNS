@@ -37,3 +37,9 @@ sudo bash scripts/lab/smartdns-dns-ingress/run-smartdns-routed.sh
 
 The test uses isolated namespaces, a dedicated Docker network, and TEST-NET-1
 addresses. It does not modify production containers or publish a host port.
+
+The real-daemon fixture also marks every mapped DoT server with
+`-exclude-default-group` and sends a third query from an unmapped client CIDR.
+The test requires that client to receive no A answer. This guards against
+SmartDNS silently placing a per-client upstream back into the default group,
+which would otherwise let unmapped clients use an arbitrary proxy exit.
