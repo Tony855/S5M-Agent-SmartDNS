@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"net/url"
 	"strconv"
 	"strings"
@@ -313,32 +314,43 @@ func hasPerClientSmartDNSDirectives(data []byte) bool {
 }
 
 
-// waitForSmartDNSIngressListeners proves that every contract-bound address
-// answers real A and AAAA DNS queries over both UDP and TCP before the joint
-// Mihomo/SmartDNS transaction is committed.
+// waitForSmartDNSIngressListeners confirms that SmartDNS has bound UDP and
+// TCP sockets to every exact contract address before the joint transaction is
+// committed. It deliberately does not send a query from the Agent's own source
+// address: that address is not expected to belong to any client CIDR mapping.
 func waitForSmartDNSIngressListeners(contract smartDNSPerClientIngressContract, timeout time.Duration) error {
-	addresses := make([]string, 0, 2)
-	if strings.TrimSpace(contract.IPv4Address) != "" {
-		addresses = append(addresses, net.JoinHostPort(contract.IPv4Address, strconv.Itoa(smartDNSPerClientIngressPort)))
-	}
-	if strings.TrimSpace(contract.IPv6Address) != "" {
-		addresses = append(addresses, net.JoinHostPort(contract.IPv6Address, strconv.Itoa(smartDNSPerClientIngressPort)))
-	}
+	addresses := make(map[string]bool, 2)
+	if strings.TrimSpace(contract.IPv4Address) != "" { addresses[contract.IPv4Address] = true }
+	if strings.TrimSpace(contract.IPv6Address) != "" { addresses[contract.IPv6Address] = true }
 	if len(addresses) == 0 { return fmt.Errorf("ingress contract contains no listener addresses") }
 	deadline := time.Now().Add(timeout)
 	for {
-		allHealthy := true
-		for _, address := range addresses {
-			if !probeSmartDNSDNSAtType(address, 1) ||
-				!probeSmartDNSDNSAtType(address, 28) ||
-				!probeSmartDNSDNSAtTypeTCP(address, 1) ||
-				!probeSmartDNSDNSAtTypeTCP(address, 28) {
-				allHealthy = false
-				break
+		udp4, err := os.ReadFile("/proc/net/udp")
+		if err != nil { return fmt.Errorf("read IPv4 UDP sockets: %w", err) }
+		udp6, err := os.ReadFile("/proc/net/udp6")
+		if err != nil { return fmt.Errorf("read IPv6 UDP sockets: %w", err) }
+		tcp4, err := os.ReadFile("/proc/net/tcp")
+		if err != nil { return fmt.Errorf("read IPv4 TCP sockets: %w", err) }
+		tcp6, err := os.ReadFile("/proc/net/tcp6")
+		if err != nil { return fmt.Errorf("read IPv6 TCP sockets: %w", err) }
+		allBound := true
+		for address := range addresses {
+			ip, parseErr := netip.ParseAddr(address)
+			if parseErr != nil { return fmt.Errorf("invalid ingress address in contract") }
+			var udp, tcp bool
+			if ip.Is4() {
+				only := map[string]bool{ip.String(): true}
+				udp = procSocketTableHasListener(udp4, false, smartDNSPerClientIngressPort, only, false)
+				tcp = procSocketTableHasListener(tcp4, false, smartDNSPerClientIngressPort, only, true)
+			} else {
+				only := map[string]bool{ip.String(): true}
+				udp = procSocketTableHasListener(udp6, true, smartDNSPerClientIngressPort, only, false)
+				tcp = procSocketTableHasListener(tcp6, true, smartDNSPerClientIngressPort, only, true)
 			}
+			if !udp || !tcp { allBound = false; break }
 		}
-		if allHealthy { return nil }
-		if time.Now().After(deadline) { return fmt.Errorf("6055 ingress A/AAAA UDP/TCP probe failed") }
-		time.Sleep(150 * time.Millisecond)
+		if allBound { return nil }
+		if time.Now().After(deadline) { return fmt.Errorf("SmartDNS 6055 UDP/TCP sockets are not bound to all contract addresses") }
+		time.Sleep(100 * time.Millisecond)
 	}
 }
