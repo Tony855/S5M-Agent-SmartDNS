@@ -41,6 +41,7 @@ docker network create --driver bridge --subnet 172.31.0.0/24 --gateway 172.31.0.
   --opt "com.docker.network.bridge.trusted_host_interfaces=$LAN_BR" \
   --opt com.docker.network.bridge.name=br-s5m-real "$NET_IN" >/dev/null
 docker run -d --name "$SERVER" --restart no --network "$NET_IN" --ip 172.31.0.10 \
+  -p 0.0.0.0::6055/udp -p 0.0.0.0::6055/tcp \
   --cap-drop ALL --security-opt no-new-privileges:true s5m-smartdns-routed-lab >/dev/null
 sleep 2
 state="$(docker inspect -f '{{.State.Status}}' "$SERVER")"
