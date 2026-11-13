@@ -267,10 +267,23 @@ func closeTelemetrySessionOnWriteError(conn *websocket.Conn, writeErr error) {
 }
 
 func runAgentTelemetryPublisher(ctx context.Context, conn *websocket.Conn) {
-	// The controller has a dedicated "telemetry" frame handler. It consumes
-	// these frames without replying on the socket and publishes browser events,
-	// so this stream does not interfere with synchronous heartbeat/config ACKs.
-	go pollMihomoConnections(ctx, agentMihomoTelemetry)
+	runAgentTelemetryPublisherWithPoll(ctx, conn, func(pollCtx context.Context) {
+		pollMihomoConnections(pollCtx, agentMihomoTelemetry)
+	})
+}
+
+// runAgentTelemetryPublisherWithPoll owns the poller's lifetime. The poller
+// shares the process-wide telemetry snapshot, so it must be stopped and joined
+// before this session exits; otherwise a reconnect can briefly overlap an old
+// poller with the new session and publish stale/out-of-order samples.
+func runAgentTelemetryPublisherWithPoll(ctx context.Context, conn *websocket.Conn, poll func(context.Context)) {
+	pollCtx, stopPoll := context.WithCancel(ctx)
+	pollDone := make(chan struct{})
+	go func() {
+		defer close(pollDone)
+		poll(pollCtx)
+	}()
+	defer stopAndWaitAgentTelemetryPublisher(stopPoll, pollDone)
 
 	ticker := time.NewTicker(defaultTelemetryPushInterval)
 	defer ticker.Stop()
