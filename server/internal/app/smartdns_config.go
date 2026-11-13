@@ -45,15 +45,18 @@ func buildSmartDNSPerClientConfigInternal(mappings []SmartDNSClientRuntimeMappin
 		if err != nil {
 			return "", fmt.Errorf("SmartDNS 客户端 CIDR %q 无效: %w", mapping.ClientCIDR, err)
 		}
+		if prefix.String() != mapping.ClientCIDR || prefix != prefix.Masked() {
+			return "", fmt.Errorf("SmartDNS 客户端 CIDR %q 必须使用规范网段表示", mapping.ClientCIDR)
+		}
 		prefix = prefix.Masked()
-		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
+		if prefix.Bits() == 0 || !prefix.Addr().IsGlobalUnicast() || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
 			return "", fmt.Errorf("SmartDNS 客户端 CIDR %q 过宽或使用保留地址族", mapping.ClientCIDR)
 		}
 		if prefix.Addr().Is4() { hasIPv4 = true } else { hasIPv6 = true }
 	}
 	validateIngress := func(raw string, wantIPv4 bool) (netip.Addr, error) {
 		ip, err := netip.ParseAddr(strings.TrimSpace(raw))
-		if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() ||
+		if err != nil || ip.String() != raw || !ip.IsGlobalUnicast() || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() ||
 			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Is4() != wantIPv4 {
 			family := 6
 			if wantIPv4 { family = 4 }
