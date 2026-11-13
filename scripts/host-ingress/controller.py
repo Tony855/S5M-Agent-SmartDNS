@@ -270,7 +270,7 @@ def main(argv=None) -> int:
             exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
             if exists.returncode == 0 and "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
                 raise ConfigError("refusing to replace an nftables table not owned by this controller")
-            transaction = (f"delete table inet {TABLE}\\n" if exists.returncode == 0 else "") + rules
+            transaction = build_nft_transaction(exists.returncode == 0, rules)
             check = subprocess.run(["nft", "-c", "-f", "-"], input=transaction, text=True, capture_output=True)
             if check.returncode: raise ConfigError(f"nft validation failed: {check.stderr.strip()}")
             applied = subprocess.run(["nft", "-f", "-"], input=transaction, text=True, capture_output=True)

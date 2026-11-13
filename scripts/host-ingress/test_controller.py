@@ -1,4 +1,4 @@
-import importlib.util, json, pathlib, tempfile, unittest
+import importlib.util, ipaddress, json, pathlib, tempfile, unittest
 spec = importlib.util.spec_from_file_location("controller", pathlib.Path(__file__).with_name("controller.py"))
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 
@@ -12,6 +12,17 @@ class ControllerTests(unittest.TestCase):
         self.path.write_text(json.dumps(obj)); self.path.chmod(mode)
     def valid(self):
         return {"version":1,"interface":"eth1","ipv4_address":"172.31.10.2","ipv6_address":"2001:db8:31::2","client_cidrs":["192.168.50.0/24","2001:db8:50::/64"]}
+
+    def test_nft_transaction_uses_real_newline_when_replacing_table(self):
+        rules = mod.render_nft({
+            "interface": "eth1",
+            "addresses": [ipaddress.ip_address("172.31.10.2")],
+            "networks": [ipaddress.ip_network("192.168.50.0/24")],
+        })
+        transaction = mod.build_nft_transaction(True, rules)
+        self.assertTrue(transaction.startswith("delete table inet s5m_agent_ingress\n"))
+        self.assertNotIn("\\n", transaction)
+
     def test_valid_config_and_rules_are_scoped(self):
         self.write(self.valid()); cfg=mod.load_config(self.path, require_root=False); rules=mod.render_nft(cfg)
         self.assertIn('iifname "eth1" ip daddr 172.31.10.2', rules)
