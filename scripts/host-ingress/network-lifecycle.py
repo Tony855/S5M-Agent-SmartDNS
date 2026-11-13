@@ -222,6 +222,9 @@ def preserves_single_default_route(routes, gateway):
     entries=[line.strip() for line in routes if line.strip()]
     return len(entries)==1 and f"via {gateway}" in entries[0]
 
+def routeros_v7_route(subnet, next_hop):
+    return f'/ip route add dst-address={subnet} gateway={next_hop} comment="S5M-Agent DNS ingress"'
+
 def provision(cfg):
     if 6 in cfg["_networks"]:
         raise LifecycleError("IPv6 per-client ingress is disabled: Docker dual-network routed publication allocated a non-loopback IPv6 host port in validation; use IPv4-only ingress until a no-host-port IPv6 path is implemented")
@@ -295,6 +298,8 @@ def provision(cfg):
     print(f"ROUTED_INGRESS_READY network={cfg['network']} container={cfg['container']} default_bridge_egress=preserved")
     for family,(subnet,_,_) in cfg["_networks"].items():
         print(f"UPSTREAM_ROUTER_STATIC_ROUTE IPv{family}: route {subnet} via {next_hops[family]} on {cfg['interface']}")
+        if family == 4:
+            print(f"ROUTEROS_V7_COMMAND: {routeros_v7_route(subnet,next_hops[family])}")
     print("Apply the displayed static routes on the upstream router; this helper does not change router or host routes.")
     print("Physical LAN source-IP acceptance remains a separate mandatory step.")
 

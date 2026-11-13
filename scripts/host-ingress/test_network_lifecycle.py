@@ -112,6 +112,10 @@ class NetworkSafetyTests(unittest.TestCase):
         with patch.object(nl,"run",return_value=type("Result",(),fake)()):
             self.assertEqual(nl.host_next_hops(cfg),{4:"192.168.50.2"})
 
+    def test_routeros_static_route_command_targets_docker_ingress_subnet(self):
+        self.assertEqual(nl.routeros_v7_route("172.31.10.0/24","192.168.1.2"),
+            '/ip route add dst-address=172.31.10.0/24 gateway=192.168.1.2 comment="S5M-Agent DNS ingress"')
+
     def test_single_default_route_must_use_bridge_gateway(self):
         self.assertTrue(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0"],"172.17.0.1"))
         self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0","default via 172.31.10.1 dev eth1"],"172.17.0.1"))
