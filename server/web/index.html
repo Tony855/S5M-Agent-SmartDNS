@@ -407,17 +407,36 @@
       <div v-if="page === 'config'">
         <div class="card-panel">
           <div class="card-title">SmartDNS 上游代理出口</div>
-          <p class="import-note">统一控制所有已授权 Agent 的 SmartDNS 加密上游出口。自动优选每 30 秒检测可用代理，并在延迟差超过 50 毫秒时切换到更快的健康节点以避免频繁抖动；手动选择会跟随该节点 Mihomo 的 PROXY 分组当前选中出口；顺序故障切换则按代理列表顺序选择可用节点。所有模式都不允许回落到 DIRECT。</p>
+          <p class="import-note">统一控制所有已授权 Agent 的 SmartDNS 加密上游出口。所有模式均禁止回落到 DIRECT；按客户端模式会为每条 CIDR 映射生成独立的 Mihomo loopback SOCKS Listener 和 SmartDNS DoT 上游。</p>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">
-            <el-select v-model="smartdnsRoutingStrategy" style="min-width:280px;max-width:100%;" aria-label="SmartDNS 上游代理出口策略">
-              <el-option label="默认：顺序故障切换（按节点名称排序）" value="fallback"></el-option>
+            <el-select v-model="smartdnsRoutingMode" style="min-width:240px;max-width:100%;" aria-label="SmartDNS 出口模式">
+              <el-option label="统一共享出口" value="shared"></el-option>
+              <el-option label="按客户端 CIDR 独立出口" value="per_client"></el-option>
+              <el-option label="保持旧节点行为" value="legacy"></el-option>
+            </el-select>
+            <el-select v-if="smartdnsRoutingMode === 'shared'" v-model="smartdnsRoutingStrategy" style="min-width:280px;max-width:100%;" aria-label="SmartDNS 上游代理出口策略">
+              <el-option label="默认：顺序故障切换（Fallback）" value="fallback"></el-option>
               <el-option label="自动优选（动态选择最低延迟节点）" value="url-test"></el-option>
               <el-option label="跟随已选代理（使用 PROXY 手动选择）" value="select"></el-option>
-              <el-option label="保持旧节点行为（不接管 SmartDNS 出口）" value="legacy"></el-option>
             </el-select>
-            <el-button type="primary" :loading="savingSmartDNSRouting" @click="saveSmartDNSRoutingStrategy">保存 SmartDNS 出口策略</el-button>
+            <el-button type="primary" :loading="savingSmartDNSRouting" @click="saveSmartDNSRoutingStrategy">保存 SmartDNS 出口设置</el-button>
           </div>
-          <p class="section-hint">未保存策略时保持节点原有 DNS/SmartDNS 路由行为，不会因升级自动切换。保存策略后才会在主控下次同步配置时启用；已保存的 fallback 策略不会被覆盖。</p>
+          <div v-if="smartdnsRoutingMode === 'per_client'" style="margin-top:14px;">
+            <p class="section-hint">每条映射将客户端 CIDR 固定到一个全局启用代理。该策略应用于所有 Agent，因此这里只列出全局代理；CIDR 不允许重复或相互重叠，未匹配客户端不会获得默认 DNS 上游。</p>
+            <div v-for="(route, index) in smartdnsClientRoutes" :key="'smartdns-client-route-' + index" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;">
+              <el-input v-model="route.client_cidr" placeholder="客户端 CIDR，例如 192.168.50.0/24" style="flex:1;min-width:220px;" :aria-label="'客户端 CIDR ' + (index + 1)"></el-input>
+              <el-select v-model="route.proxy_name" filterable placeholder="选择全局启用代理" style="flex:1;min-width:220px;" :aria-label="'客户端代理 ' + (index + 1)">
+                <el-option v-for="proxy in globalEnabledSmartDNSProxies" :key="proxy.name || proxy.proxy_name" :label="proxy.name || proxy.proxy_name" :value="proxy.name || proxy.proxy_name"></el-option>
+              </el-select>
+              <el-button type="danger" plain @click="removeSmartDNSClientRoute(index)">删除</el-button>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <el-button plain @click="addSmartDNSClientRoute">新增 CIDR 映射</el-button>
+              <span class="section-hint">可选全局代理：{{ globalEnabledSmartDNSProxies.length }} 个</span>
+            </div>
+            <p v-if="globalEnabledSmartDNSProxies.length === 0" class="section-hint" style="color:var(--el-color-warning);">当前没有全局启用代理。请先在代理管理中添加或启用全局代理，再配置按客户端出口。</p>
+          </div>
+          <p v-else class="section-hint">Shared 默认使用 Fallback 顺序故障切换；URL-Test 和手动选择仍可选。选择旧行为会清空托管策略并保留节点原有 DNS 行为。</p>
         </div>
         <div class="card-panel">
           <div class="card-title">当前配置节点</div>
