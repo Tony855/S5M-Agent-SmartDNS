@@ -66,6 +66,8 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         self.assertEqual(packets[0]["proto"], "tcp")
         self.assertEqual(packets[0]["flags"] & 0x02, 0x02)
         self.assertEqual(packets[0]["dport"], 6055)
+        self.assertEqual(packets[0]["seq"], 123)
+        self.assertEqual(packets[0]["ack"], 0)
 
     def test_rejects_invalid_pcap_timestamp_fraction(self):
         frame = ethernet(ipv4_udp("192.168.50.10", "172.31.0.10", 42000, 6055, b"probe"))
