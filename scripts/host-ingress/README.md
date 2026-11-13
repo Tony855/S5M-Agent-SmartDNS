@@ -2,6 +2,10 @@
 
 This is a **restricted firewall reconciler**, not a complete routed-Docker provisioner. It owns only the `inet s5m_agent_ingress` nftables table and never changes Docker networks, host routes, Docker bridge defaults, or proxy settings. Do not expose the Docker socket to the Agent container.
 
+## Host prerequisites
+
+Linux Docker host with the bridge network driver, Docker Engine/CLI supporting routed bridge gateway mode, `trusted_host_interfaces`, and `docker network connect --gw-priority`; Python 3, systemd, nftables (`nft`), iproute2 (`ip`), and util-linux (`flock`) are required. The installer checks the firewall-controller dependencies before writing units. The network lifecycle helper checks Docker gateway-priority support and the trusted host interface before creating or attaching a network. No packages are installed automatically.
+
 ## Configuration
 
 Create `/etc/s5m-agent-ingress/config.json` as root, mode `0600`:
