@@ -38,7 +38,23 @@ sudo bash scripts/lab/smartdns-dns-ingress/run-smartdns-routed.sh
 The test uses isolated namespaces, a dedicated Docker network, and TEST-NET-1
 addresses. It does not modify production containers or publish a host port.
 
-The real-daemon fixture also marks every mapped DoT server with
+## Dual-network Agent topology check
+
+The real-daemon routed test also models the Agent's intended Docker topology:
+the container is created on the ordinary `bridge` network first (default
+egress), then attached to the routed ingress network with a static address
+before it starts. The test verifies both network attachments and checks that
+the default route still points at the ordinary bridge gateway. It then sends
+the per-client DNS queries over the routed interface and confirms the daemon
+sees the original client CIDRs.
+
+This is still a same-host IPv4 lab. It validates Docker's dual-network
+primitive, not the production deployer's network creation, host firewall
+rules, router route installation, IPv6, or real public proxy egress.
+
+## Fail-closed unmatched client assertion
+
+The real-daemon fixture marks every mapped DoT server with
 `-exclude-default-group` and sends a third query from an unmapped client CIDR.
 The test requires that client to receive no A answer. This guards against
 SmartDNS silently placing a per-client upstream back into the default group,
