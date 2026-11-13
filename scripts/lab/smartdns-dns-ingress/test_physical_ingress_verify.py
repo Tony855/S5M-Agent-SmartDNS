@@ -50,7 +50,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         self.assertIn(marker, packet["payload"])
 
     def test_reads_linux_sll2_tcp_syn(self):
-        tcp = struct.pack("!HHIIHHHH", 43000, 6055, 123, 0, 5 << 12, 0x02, 65535, 0, 0)
+        tcp = struct.pack("!HHIIHHHH", 43000, 6055, 123, 0, (5 << 12) | 0x02, 65535, 0, 0)
         total = 20 + len(tcp)
         ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, total, 2, 0, 64, 6, 0,
                          bytes((192, 168, 50, 20)), bytes((172, 31, 0, 10))) + tcp
