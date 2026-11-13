@@ -112,7 +112,7 @@ createApp({
     const applyingSmartDNS = ref(false);
     const smartdnsResult = ref('');
     const smartdnsStatus = ref({ available:false, running:false, dnsHealthy:false, version:'', configHash:'', lastError:'' });
-    const smartdnsRoutingStrategy = ref('legacy');
+    const smartdnsRoutingStrategy = ref('fallback');
     const savingSmartDNSRouting = ref(false);
     let smartdnsLoadGeneration = 0;
     let smartdnsApplyGeneration = 0;
@@ -1796,13 +1796,13 @@ createApp({
         const hasRoutingSetting = Object.prototype.hasOwnProperty.call(settings, 'smartdns_routing_config');
         const raw = String(settings.smartdns_routing_config || '').trim();
         if (!hasRoutingSetting) {
-          smartdnsRoutingStrategy.value = 'legacy';
+          smartdnsRoutingStrategy.value = 'fallback';
         } else if (!raw) {
           smartdnsRoutingStrategy.value = 'legacy';
         } else {
           const routing = JSON.parse(raw);
           smartdnsRoutingStrategy.value = ['url-test', 'select', 'fallback'].includes(routing.strategy)
-            ? routing.strategy : 'url-test';
+            ? routing.strategy : 'fallback';
         }
       } catch (e) {
         console.warn('读取 SmartDNS 上游出口策略失败', e);
@@ -1811,7 +1811,7 @@ createApp({
 
     const saveSmartDNSRoutingStrategy = async () => {
       if (savingSmartDNSRouting.value) return;
-      const strategy = String(smartdnsRoutingStrategy.value || 'url-test');
+      const strategy = String(smartdnsRoutingStrategy.value || 'fallback');
       if (!['url-test', 'select', 'fallback', 'legacy'].includes(strategy)) {
         showMsg('SmartDNS 出口策略无效', 'error');
         return;

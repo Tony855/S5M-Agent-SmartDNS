@@ -13,7 +13,7 @@ const (
 	SmartDNSStrategyFallback = "fallback"
 	SmartDNSStrategyURLTest  = "url-test"
 	SmartDNSStrategySelect   = "select"
-	SmartDNSDefaultStrategy  = SmartDNSStrategyURLTest
+	SmartDNSDefaultStrategy  = SmartDNSStrategyFallback
 	SmartDNSGroupName = "SMARTDNS-PROXY"
 )
 

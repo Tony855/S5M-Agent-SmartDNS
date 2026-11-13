@@ -1744,13 +1744,21 @@ func TestValidateProxyRejectsWhitespaceInServer(t *testing.T) {
 }
 
 func TestHandleUpdateSettingsAcceptsSmartDNSUpstreamStrategies(t *testing.T) {
-	for _, strategy := range []string{"url-test", "select", "fallback"} {
-		t.Run(strategy, func(t *testing.T) {
-			store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-strategy-"+strategy+".db"))
+	cases := []struct {
+		name, strategy, want string
+	}{
+		{name: "default-empty", strategy: "", want: SmartDNSStrategyFallback},
+		{name: "fallback", strategy: SmartDNSStrategyFallback, want: SmartDNSStrategyFallback},
+		{name: "url-test", strategy: SmartDNSStrategyURLTest, want: SmartDNSStrategyURLTest},
+		{name: "select", strategy: SmartDNSStrategySelect, want: SmartDNSStrategySelect},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := OpenStore(filepath.Join(t.TempDir(), "smartdns-strategy-"+tc.name+".db"))
 			if err != nil { t.Fatal(err) }
 			defer store.db.Close()
 			app := &App{store: store}
-			inner, _ := json.Marshal(SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: strategy})
+			inner, _ := json.Marshal(SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: tc.strategy})
 			bodyBytes, _ := json.Marshal(map[string]string{"smartdns_routing_config": string(inner)})
 			req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(bodyBytes))
 			rec := httptest.NewRecorder()
@@ -1760,8 +1768,8 @@ func TestHandleUpdateSettingsAcceptsSmartDNSUpstreamStrategies(t *testing.T) {
 			if err != nil { t.Fatal(err) }
 			var got SmartDNSRoutingConfig
 			if err := json.Unmarshal([]byte(settings["smartdns_routing_config"]), &got); err != nil { t.Fatal(err) }
-			if got.Mode != SmartDNSProxyModeShared || got.Strategy != strategy {
-				t.Fatalf("stored SmartDNS routing config = %#v, want strategy %s", got, strategy)
+			if got.Mode != SmartDNSProxyModeShared || got.Strategy != tc.want {
+				t.Fatalf("stored SmartDNS routing config = %#v, want strategy %s", got, tc.want)
 			}
 		})
 	}
