@@ -44,10 +44,10 @@ func TestProcSocketTableObservesOnlyIngressPortAndCorrectTCPState(t *testing.T) 
 	}
 }
 
-func TestProcSocketTableAcceptsWildcardBindButNotUnrelatedAddress(t *testing.T) {
+func TestProcSocketTableRejectsWildcardAndUnrelatedAddress(t *testing.T) {
 	wildcard := []byte("sl local_address rem_address st tx_queue\n 0: 00000000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
-	if !procSocketTableHasListener(wildcard, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
-		t.Fatal("wildcard UDP bind should be visible on the interface")
+	if procSocketTableHasListener(wildcard, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
+		t.Fatal("wildcard socket must not be attributed to an explicitly attested interface address")
 	}
 	other := []byte("sl local_address rem_address st tx_queue\n 0: 0B0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
 	if procSocketTableHasListener(other, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
@@ -62,5 +62,13 @@ func TestCollectSmartDNSIngressObservationFailsWhenNoNonLoopbackInterfaceExists(
 	}
 	if _, err := collectSmartDNSIngressObservation(deps); err == nil {
 		t.Fatal("observation without a non-loopback interface must fail")
+	}
+}
+
+func TestProcSocketTableRejectsConnectedUDPAndWrongState(t *testing.T) {
+	addresses := map[string]bool{"192.0.2.10": true}
+	connected := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 01010101:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12348\n")
+	if procSocketTableHasListener(connected, false, 6055, addresses, false) {
+		t.Fatal("connected UDP socket must not be reported as an unconnected DNS listener")
 	}
 }

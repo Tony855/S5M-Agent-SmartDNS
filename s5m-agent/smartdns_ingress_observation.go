@@ -96,13 +96,14 @@ func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddre
 		fields := strings.Fields(line)
 		if len(fields) < 4 { continue }
 		if requireTCPListen && fields[3] != "0A" { continue }
+		if !requireTCPListen && fields[3] != "07" { continue }
 		local := strings.Split(fields[1], ":")
 		if len(local) != 2 { continue }
 		parsedPort, err := strconv.ParseInt(local[1], 16, 32)
 		if err != nil || int(parsedPort) != port { continue }
 		address, err := decodeProcSocketAddress(local[0], ipv6)
 		if err != nil { continue }
-		if address.IsUnspecified() || interfaceAddresses[address.String()] {
+		if !address.IsUnspecified() && interfaceAddresses[address.String()] {
 			return true
 		}
 	}
