@@ -13,25 +13,30 @@ class ControllerTests(unittest.TestCase):
     def valid(self):
         return {"version":1,"interface":"eth1","ipv4_address":"172.31.10.2","ipv6_address":"2001:db8:31::2","client_cidrs":["192.168.50.0/24","2001:db8:50::/64"]}
     def test_valid_config_and_rules_are_scoped(self):
-        self.write(self.valid()); cfg=mod.load_config(self.path); rules=mod.render_nft(cfg)
+        self.write(self.valid()); cfg=mod.load_config(self.path, require_root=False); rules=mod.render_nft(cfg)
         self.assertIn('iifname "eth1" ip daddr 172.31.10.2', rules)
         self.assertIn('ip daddr 172.31.10.2 udp dport 6055 drop', rules)
         self.assertIn('ip6 daddr 2001:db8:31::2 tcp dport 6055 drop', rules)
         self.assertNotIn('dport 53', rules)
     def test_rejects_extra_keys_and_noncanonical_cidr(self):
         x=self.valid(); x["source_ip_preserved"]=True; self.write(x)
-        with self.assertRaises(mod.ConfigError): mod.load_config(self.path)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
         x=self.valid(); x["client_cidrs"]=["192.168.50.1/24"]; self.write(x)
-        with self.assertRaises(mod.ConfigError): mod.load_config(self.path)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
     def test_rejects_overlap_and_missing_family_address(self):
         x=self.valid(); x["client_cidrs"] += ["192.168.50.0/25"]; self.write(x)
-        with self.assertRaises(mod.ConfigError): mod.load_config(self.path)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
         x=self.valid(); x["ipv6_address"]=None; self.write(x)
-        with self.assertRaises(mod.ConfigError): mod.load_config(self.path)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
+    def test_production_loader_requires_root_owner(self):
+        import os
+        self.write(self.valid())
+        if os.geteuid() != 0:
+            with self.assertRaises(mod.ConfigError): mod.load_config(self.path)
     def test_rejects_unsafe_permissions_and_symlink(self):
         self.write(self.valid(),0o666)
-        with self.assertRaises(mod.ConfigError): mod.load_config(self.path)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
         link=self.path.with_name("link.json"); link.symlink_to(self.path)
-        with self.assertRaises(mod.ConfigError): mod.load_config(link)
+        with self.assertRaises(mod.ConfigError): mod.load_config(link, require_root=False)
 
 if __name__ == "__main__": unittest.main()

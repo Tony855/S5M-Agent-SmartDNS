@@ -16,9 +16,9 @@ IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 
 class ConfigError(ValueError): pass
 
-def _secure_regular(path: Path, *, max_bytes: int = 16384) -> bytes:
+def _secure_regular(path: Path, *, max_bytes: int = 16384, require_root: bool = True) -> bytes:
     st = path.lstat()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+    if not stat.S_ISREG(st.st_mode) or (require_root and st.st_uid != 0) or st.st_mode & 0o022:
         raise ConfigError(f"{path} must be a root-owned regular file and not group/world writable")
     if st.st_size > max_bytes:
         raise ConfigError(f"{path} exceeds {max_bytes} bytes")
@@ -26,7 +26,7 @@ def _secure_regular(path: Path, *, max_bytes: int = 16384) -> bytes:
     fd = os.open(path, flags)
     try:
         fst = os.fstat(fd)
-        if not stat.S_ISREG(fst.st_mode) or fst.st_uid != 0 or fst.st_mode & 0o022 or fst.st_size > max_bytes:
+        if not stat.S_ISREG(fst.st_mode) or (require_root and fst.st_uid != 0) or fst.st_mode & 0o022 or fst.st_size > max_bytes:
             raise ConfigError(f"{path} changed while opening")
         data = os.read(fd, max_bytes + 1)
         if len(data) > max_bytes:
@@ -44,8 +44,8 @@ def _address(value: object, field: str):
     if str(ip) != value: raise ConfigError(f"{field} must use canonical address notation")
     return ip
 
-def load_config(path: Path = CONFIG) -> dict:
-    raw = _secure_regular(path)
+def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
+    raw = _secure_regular(path, require_root=require_root)
     try: cfg = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as e: raise ConfigError("config must be valid UTF-8 JSON") from e
     if not isinstance(cfg, dict) or set(cfg) != {"version", "interface", "ipv4_address", "ipv6_address", "client_cidrs"}:
