@@ -53,14 +53,14 @@ def pcap_packets(path, data=None, require_root=True):
         raise ValueError(f"{path}: truncated pcap global header")
     magic = data[:4]
     formats = {
-        b"\xd4\xc3\xb2\xa1": "<",
-        b"\xa1\xb2\xc3\xd4": ">",
-        b"\x4d\x3c\xb2\xa1": "<",
-        b"\xa1\xb2\x3c\x4d": ">",
+        b"\xd4\xc3\xb2\xa1": ("<", 1_000_000),
+        b"\xa1\xb2\xc3\xd4": (">", 1_000_000),
+        b"\x4d\x3c\xb2\xa1": ("<", 1_000_000_000),
+        b"\xa1\xb2\x3c\x4d": (">", 1_000_000_000),
     }
     if magic not in formats:
         raise ValueError(f"{path}: unsupported pcap format")
-    endian = formats[magic]
+    endian, fraction_scale = formats[magic]
     linktype = struct.unpack(endian + "I", data[20:24])[0]
     offset = 24
     packets = []
