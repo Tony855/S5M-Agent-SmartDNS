@@ -34,7 +34,7 @@ class ConfigTests(unittest.TestCase):
         firewall={"version":1,"interface":"eth1","ipv4_address":"172.31.10.2","ipv6_address":"2001:db8:31::2","client_cidrs":["192.168.50.0/24","2001:db8:50::/64"]}
         path.write_text(json.dumps(firewall)); os.chmod(path,0o600)
         cfg=nl.read_config(self.write(valid_config()),require_root=False)
-        nl.validate_firewall_contract(cfg,path)
+        nl.validate_firewall_contract(cfg,path,require_root=False)
         firewall["ipv4_address"]="172.31.10.99"
         path.write_text(json.dumps(firewall)); os.chmod(path,0o600)
         with self.assertRaises(nl.LifecycleError): nl.validate_firewall_contract(cfg,path)
