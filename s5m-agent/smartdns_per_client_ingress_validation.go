@@ -290,7 +290,7 @@ func addValidatedIngressAddress(addresses map[string]bool, raw string, wantIPv4 
 // through the legacy shared-mode validator/transaction without an ingress
 // contract. It is a conservative detector, not a replacement for validation.
 func hasPerClientSmartDNSDirectives(data []byte) bool {
-	for _, raw := range strings.Split(strings.ReplaceAll(string(data), "\\r\\n", "\\n"), "\\n") {
+	for _, raw := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
