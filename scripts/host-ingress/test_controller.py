@@ -16,7 +16,7 @@ class ControllerTests(unittest.TestCase):
         self.write(self.valid()); cfg=mod.load_config(self.path, require_root=False); rules=mod.render_nft(cfg)
         self.assertIn('iifname "eth1" ip daddr 172.31.10.2', rules)
         self.assertIn('ip daddr 172.31.10.2 udp dport 6055 drop', rules)
-        self.assertIn('ip6 daddr 2001:db8:31::2 tcp dport 6055 drop', rules)
+        self.assertIn('ip6 daddr 2001:db8:31::2 drop', rules)
         self.assertIn("managed-by:s5m-agent-ingress-v1", rules)
         self.assertNotIn("dport 53", rules)
     def test_rejects_boolean_version_and_mapped_ipv6_cidr(self):

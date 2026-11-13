@@ -161,7 +161,10 @@ def render_nft(cfg: dict) -> str:
             if nets:
                 set_text = ", ".join(str(n) for n in nets)
                 lines.append(f'    iifname "{iface}" {family} daddr {addr} {family} saddr {{ {set_text} }} {proto} dport 6055 accept')
-            lines.append(f'    {family} daddr {addr} {proto} dport 6055 drop')
+        # Docker trusted_host_interfaces can make other container ports directly
+        # reachable. The ingress address is DNS-only: drop every other forwarded
+        # packet to it, regardless of protocol, port, or source interface.
+        lines.append(f'    {family} daddr {addr} drop')
     lines += ["  }", "}"]
     return "\n".join(lines) + "\n"
 
