@@ -49,3 +49,17 @@ func TestAgentWebSocketRejectsPerClientConfigWithoutFreshIngressAttestation(t *t
 		t.Fatalf("per-client config must fail closed without ingress attestation: %#v", response)
 	}
 }
+
+
+func TestQueueAgentSmartDNSConfigAlsoRequiresIngressReadinessForPerClientMode(t *testing.T) {
+	app, code, _ := websocketTestApp(t)
+	if err := app.store.UpdateSettings(map[string]string{
+		"smartdns_routing_config": `{"mode":"per_client","clients":[{"client_cidr":"192.168.50.0/24","proxy_name":"proxy-a"}]}`,
+	}); err != nil {
+		t.Fatalf("set per-client routing mode: %v", err)
+	}
+	if err := app.queueAgentSmartDNSConfig(code, "bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053"); err == nil ||
+		!strings.Contains(err.Error(), "DNS ingress") {
+		t.Fatalf("direct SmartDNS apply must fail closed without fresh ingress attestation, got %v", err)
+	}
+}
