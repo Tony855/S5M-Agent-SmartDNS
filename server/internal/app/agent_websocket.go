@@ -1210,6 +1210,53 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		}
 	}
 
+	// Per-client DNS isolation is generated from this Agent's exact persisted
+	// Mihomo document and its eligible proxy set. The two resulting documents
+	// are published together below through the dual-hash WebSocket transaction.
+	perClientSmartDNSYAML := ""
+	settings, settingsErr := a.store.GetSettings()
+	if settingsErr != nil {
+		return fmt.Errorf("读取 Agent SmartDNS 路由设置失败: %w", settingsErr)
+	}
+	if raw := strings.TrimSpace(settings["smartdns_routing_config"]); raw != "" {
+		var routing SmartDNSRoutingConfig
+		if err := json.Unmarshal([]byte(raw), &routing); err != nil {
+			return fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+		}
+		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) &&
+			strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "true") {
+			noSmartDNSAgent := false
+			var status map[string]any
+			if rawStatus := strings.TrimSpace(settings["agent_status_"+machineCode]); rawStatus != "" &&
+				json.Unmarshal([]byte(rawStatus), &status) == nil {
+				if available, reported := status["smartdns_available"].(bool); reported && !available {
+					noSmartDNSAgent = true
+				}
+			}
+			if !noSmartDNSAgent {
+				proxies, proxyErr := a.store.ListProxies()
+				if proxyErr != nil {
+					return fmt.Errorf("读取 Agent per-client 代理列表失败: %w", proxyErr)
+				}
+				refs := make([]SmartDNSProxyRef, 0, len(proxies))
+				for _, proxy := range proxies {
+					machine := strings.TrimSpace(proxy.MachineCode)
+					if machine == "__GLOBAL__" || machine == machineCode {
+						refs = append(refs, SmartDNSProxyRef{Name: proxy.Name, Enabled: proxy.Enabled})
+					}
+				}
+				var mappings []SmartDNSClientRuntimeMapping
+				yml, perClientSmartDNSYAML, mappings, err = buildSmartDNSPerClientRuntimeConfigs(yml, routing, refs)
+				if err != nil {
+					return fmt.Errorf("生成 Agent 按客户端隔离 DNS 运行时失败: %w", err)
+				}
+				if len(mappings) != len(routing.Clients) || strings.TrimSpace(perClientSmartDNSYAML) == "" {
+					return fmt.Errorf("Agent 按客户端隔离 DNS 运行时映射不完整，拒绝发布配置")
+				}
+			}
+		}
+	}
+
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
 	// Apply it only to the outgoing payload so health loss immediately falls back
 	// to the original configured nameservers on the next config request.
@@ -1233,6 +1280,11 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	}
 	if smartDNSErr == sql.ErrNoRows {
 		smartDNSYAML = ""
+	}
+	if perClientSmartDNSYAML != "" {
+		// The generated per-client resolver config is authoritative for this
+		// sync; never mix it with a stale manually managed SmartDNS document.
+		smartDNSYAML = perClientSmartDNSYAML
 	}
 	if len(smartDNSYAML) > 8<<10 {
 		return fmt.Errorf("主控端 SmartDNS 配置超过 8 KiB 限制")
