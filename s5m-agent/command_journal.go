@@ -73,7 +73,7 @@ func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 		return entry, fmt.Errorf("读取 Agent 命令执行记录失败: %w", err)
 	}
 	if len(data) == 0 || len(data) > agentCommandJournalMaxBytes {
-		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 16 KiB")
+		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 64 KiB")
 	}
 	if err := json.Unmarshal(data, &entry); err != nil {
 		return entry, fmt.Errorf("Agent 命令执行记录损坏，拒绝覆盖: %w", err)
@@ -91,10 +91,18 @@ func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	if len(entry.History) > agentCommandJournalHistoryLimit {
 		return entry, fmt.Errorf("Agent 命令执行记录历史超过允许数量，拒绝读取")
 	}
+	seenIDs := make(map[string]struct{}, len(entry.History))
 	for _, seen := range entry.History {
 		if strings.TrimSpace(seen.ID) == "" || len(seen.ID) > 256 || len(seen.PayloadHash) != 64 {
 			return entry, fmt.Errorf("Agent 命令执行记录历史字段无效，拒绝读取")
 		}
+		if seen.ID == entry.ID {
+			return entry, fmt.Errorf("Agent 命令执行记录当前命令与历史记录冲突，拒绝读取")
+		}
+		if _, exists := seenIDs[seen.ID]; exists {
+			return entry, fmt.Errorf("Agent 命令执行记录历史包含重复命令 ID，拒绝读取")
+		}
+		seenIDs[seen.ID] = struct{}{}
 		if _, err := hex.DecodeString(seen.PayloadHash); err != nil {
 			return entry, fmt.Errorf("Agent 命令执行记录历史 hash 无效，拒绝读取")
 		}
