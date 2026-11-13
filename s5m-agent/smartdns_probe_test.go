@@ -195,6 +195,21 @@ func TestSmartDNSResponseRejectsMalformedAuthorityAndAdditionalRecords(t *testin
 	}
 }
 
+func TestSmartDNSResponseRejectsUndeclaredTrailingBytes(t *testing.T) {
+	message := make([]byte, 12)
+	binary.BigEndian.PutUint16(message[0:2], 0x534d)
+	binary.BigEndian.PutUint16(message[2:4], 0x8180)
+	binary.BigEndian.PutUint16(message[4:6], 1)
+	binary.BigEndian.PutUint16(message[6:8], 1)
+	message = append(message, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+	message = append(message, 0, 1, 0, 1)
+	message = append(message, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+	message = append(message, 0xff)
+	if smartDNSResponseHasAnswer(message, 0x534d, 1) {
+		t.Fatal("DNS response with undeclared trailing byte must be rejected")
+	}
+}
+
 func TestSmartDNSResponseValidatesAllAnswersBeforeAcceptingMatch(t *testing.T) {
 	message := make([]byte, 12)
 	binary.BigEndian.PutUint16(message[0:2], 0x534d)
