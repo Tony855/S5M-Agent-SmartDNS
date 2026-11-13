@@ -85,7 +85,6 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)
         self.assertIn("RuntimeDirectoryPreserve=yes", unit)
 
-if __name__ == "__main__": unittest.main()
 
     def test_invalidate_attestation_removes_stale_readiness_and_fsyncs_parent(self):
         path = pathlib.Path(self.tmp.name) / "ingress.json"
@@ -100,3 +99,5 @@ if __name__ == "__main__": unittest.main()
         parent.chmod(0o777)
         with self.assertRaises(mod.ConfigError):
             mod.invalidate_attestation(parent / "ingress.json")
+
+if __name__ == "__main__": unittest.main()
