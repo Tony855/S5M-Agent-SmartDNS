@@ -286,6 +286,11 @@ validate_ingress_options() {
       return 1
     fi
   done
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    local ingress_help
+    ingress_help="$(docker network connect --help 2>&1)" || true
+    [[ "$ingress_help" == *"--gw-priority"* ]] || { err "当前 Docker CLI 不支持 network connect --gw-priority"; return 1; }
+  fi
   if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
     local bridge_ipv6
     bridge_ipv6="$(docker network inspect bridge --format '{{.EnableIPv6}}')" || { err "无法检查默认 Docker bridge IPv6 状态"; return 1; }

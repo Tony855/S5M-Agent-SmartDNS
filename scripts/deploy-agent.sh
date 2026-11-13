@@ -124,6 +124,10 @@ fi
 [[ "$ENABLE_PER_CLIENT_INGRESS" == "0" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || die "ENABLE_PER_CLIENT_INGRESS 只能是 0 或 1。"
 [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || die "ENABLE_PER_CLIENT_INGRESS_IPV6 只能是 0 或 1。"
 [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" != "1" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || die "启用 IPv6 ingress 前必须启用 ENABLE_PER_CLIENT_INGRESS=1。"
+if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+  ingress_help="$(docker network connect --help 2>&1)"
+  [[ "$ingress_help" == *"--gw-priority"* ]] || die "当前 Docker CLI 不支持 network connect --gw-priority，拒绝启用 routed ingress。"
+fi
 [[ "$PULL_IMAGE" == "0" || "$PULL_IMAGE" == "1" ]] || die "PULL_IMAGE 只能是 0 或 1。"
 [[ "$BIND_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "BIND_IP 格式不正确。"
 if (( WEB_PORT > 0 )); then
