@@ -5,6 +5,14 @@ CONFIG_FILE="${CONFIG_FILE:-/etc/default/s5m-agent-smartdns}"
 
 log() { printf '[S5M-Agent] %s\n' "$*"; }
 die() { printf '[S5M-Agent][ERROR] %s\n' "$*" >&2; exit 1; }
+prepare_ingress_attestation_dir() {
+  local path="/run/s5m-agent-ingress"
+  [[ ! -L "$path" ]] || die "宿主机 ingress attestation 目录不能是符号链接：$path"
+  [[ ! -e "$path" || -d "$path" ]] || die "宿主机 ingress attestation 路径不是目录：$path"
+  install -d -o root -g root -m 0755 "$path"
+  [[ -d "$path" && ! -L "$path" ]] || die "无法安全创建 ingress attestation 目录：$path"
+}
+
 validate_data_dir_path() {
   local path="$DATA_DIR" current="" component
   local -a components=()
@@ -143,6 +151,8 @@ if [[ "$ENABLE_TUN" == "0" && -f "$DATA_DIR/config.yaml" ]] && config_uses_tun "
 fi
 
 install -d -m 0700 "$DATA_DIR"
+# An empty attestation directory is fail-closed; it does not provision or open DNS ingress.
+prepare_ingress_attestation_dir
 if [[ "$PULL_IMAGE" == "1" ]]; then
   log "拉取镜像：$IMAGE"
   docker pull "$IMAGE"
@@ -155,7 +165,7 @@ WEB_BIND_ADDR="$WEB_BIND_IP"
 PROXY_BIND_ADDR="$PROXY_BIND_IP"
 [[ "$PROXY_BIND_IP" == *:* ]] && PROXY_BIND_ADDR="[$PROXY_BIND_IP]"
 args=(run -d --name "$CONTAINER_NAME" --restart "$RESTART_POLICY")
-args+=(-e "S5M_HOSTNAME=$S5M_HOSTNAME" -v "$DATA_DIR:/data")
+args+=(-e "S5M_HOSTNAME=$S5M_HOSTNAME" -v "$DATA_DIR:/data" -v "/run/s5m-agent-ingress:/run/s5m-agent-ingress:ro")
 [[ -n "$EXTRA_ENV_FILE" ]] && args+=(--env-file "$EXTRA_ENV_FILE")
 (( WEB_PORT > 0 )) && args+=(-p "$WEB_BIND_ADDR:$WEB_PORT:80/tcp")
 (( PROXY_PORT > 0 )) && args+=(-p "$PROXY_BIND_ADDR:$PROXY_PORT:7890/tcp")
