@@ -52,3 +52,10 @@ Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/
 5. 任何 attestation 过期、CIDR 变化、接口/地址变化、firewall 失效或监听丢失均必须 fail closed。
 
 **注意：当前仓库已实现 Agent 对该文件的安全读取和状态合并，但受限 host controller、routed Docker lifecycle、nftables reconcile/rollback 和真实 LAN 源地址证明仍未完成。没有这些证据时文件缺失或字段为 false，per-client 必须保持禁用。**
+
+
+## 受限宿主机防火墙控制器（新增）
+
+仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建 Docker network、不改宿主机路由，也不接触 Docker socket。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
+
+该组件当前只证明专属 nftables allowlist 已应用；attestation 仍固定报告 `firewall_persistent=false`、`udp_ready=false`、`tcp_ready=false`、`source_ip_preserved=false`。因此它不会单独通过 Master provisioning gate，更不会开启 per-client。真实 routed Docker lifecycle、外部路由和物理 LAN 源地址验收仍是独立阻断项。

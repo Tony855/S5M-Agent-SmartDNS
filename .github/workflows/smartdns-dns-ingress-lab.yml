@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "scripts/lab/smartdns-dns-ingress/**"
+      - "scripts/host-ingress/**"
       - ".github/workflows/smartdns-dns-ingress-lab.yml"
   workflow_dispatch:
 
@@ -22,6 +23,12 @@ jobs:
           python3 -m py_compile scripts/lab/smartdns-dns-ingress/physical-client-probe.py
           python3 -m unittest discover -s scripts/lab/smartdns-dns-ingress -p 'test_*.py'
           rm -rf scripts/lab/smartdns-dns-ingress/__pycache__
+      - name: Validate restricted host ingress controller
+        run: |
+          python3 -m py_compile scripts/host-ingress/controller.py
+          python3 -m unittest discover -s scripts/host-ingress -p 'test_*.py'
+          bash -n scripts/host-ingress/install-host-controller.sh
+          rm -rf scripts/host-ingress/__pycache__
       - name: Run isolated Docker source-IP experiment
         run: |
           bash scripts/lab/smartdns-dns-ingress/run.sh

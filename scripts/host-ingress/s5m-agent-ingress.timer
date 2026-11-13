@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh S5M Agent DNS ingress firewall attestation
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=2s
+Persistent=true
+Unit=s5m-agent-ingress.service
+
+[Install]
+WantedBy=timers.target
