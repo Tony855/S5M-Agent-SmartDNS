@@ -13,9 +13,9 @@ if TRANSPORT == "udp":
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(0.5)
         sock.sendto(question, (HOST, PORT))
-        time.sleep(0.25)
+        time.sleep(0.5)
 else:
     with socket.create_connection((HOST, PORT), timeout=2) as sock:
         sock.sendall(struct.pack("!H", len(question)) + question)
-        time.sleep(0.25)
+        time.sleep(0.5)
 print(f"SENT {TRANSPORT} {NAME}")
