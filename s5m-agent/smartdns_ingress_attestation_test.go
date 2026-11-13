@@ -73,3 +73,20 @@ func TestReadSmartDNSHostIngressAttestationEnforcesRootOwnership(t *testing.T) {
 	if os.Geteuid() == 0 && err != nil { t.Fatalf("root-owned test file should be accepted: %v", err) }
 	if os.Geteuid() != 0 && err == nil { t.Fatal("non-root-owned host attestation accepted") }
 }
+
+func TestValidateSmartDNSHostIngressAttestationRejectsNonCanonicalCIDR(t *testing.T) {
+	att := validHostIngressAttestationFixture()
+	att.ClientCIDRs = []string{"192.168.50.1/24"}
+	if err := validateSmartDNSHostIngressAttestation(att); err == nil {
+		t.Fatal("non-canonical client CIDR accepted")
+	}
+}
+
+func TestValidateSmartDNSHostIngressAttestationRequiresMatchingAddressFamily(t *testing.T) {
+	att := validHostIngressAttestationFixture()
+	att.IPv4Address = ""
+	att.IPv6Address = "2001:db8:31::10"
+	if err := validateSmartDNSHostIngressAttestation(att); err == nil {
+		t.Fatal("IPv4 client CIDR accepted without an IPv4 ingress address")
+	}
+}

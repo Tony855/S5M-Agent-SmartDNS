@@ -17,7 +17,13 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('iifname "eth1" ip daddr 172.31.10.2', rules)
         self.assertIn('ip daddr 172.31.10.2 udp dport 6055 drop', rules)
         self.assertIn('ip6 daddr 2001:db8:31::2 tcp dport 6055 drop', rules)
-        self.assertNotIn('dport 53', rules)
+        self.assertIn("managed-by:s5m-agent-ingress-v1", rules)
+        self.assertNotIn("dport 53", rules)
+    def test_rejects_boolean_version_and_mapped_ipv6_cidr(self):
+        x=self.valid(); x["version"]=True; self.write(x)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
+        x=self.valid(); x["client_cidrs"]=["::ffff:192.0.2.0/120"]; self.write(x)
+        with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
     def test_rejects_extra_keys_and_noncanonical_cidr(self):
         x=self.valid(); x["source_ip_preserved"]=True; self.write(x)
         with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)

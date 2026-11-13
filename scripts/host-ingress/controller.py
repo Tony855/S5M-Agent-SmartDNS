@@ -50,7 +50,7 @@ def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
     except (UnicodeDecodeError, json.JSONDecodeError) as e: raise ConfigError("config must be valid UTF-8 JSON") from e
     if not isinstance(cfg, dict) or set(cfg) != {"version", "interface", "ipv4_address", "ipv6_address", "client_cidrs"}:
         raise ConfigError("config keys must be exactly version, interface, ipv4_address, ipv6_address, client_cidrs")
-    if cfg["version"] != 1: raise ConfigError("unsupported config version")
+    if type(cfg["version"]) is not int or cfg["version"] != 1: raise ConfigError("unsupported config version")
     iface = cfg["interface"]
     if not isinstance(iface, str) or not IFACE_RE.fullmatch(iface) or iface in {".", ".."}:
         raise ConfigError("invalid ingress interface name")
@@ -70,7 +70,7 @@ def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
         if not isinstance(value, str): raise ConfigError("each client CIDR must be a string")
         try: net = ipaddress.ip_network(value, strict=True)
         except ValueError as e: raise ConfigError(f"invalid or non-canonical client CIDR: {value}") from e
-        if net.prefixlen == 0 or net.is_loopback or net.is_link_local or net.is_multicast or net.is_unspecified or net.is_reserved:
+        if net.prefixlen == 0 or net.is_loopback or net.is_link_local or net.is_multicast or net.is_unspecified or net.is_reserved or getattr(net.network_address, "ipv4_mapped", None):
             raise ConfigError(f"client CIDR is not an allowed unicast network: {value}")
         networks.append(net)
     if len(set(networks)) != len(networks): raise ConfigError("duplicate client CIDR")
@@ -83,7 +83,7 @@ def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
 
 def render_nft(cfg: dict) -> str:
     iface = cfg["interface"]
-    lines = [f"table inet {TABLE} {{", "  chain forward_guard {", "    type filter hook forward priority -5; policy accept;"]
+    lines = [f'table inet {TABLE} {{ comment "managed-by:s5m-agent-ingress-v1";', "  chain forward_guard {", "    type filter hook forward priority -5; policy accept;"]
     for addr in cfg["addresses"]:
         family = "ip" if addr.version == 4 else "ip6"
         nets = [n for n in cfg["networks"] if n.version == addr.version]
@@ -138,6 +138,8 @@ def main(argv=None) -> int:
                     finally: os.close(dfd)
                 exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
                 if exists.returncode == 0:
+                    if "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
+                        raise ConfigError("refusing to remove an nftables table not owned by this controller")
                     removed = subprocess.run(["nft", "delete", "table", "inet", TABLE], text=True, capture_output=True)
                     if removed.returncode: raise ConfigError(f"nft table removal failed: {removed.stderr.strip()}")
             print("owned ingress firewall table and attestation removed; Docker networks/routes were not changed")
@@ -157,6 +159,8 @@ def main(argv=None) -> int:
         with os.fdopen(lock_fd, "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
+            if exists.returncode == 0 and "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
+                raise ConfigError("refusing to replace an nftables table not owned by this controller")
             transaction = (f"delete table inet {TABLE}\n" if exists.returncode == 0 else "") + rules
             check = subprocess.run(["nft", "-c", "-f", "-"], input=transaction, text=True, capture_output=True)
             if check.returncode: raise ConfigError(f"nft validation failed: {check.stderr.strip()}")

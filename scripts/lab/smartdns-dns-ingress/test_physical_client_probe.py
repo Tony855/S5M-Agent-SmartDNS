@@ -43,6 +43,20 @@ class PhysicalClientProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "shorter than its header"):
             PROBE.parse_response(b"short", 1)
 
+    def test_tcp_recv_exact_handles_fragmented_reads(self):
+        class FragmentedSocket:
+            def __init__(self): self.parts = [b"\\x00", b"\\x03", b"abc"]
+            def recv(self, size):
+                part = self.parts.pop(0)
+                result, rest = part[:size], part[size:]
+                if rest: self.parts.insert(0, rest)
+                return result
+        self.assertEqual(PROBE.recv_exact(FragmentedSocket(), 2), b"\\x00\\x03")
+    def test_tcp_recv_exact_rejects_eof(self):
+        class ClosedSocket:
+            def recv(self, size): return b""
+        with self.assertRaisesRegex(ValueError, "truncated DNS-over-TCP"):
+            PROBE.recv_exact(ClosedSocket(), 2)
     def test_encodes_idna_names(self):
         wire = PROBE.encode_name("例子.测试")
         self.assertTrue(wire.endswith(b"\0"))

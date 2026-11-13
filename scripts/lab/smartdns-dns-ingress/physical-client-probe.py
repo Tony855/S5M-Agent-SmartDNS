@@ -78,6 +78,16 @@ def parse_response(packet, qid):
     return flags & 0x000F, answers
 
 
+def recv_exact(sock, length):
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = sock.recv(length - len(chunks))
+        if not chunk:
+            raise ValueError("truncated DNS-over-TCP response")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("server", help="numeric IPv4 or IPv6 SmartDNS ingress address")
@@ -114,17 +124,11 @@ def main():
             else:
                 sock.connect(destination)
                 sock.sendall(struct.pack("!H", len(query)) + query)
-                header = sock.recv(2)
-                if len(header) != 2:
-                    raise ValueError("missing DNS-over-TCP length prefix")
+                header = recv_exact(sock, 2)
                 length = struct.unpack("!H", header)[0]
-                chunks = bytearray()
-                while len(chunks) < length:
-                    chunk = sock.recv(length - len(chunks))
-                    if not chunk:
-                        raise ValueError("truncated DNS-over-TCP response")
-                    chunks.extend(chunk)
-                response, peer = bytes(chunks), destination
+                if length < 12:
+                    raise ValueError("invalid DNS-over-TCP response length")
+                response, peer = recv_exact(sock, length), destination
             rcode, answers = parse_response(response, qid)
             source_ip = sock.getsockname()[0]
             print(f"SOURCE_ADDR={source_ip}")
