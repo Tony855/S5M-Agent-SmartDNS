@@ -111,3 +111,16 @@ func TestBuildSmartDNSRoutingPlanFallbackIsDefault(t *testing.T) {
 		t.Fatalf("new shared SmartDNS routing must default to ordered fallback: %#v", got)
 	}
 }
+
+
+func TestBuildSmartDNSRoutingPlanRejectsReservedCIDRsAndOverlapsAfterMasking(t *testing.T) {
+ proxies:=[]SmartDNSProxyRef{{Name:"node-a",Enabled:true}}
+ for _,cidr:=range []string{"0.0.0.0/0","::/0","127.0.0.0/8","::1/128","169.254.0.0/16","fe80::/10","224.0.0.0/4","ff00::/8","::ffff:192.0.2.0/120","255.255.255.255/32"} {
+  t.Run(cidr,func(t *testing.T){
+   cfg:=SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:cidr,ProxyName:"node-a"}}}
+   if _,err:=BuildSmartDNSRoutingPlan(cfg,proxies);err==nil {t.Fatalf("unsafe CIDR %q accepted",cidr)}
+  })
+ }
+ cfg:=SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:"192.168.50.7/24",ProxyName:"node-a"},{ClientCIDR:"192.168.50.8/32",ProxyName:"node-a"}}}
+ if _,err:=BuildSmartDNSRoutingPlan(cfg,proxies);err==nil {t.Fatal("overlap after masking accepted")}
+}

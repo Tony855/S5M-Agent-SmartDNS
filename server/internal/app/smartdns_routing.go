@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"sort"
 	"strings"
 )
@@ -96,7 +96,7 @@ func BuildSmartDNSRoutingPlan(cfg SmartDNSRoutingConfig, proxies []SmartDNSProxy
 	}
 
 	seen := make(map[string]bool, len(cfg.Clients))
-	networks := make([]*net.IPNet, 0, len(cfg.Clients))
+	networks := make([]netip.Prefix, 0, len(cfg.Clients))
 	ports := make(map[int]bool, len(cfg.Clients))
 	for i, route := range cfg.Clients {
 		route.ClientCIDR = strings.TrimSpace(route.ClientCIDR)
@@ -104,16 +104,22 @@ func BuildSmartDNSRoutingPlan(cfg SmartDNSRoutingConfig, proxies []SmartDNSProxy
 		if route.ClientCIDR == "" || route.ProxyName == "" {
 			return SmartDNSRoutingPlan{}, fmt.Errorf("第 %d 条客户端 DNS 映射缺少 CIDR 或代理节点", i+1)
 		}
-		_, network, err := net.ParseCIDR(route.ClientCIDR)
+		prefix, err := netip.ParsePrefix(route.ClientCIDR)
 		if err != nil { return SmartDNSRoutingPlan{}, fmt.Errorf("第 %d 条客户端 CIDR 无效: %w", i+1, err) }
-		route.ClientCIDR = network.String()
+		prefix = prefix.Masked()
+		address := prefix.Addr()
+		if prefix.Bits() == 0 || !address.IsGlobalUnicast() || address.Is4In6() {
+			return SmartDNSRoutingPlan{}, fmt.Errorf("第 %d 条客户端 CIDR 必须是具体的单播网段，不能使用默认路由、回环、链路本地、组播或映射地址", i+1)
+		}
+		route.ClientCIDR = prefix.String()
 		if seen[route.ClientCIDR] { return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段重复映射: %s", route.ClientCIDR) }
 		for _, existing := range networks {
-			if network.Contains(existing.IP) || existing.Contains(network.IP) {
+			if prefix.Addr().Is4() == existing.Addr().Is4() &&
+				(prefix.Contains(existing.Addr()) || existing.Contains(prefix.Addr())) {
 				return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段存在重叠映射: %s 与 %s", route.ClientCIDR, existing.String())
 			}
 		}
-		networks = append(networks, network)
+		networks = append(networks, prefix)
 		seen[route.ClientCIDR] = true
 		if !available[route.ProxyName] { return SmartDNSRoutingPlan{}, fmt.Errorf("客户端网段 %s 引用了不存在或已禁用的代理 %q", route.ClientCIDR, route.ProxyName) }
 		// Zero requests deterministic auto-allocation. Explicit ports must be

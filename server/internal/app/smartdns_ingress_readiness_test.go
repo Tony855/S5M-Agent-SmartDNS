@@ -256,3 +256,27 @@ func TestSmartDNSIngressProvisioningAllowsFirstBindButPublicationRequiresRuntime
 		t.Fatalf("provisioning contract = %#v, err=%v", contract, err)
 	}
 }
+
+
+func TestValidateSmartDNSIngressReadinessRejectsReservedCIDRsAndLinkLocalIngressAddresses(t *testing.T) {
+ now:=time.Unix(1794560000,0)
+ for _,cidr:=range []string{"0.0.0.0/0","::/0","127.0.0.0/8","169.254.0.0/16","fe80::/10","224.0.0.0/4","::ffff:192.0.2.0/120"} {
+  t.Run("cidr-"+cidr,func(t *testing.T){
+   settings:=readySmartDNSIngressSettings(now,"192.168.50.0/24")
+   routing:=SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:cidr,ProxyName:"proxy-a"}}}
+   if err:=validateSmartDNSIngressReadiness(settings,"node-a",routing,now);err==nil { t.Fatalf("unsafe CIDR %q passed readiness",cidr) }
+  })
+ }
+ for _,tc:=range []struct{address string;cidr string}{{"169.254.10.1","192.168.50.0/24"},{"fe80::1","2001:db8:50::/64"}} {
+  t.Run("ingress-"+tc.address,func(t *testing.T){
+   settings:=readySmartDNSIngressSettings(now,tc.cidr)
+   var status map[string]any
+   if err:=json.Unmarshal([]byte(settings["agent_status_node-a"]),&status);err!=nil {t.Fatal(err)}
+   if strings.Contains(tc.address,":") {status["dns_ingress_ipv6_address"]=tc.address;status["dns_ingress_smartdns_ipv6_bind_address"]=tc.address} else {status["dns_ingress_ipv4_address"]=tc.address;status["dns_ingress_smartdns_ipv4_bind_address"]=tc.address}
+   raw,err:=json.Marshal(status);if err!=nil {t.Fatal(err)}
+   settings["agent_status_node-a"]=string(raw)
+   routing:=SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:tc.cidr,ProxyName:"proxy-a"}}}
+   if err:=validateSmartDNSIngressReadiness(settings,"node-a",routing,now);err==nil {t.Fatal("link-local ingress address accepted")}
+  })
+ }
+}
