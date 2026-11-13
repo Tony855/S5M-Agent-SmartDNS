@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -18,17 +19,19 @@ type transactionRecoveryFile struct {
 }
 
 type configTransactionRecoveryRecord struct {
-	Version       int                    `json:"version"`
-	Phase         string                 `json:"phase"`
-	SmartDNS      transactionRecoveryFile `json:"smartdns"`
-	Mihomo        transactionRecoveryFile `json:"mihomo"`
-	ManagedRoutes transactionRecoveryFile `json:"managed_routes"`
-	Controller    transactionRecoveryFile `json:"controller"`
+	Version         int                    `json:"version"`
+	Phase           string                 `json:"phase"`
+	SmartDNS        transactionRecoveryFile `json:"smartdns"`
+	Mihomo          transactionRecoveryFile `json:"mihomo"`
+	ManagedRoutes   transactionRecoveryFile `json:"managed_routes"`
+	Controller      transactionRecoveryFile `json:"controller"`
 }
 
 var (
 	configTransactionRecoveryMu sync.Mutex
 	transactionWriteRecoveryRecord = writeConfigTransactionRecoveryRecord
+	transactionStopSmartDNS = smartDNSServiceStop
+	transactionSmartDNSProcessRunning = func() bool { return exec.Command("pidof", "smartdns").Run() == nil }
 )
 
 func configTransactionRecoveryPath() string {
@@ -148,12 +151,28 @@ func recoverInterruptedConfigTransactionWithRuntimeChecks(checkRuntime bool) err
 			return fmt.Errorf("联合配置事务启动恢复未完成，恢复记录保留: %w", errors.Join(restoreErrors...))
 		}
 
-		if checkRuntime && record.SmartDNS.Existed && smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
-			if err := transactionRestartSmartDNS(); err != nil {
-				return fmt.Errorf("重启恢复后的 SmartDNS 失败，恢复记录保留: %w", err)
-			}
-			if !transactionWaitSmartDNSHealthy(5 * time.Second) {
-				return fmt.Errorf("恢复后的 SmartDNS 未通过 UDP/TCP DNS 健康检查，恢复记录保留")
+		if checkRuntime && smartDNSFeatureSupported() {
+			if record.SmartDNS.Existed && smartDNSRuntimeEnabled() {
+				if err := transactionRestartSmartDNS(); err != nil {
+					return fmt.Errorf("重启恢复后的 SmartDNS 失败，恢复记录保留: %w", err)
+				}
+				if !transactionWaitSmartDNSHealthy(5 * time.Second) {
+					return fmt.Errorf("恢复后的 SmartDNS 未通过 UDP/TCP DNS 健康检查，恢复记录保留")
+				}
+			} else if !record.SmartDNS.Existed {
+				// The transaction may have created and started SmartDNS for the
+				// first time. Restoring an absent prior config is not enough while
+				// the daemon is still serving the uncommitted candidate in memory.
+				if err := transactionStopSmartDNS(); err != nil && transactionSmartDNSProcessRunning() {
+					return fmt.Errorf("恢复到原本不存在的 SmartDNS 配置后停止残留服务失败，恢复记录保留: %w", err)
+				}
+				deadline := time.Now().Add(5 * time.Second)
+				for transactionSmartDNSProcessRunning() && time.Now().Before(deadline) {
+					time.Sleep(100 * time.Millisecond)
+				}
+				if transactionSmartDNSProcessRunning() {
+					return fmt.Errorf("恢复到原本不存在的 SmartDNS 配置后，残留进程未在 5 秒内退出，恢复记录保留")
+				}
 			}
 		}
 		if checkRuntime {

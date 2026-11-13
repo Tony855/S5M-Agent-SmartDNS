@@ -262,3 +262,87 @@ func TestConfigTransactionRecoverySurvivesAgentProcessRestart(t *testing.T) {
 		t.Fatalf("subprocess recovery must clear journal after durable restore: %v", err)
 	}
 }
+
+
+func TestRecoverInterruptedConfigTransactionStopsSmartDNSWhenNoPriorConfigExisted(t *testing.T) {
+	if !smartDNSFeatureSupported() {
+		t.Skip("SmartDNS runtime is not included in this Agent build")
+	}
+	dir, _ := setupConfigTransactionFixture(t)
+	oldStop := transactionStopSmartDNS
+	oldRunning := transactionSmartDNSProcessRunning
+	oldReload := transactionReloadMihomo
+	t.Cleanup(func() {
+		transactionStopSmartDNS = oldStop
+		transactionSmartDNSProcessRunning = oldRunning
+		transactionReloadMihomo = oldReload
+	})
+	running := true
+	stopCalls := 0
+	transactionStopSmartDNS = func() error {
+		stopCalls++
+		running = false
+		return nil
+	}
+	transactionSmartDNSProcessRunning = func() bool { return running }
+	transactionReloadMihomo = func() error { return nil }
+
+	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("uncommitted-smartdns"))
+	record := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Existed: false},
+		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
+		Controller: transactionRecoveryFile{Data: []byte("old-controller"), Existed: true},
+	}
+	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverInterruptedConfigTransaction(); err != nil {
+		t.Fatalf("recover interrupted first-time SmartDNS transaction: %v", err)
+	}
+	if stopCalls != 1 || running {
+		t.Fatalf("SmartDNS stop calls=%d running=%v; want one stop and no process", stopCalls, running)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "smartdns.conf")); !os.IsNotExist(err) {
+		t.Fatalf("uncommitted SmartDNS config should be absent after recovery: %v", err)
+	}
+	if _, err := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(err) {
+		t.Fatalf("recovery journal should be removed after runtime reconciliation: %v", err)
+	}
+}
+
+func TestRecoverInterruptedConfigTransactionRetainsJournalIfResidualSmartDNSCannotStop(t *testing.T) {
+	if !smartDNSFeatureSupported() { t.Skip("SmartDNS runtime is not included in this Agent build") }
+	dir, _ := setupConfigTransactionFixture(t)
+	oldStop := transactionStopSmartDNS
+	oldRunning := transactionSmartDNSProcessRunning
+	oldReload := transactionReloadMihomo
+	t.Cleanup(func() {
+		transactionStopSmartDNS = oldStop
+		transactionSmartDNSProcessRunning = oldRunning
+		transactionReloadMihomo = oldReload
+	})
+	stopErr := errors.New("injected s6 stop failure")
+	transactionStopSmartDNS = func() error { return stopErr }
+	transactionSmartDNSProcessRunning = func() bool { return true }
+	transactionReloadMihomo = func() error { return nil }
+
+	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("uncommitted-smartdns"))
+	record := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Existed: false},
+		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
+		Controller: transactionRecoveryFile{Data: []byte("old-controller"), Existed: true},
+	}
+	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverInterruptedConfigTransaction(); err == nil {
+		t.Fatal("expected failure while residual SmartDNS process remains active")
+	}
+	if _, err := os.Stat(configTransactionRecoveryPath()); err != nil {
+		t.Fatalf("recovery journal must remain for retry: %v", err)
+	}
+}
