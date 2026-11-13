@@ -164,20 +164,24 @@ PR #223 的同主机 Linux 网络命名空间实验已通过：
 该结果提升了 routed bridge 作为首选实现的可信度，但仍不是生产验收：未经过物理 LAN 交换机/路由器、未测试 IPv6、iptables/nftables 多环境、真实 Agent SmartDNS peer IP、SmartDNS group-match、Mihomo SOCKS 选择和外部代理出口。生产实现仍需在目标部署环境重复。
 
 
-### 9.5 真实 SmartDNS daemon + 双网络 + 分组到 SOCKS 监听验证（PR #224/#225/#229/#231）
+### 9.5 真实 SmartDNS daemon + 真实 Mihomo Listener + 分组出口选择验证（PR #224/#225/#229/#231/#232）
 
-在同一隔离 Linux runner 中，现已完成比 Python 接收器更接近运行时的集成实验：
-- 使用 Agent 镜像所固定的 SmartDNS 源码版本构建并启动真实 SmartDNS daemon。
+在同一隔离 Linux runner 中，现已完成从 Python 接收器逐步升级到真实 SmartDNS 与真实 Mihomo 进程的集成实验：
+
+- 使用 Agent 镜像固定的 SmartDNS 源码版本构建并启动真实 SmartDNS daemon。
 - SmartDNS 容器同时连接普通 Docker bridge 与第二张 routed-mode ingress bridge；容器默认路由仍指向普通 bridge gateway，LAN 模拟客户端通过第二张 routed bridge 访问 172.31.0.10:6055。
 - 普通 bridge 出站路径未被 ingress 网络替换；宿主机发布端口只绑定 127.0.0.1 临时端口，LAN 模拟客户端直接路由到容器 ingress IP。
 - 两个映射客户端 192.168.50.10/32 与 192.168.50.20/32 分别通过 UDP/TCP 查询，真实 SmartDNS 返回各自分组的确定性答案。
 - 第三个未映射客户端 192.168.50.30/32 通过 UDP/TCP 查询，没有得到 A 记录；每个 per-client DoT upstream 使用 `-exclude-default-group`，避免被默认组继承。
-- 两个 loopback SOCKS5 observer 分别监听生成配置中的代理端口。对未命中静态 address 规则的上游查询，客户端 A 只触发其对应 SOCKS listener 的 CONNECT，客户端 B 只触发另一监听；未映射客户端不会触发任何一个监听。
-- 真实 SmartDNS parser 还验证了生成器的语法要求：`group-match -client-ip` 必须处于 `group-begin` / `group-end` 作用域；原先在顶层输出 `group-match ... -g ...` 会被 daemon 报 `invalid parameter`，现已修正为组内规则。
+- 测试使用与生产一致版本、SHA-256 校验过的 Mihomo v1.19.31。Mihomo 启动两个真实 loopback SOCKS Listener（16000/16001），每个 Listener 通过 `proxy` 字段固定到不同 SOCKS 出站节点。
+- SmartDNS 的命名 SOCKS upstream 指向上述真实 Mihomo Listener。客户端 A 的上游请求只能到达 node-A 对应的 SOCKS observer；客户端 B 只能到达 node-B；未映射客户端不会触发任一出站 observer。UDP/TCP 两种 DNS 入站均验证。
+- 两个 SOCKS observer 在记录 CONNECT 目标后故意拒绝隧道。因此测试证明了 SmartDNS group → 真实 Mihomo Listener → 对应 outbound proxy endpoint 的选择链路，不证明外部代理服务可用或公网出口 IP。
+
+真实 SmartDNS parser 同时验证了配置语法要求：`group-match -client-ip` 必须处于 `group-begin` / `group-end` 作用域；原先顶层输出 `group-match ... -g ...` 会被 daemon 报 `invalid parameter`，已修正为组内规则。
 
 重要限制：
-- SOCKS observer 在记录 CONNECT 后故意拒绝隧道；它验证 SmartDNS 的 group-to-SOCKS 选择，不是实际 Mihomo 进程，也不证明代理服务器可用或公网出口 IP。
 - 该实验仍是同主机 IPv4 netns/Docker 模拟，不等同于物理 LAN/真实路由器验收。
-- 尚未验证生产 Agent 部署脚本的双网络生命周期、持久化来源 CIDR 防火墙、真实路由器静态路由、IPv6、Agent 运行时配置校验/状态上报，以及真实 Mihomo 出口 IP 的端到端相关性。
+- Mihomo 的两个 SOCKS outbound 是本地拒绝型 observer，不是实际代理服务器；尚未验证真实代理连接和公网出口 IP。
+- 尚未验证生产 Agent 部署脚本的双网络生命周期、持久化来源 CIDR 防火墙、真实路由器静态路由、IPv6、Agent 运行时配置校验/状态上报，以及真实公网出口 IP 的端到端相关性。
 
-因此，routed bridge + SmartDNS group-match + 命名 SOCKS listener 已有同主机 IPv4 自动化证据；但生产 per-client 功能仍不批准启用。Server API 继续拒绝保存 per_client 模式，Agent validator 继续拒绝未经 ingress provisioning 的配置，PR #217/#218 继续 Draft。
+因此，routed bridge + SmartDNS group-match + 真实 Mihomo Listener/outbound 选择已具有同主机 IPv4 自动化证据；但生产 per-client 功能仍不批准启用。Server API 继续拒绝保存 per_client 模式，Agent validator 继续拒绝未经 ingress provisioning 的配置，PR #217/#218 继续 Draft。
