@@ -25,7 +25,11 @@ func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (stri
 // buildSmartDNSPerClientConfigWithIngress adds dedicated LAN-facing UDP/TCP
 // listeners only for addresses supplied by a separately attested host ingress
 // contract. Empty addresses preserve the existing loopback-only lab output.
-func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string) (string, error) {\n\treturn buildSmartDNSPerClientConfigInternal(mappings, ingressIPv4, ingressIPv6, true)\n}\n\nfunc buildSmartDNSPerClientConfigInternal(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string, requireIngress bool) (string, error) {
+func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string) (string, error) {
+	return buildSmartDNSPerClientConfigInternal(mappings, ingressIPv4, ingressIPv6, true)
+}
+
+func buildSmartDNSPerClientConfigInternal(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string, requireIngress bool) (string, error) {
 	if len(mappings) == 0 {
 		return "", fmt.Errorf("SmartDNS per-client 运行时映射不能为空")
 	}
