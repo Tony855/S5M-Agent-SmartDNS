@@ -6,7 +6,7 @@ for cmd in python3 nft ip flock systemctl; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "缺少宿主机依赖：$cmd" >&2; exit 1; }
 done
 DEST=/usr/local/libexec/s5m-agent-ingress
-CONFIG=${S5M_INGRESS_CONFIG:-/etc/s5m-agent-ingress/config.json}
+CONFIG=/etc/s5m-agent-ingress/config.json
 [[ -f "$CONFIG" && ! -L "$CONFIG" ]] || { echo "缺少安全配置文件：$CONFIG（请先按文档创建）" >&2; exit 1; }
 
 # Validate the administrator-supplied config before changing host files or
