@@ -6,7 +6,7 @@ for cmd in docker ip sysctl; do command -v "$cmd" >/dev/null || { echo "$cmd is 
 [[ -x "$ROOT/.runtime/smartdns" ]] || { echo "missing $ROOT/.runtime/smartdns; build the pinned SmartDNS builder first" >&2; exit 1; }
 SERVER=s5m-smartdns-real-daemon-lab
 NET_IN=s5m-smartdns-real-ingress
-LAN_BR=br-s5m-smart-lan
+LAN_BR=br-s5m-lan
 NS_A=s5m-smart-client-a
 NS_B=s5m-smart-client-b
 cleanup() {
@@ -24,7 +24,7 @@ ip link set "$LAN_BR" up
 if [[ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]]; then
   sysctl -w net.ipv4.ip_forward=1 >/dev/null
 fi
-for spec in "$NS_A 192.168.50.10 veth-smart-a" "$NS_B 192.168.50.20 veth-smart-b"; do
+for spec in "$NS_A 192.168.50.10 vsa" "$NS_B 192.168.50.20 vsb"; do
   read -r ns address veth <<<"$spec"
   host_veth="${veth}-host"
   ip netns add "$ns"
