@@ -144,3 +144,22 @@ func TestValidateSmartDNSIngressReadinessRejectsDefaultAndMappedCIDRs(t *testing
 		})
 	}
 }
+
+
+func TestValidateSmartDNSIngressReadinessRejectsLinkLocalAddresses(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv4_address"] = "169.254.10.1"
+	status["dns_ingress_smartdns_ipv4_bind_address"] = "169.254.10.1"
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("link-local ingress address accepted")
+	}
+}
