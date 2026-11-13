@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify all external Actions use immutable commit pins
+        run: bash scripts/tests/verify-workflow-action-pins.sh
       - name: Build the pinned SmartDNS daemon
         run: |
           docker build --target smartdns-builder --tag s5m-smartdns-lab-builder -f s5m-agent/Dockerfile.smartdns .
