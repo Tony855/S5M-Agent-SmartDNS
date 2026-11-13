@@ -65,6 +65,9 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 			return fmt.Errorf("DNS ingress 映射 CIDR 无效: %q", route.ClientCIDR)
 		}
 		prefix = prefix.Masked()
+		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
+			return fmt.Errorf("DNS ingress 客户端 CIDR 过宽或使用保留地址族: %s", prefix.String())
+		}
 		requiredCIDRs[prefix.String()] = struct{}{}
 		if prefix.Addr().Is4() {
 			hasIPv4 = true
