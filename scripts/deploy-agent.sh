@@ -325,4 +325,9 @@ docker port "$CONTAINER_NAME" || true
 printf '\n===== 最近日志 =====\n'
 docker logs --tail 40 "$CONTAINER_NAME" || true
 printf '\n配置文件：%s\n数据目录：%s\n' "$CONFIG_FILE" "$DATA_DIR"
+if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+  log "Per-client DNS ingress 端口仅绑定宿主机 loopback；功能仍 fail-closed。安装 host controller 后执行："
+  echo "  sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision --config /etc/s5m-agent-ingress/network.json --firewall-config /etc/s5m-agent-ingress/config.json"
+  echo "  随后配置上游路由器静态路由并完成真实 LAN UDP/TCP 源地址验收。"
+fi
 log "部署流程完成。"
