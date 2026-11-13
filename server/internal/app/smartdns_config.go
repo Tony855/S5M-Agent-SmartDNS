@@ -45,6 +45,10 @@ func buildSmartDNSPerClientConfigInternal(mappings []SmartDNSClientRuntimeMappin
 		if err != nil {
 			return "", fmt.Errorf("SmartDNS 客户端 CIDR %q 无效: %w", mapping.ClientCIDR, err)
 		}
+		prefix = prefix.Masked()
+		if prefix.Bits() == 0 || prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() {
+			return "", fmt.Errorf("SmartDNS 客户端 CIDR %q 过宽或使用保留地址族", mapping.ClientCIDR)
+		}
 		if prefix.Addr().Is4() { hasIPv4 = true } else { hasIPv6 = true }
 	}
 	validateIngress := func(raw string, wantIPv4 bool) (netip.Addr, error) {
