@@ -331,8 +331,8 @@ func smartDNSIngressAddressSocketsBound(address string) (bool, error) {
 	tcp, err := os.ReadFile(tcpPath)
 	if err != nil { return false, fmt.Errorf("read TCP socket table: %w", err) }
 	only := map[string]bool{ip.String(): true}
-	return procSocketTableHasListener(udp, ipv6, smartDNSPerClientIngressPort, only, false) &&
-		procSocketTableHasListener(tcp, ipv6, smartDNSPerClientIngressPort, only, true), nil
+	return procSocketTableHasExactListener(udp, ipv6, smartDNSPerClientIngressPort, ip.String(), false) &&
+		procSocketTableHasExactListener(tcp, ipv6, smartDNSPerClientIngressPort, ip.String(), true), nil
 }
 
 // waitForSmartDNSIngressListeners confirms exact UDP and TCP socket binds. It
