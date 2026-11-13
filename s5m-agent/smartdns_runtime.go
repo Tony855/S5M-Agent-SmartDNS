@@ -583,6 +583,22 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	status["dns_ingress_smartdns_ipv4_bind_address"] = ""
 	status["dns_ingress_smartdns_ipv6_bind_address"] = ""
 	status["dns_ingress_client_cidrs"] = []string{}
+	status["dns_ingress_observation_supported"] = true
+	status["dns_ingress_observation_error"] = ""
+	status["dns_ingress_observed_interfaces"] = []string{}
+	status["dns_ingress_observed_ipv4_addresses"] = []string{}
+	status["dns_ingress_observed_ipv6_addresses"] = []string{}
+	status["dns_ingress_observed_udp_6055"] = false
+	status["dns_ingress_observed_tcp_6055"] = false
+	if observation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies()); err != nil {
+		status["dns_ingress_observation_error"] = safeSmartDNSDiagnostic(err.Error())
+	} else {
+		status["dns_ingress_observed_interfaces"] = observation.Interfaces
+		status["dns_ingress_observed_ipv4_addresses"] = observation.IPv4
+		status["dns_ingress_observed_ipv6_addresses"] = observation.IPv6
+		status["dns_ingress_observed_udp_6055"] = observation.UDP
+		status["dns_ingress_observed_tcp_6055"] = observation.TCP
+	}
 
 	status["smartdns_available"] = false
 	status["smartdns_control_supported"] = false
