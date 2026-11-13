@@ -14,21 +14,35 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 class LifecycleError(RuntimeError): pass
 
-def read_config(path: Path, *, require_root: bool = True) -> dict:
+def secure_read(path: Path, max_bytes: int, *, require_root: bool = True) -> bytes:
     if require_root:
-        current = Path("/")
+        current=Path("/")
         for part in path.absolute().parts[1:-1]:
-            current = current / part
-            st_parent = current.lstat()
-            if not stat.S_ISDIR(st_parent.st_mode) or st_parent.st_uid != 0 or st_parent.st_mode & 0o022:
-                raise LifecycleError(f"config parent {current} must be root-owned, non-writable directory")
-    if path.is_symlink(): raise LifecycleError("config must not be a symlink")
-    st = path.lstat()
-    expected_owner = 0 if require_root else os.geteuid()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != expected_owner or st.st_mode & 0o077:
-        raise LifecycleError("config must be an appropriately owned regular file with mode 0600 or stricter")
-    if st.st_size > 8192: raise LifecycleError("config exceeds 8 KiB")
-    raw = path.read_bytes()
+            current=current/part
+            parent_st=current.lstat()
+            if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid!=0 or parent_st.st_mode & 0o022:
+                raise LifecycleError(f"config parent {current} must be root-owned and non-writable")
+    expected_owner=0 if require_root else os.geteuid()
+    st=path.lstat()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid!=expected_owner or st.st_mode & 0o077 or st.st_size>max_bytes:
+        raise LifecycleError(f"{path} must be an appropriately owned regular file, mode 0600 or stricter, and <= {max_bytes} bytes")
+    flags=os.O_RDONLY | getattr(os,"O_NOFOLLOW",0) | getattr(os,"O_CLOEXEC",0)
+    fd=os.open(path,flags)
+    try:
+        opened=os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid!=expected_owner or opened.st_mode & 0o077 or opened.st_size>max_bytes:
+            raise LifecycleError(f"{path} changed while opening")
+        chunks=[]; total=0
+        while True:
+            chunk=os.read(fd,min(4096,max_bytes+1-total))
+            if not chunk: break
+            chunks.append(chunk); total+=len(chunk)
+            if total>max_bytes: raise LifecycleError(f"{path} exceeds {max_bytes} bytes")
+        return b"".join(chunks)
+    finally: os.close(fd)
+
+def read_config(path: Path, *, require_root: bool = True) -> dict:
+    raw=secure_read(path,8192,require_root=require_root)
     try: cfg = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as e: raise LifecycleError("config must be valid UTF-8 JSON") from e
     keys = {"version","network","container","interface","ipv4_subnet","ipv4_gateway","ipv4_address","ipv6_subnet","ipv6_gateway","ipv6_address","client_cidrs"}
@@ -76,7 +90,7 @@ def read_config(path: Path, *, require_root: bool = True) -> dict:
     for i,left in enumerate(client_networks):
         for right in client_networks[i+1:]:
             if left.version==right.version and left.overlaps(right): raise LifecycleError("overlapping client CIDRs")
-    if {n.version for n in client_networks}!={n.version for n in values.values()}:
+    if {n.version for n in client_networks}!=set(values):
         raise LifecycleError("client CIDR families must exactly match configured ingress address families")
     for client_net in client_networks:
         for ingress_net,_,_ in values.values():
@@ -92,19 +106,7 @@ def run(args, *, check=True):
     return p
 
 def validate_firewall_contract(cfg: dict, path: Path, *, require_root: bool = True) -> None:
-    if require_root:
-        current=Path("/")
-        for part in path.absolute().parts[1:-1]:
-            current=current/part
-            parent_st=current.lstat()
-            if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid!=0 or parent_st.st_mode & 0o022:
-                raise LifecycleError(f"firewall config parent {current} must be root-owned and non-writable")
-    if path.is_symlink(): raise LifecycleError("firewall config must not be a symlink")
-    st=path.lstat()
-    expected_owner=0 if require_root else os.geteuid()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid!=expected_owner or st.st_mode & 0o077 or st.st_size>16384:
-        raise LifecycleError("firewall config must be root-owned, regular, mode 0600 or stricter, and <=16 KiB")
-    raw=path.read_bytes()
+    raw=secure_read(path,16384,require_root=require_root)
     try: fw=json.loads(raw)
     except (UnicodeDecodeError,json.JSONDecodeError) as e: raise LifecycleError("firewall config must be valid UTF-8 JSON") from e
     required={"version","interface","ipv4_address","ipv6_address","client_cidrs"}
