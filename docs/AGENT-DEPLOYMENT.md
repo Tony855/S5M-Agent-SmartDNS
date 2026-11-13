@@ -24,7 +24,7 @@ chmod 0755 /usr/local/sbin/s5m-agent-deploy
 | `WEB_PORT` | `80` | 映射容器 Web 端口；设为 `0` 禁用 |
 | `PROXY_PORT` | `0` | 映射容器代理端口 7890；设为 `0` 禁用 |
 | `PROXY_BIND_IP` | `127.0.0.1`（新配置） | 代理端口独立绑定地址；旧配置缺少此项时沿用 `BIND_IP`，保持升级兼容 |
-| `DNS_PORT` | `0` | 将同一宿主机端口映射到容器 6053 TCP/UDP；设为 `0` 禁用 |
+| `DNS_PORT` | `0` | 保留兼容字段；当前必须为 `0`。SmartDNS 只监听容器回环地址，Docker 发布端口无法到达该监听 |
 | `DATA_DIR` | `/opt/s5m-agent/data` | 持久化数据目录 |
 | `RESTART_POLICY` | `unless-stopped` | Docker 重启策略 |
 | `ENABLE_TUN` | `1` | 默认启用 TUN；设为 `0` 可关闭，启用时需要 NET_ADMIN 和 /dev/net/tun |
@@ -55,7 +55,7 @@ EXTRA_ENV_FILE="/etc/s5m-agent-smartdns.env"
 - Agent 注册页面和 `/api/bind` 会改变节点主控地址及注册凭据。新配置默认将 Web 端口绑定到 `127.0.0.1`，建议通过 SSH 本地转发或受认证的反向代理访问。确需 LAN 访问时，显式设置 `WEB_BIND_IP` 为可信 LAN 地址并配置防火墙白名单；不要直接暴露到公网。
 - 为兼容旧部署，已有配置文件若没有 `WEB_BIND_IP`，升级脚本继续沿用原来的 `BIND_IP`，不会擅自改变既有 Web 端口映射。
 - Agent 内部 API 端口 8088 不会映射到宿主机。
-- SmartDNS 默认不对宿主机发布；需要提供 DNS 服务时再配置 `DNS_PORT`，并限制来源网络。
+- SmartDNS 当前只监听容器回环地址（`127.0.0.1` / `::1`）。旧版 `DNS_PORT` 的 Docker 端口映射并不能到达该监听，因此部署脚本现在拒绝任何非零 `DNS_PORT`，避免用户误以为 LAN DNS 已经可用。只有独立 DNS ingress 完成来源 IP 保留、UDP/TCP、IPv4/IPv6 和真实客户端出口验收后，才会重新开放 LAN DNS 发布。
 - TUN 默认启用。部署前确认宿主机存在 `/dev/net/tun`；脚本会授予容器 NET_ADMIN 和设备映射。若需关闭，显式设置 `ENABLE_TUN=0`。
 - 脚本不会删除 `DATA_DIR`。升级时会先暂存同名旧容器；新容器启动检查失败时会尝试移除新容器并恢复旧容器。
 - 回滚只恢复旧容器及其容器配置，不会撤销镜像拉取或数据目录内由新版本写入的数据；升级前仍应备份持久化数据。
