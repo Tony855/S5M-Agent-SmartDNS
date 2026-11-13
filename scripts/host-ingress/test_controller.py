@@ -66,7 +66,7 @@ class ControllerTests(unittest.TestCase):
         }
         self.assertTrue(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001))
         stale = dict(evidence); stale["verified_at"] = 0
-        self.assertFalse(mod.physical_evidence_payload_valid(stale, raw, cfg, now=1001))
+        self.assertFalse(mod.physical_evidence_payload_valid(stale, raw, cfg, now=1000 + 8 * 24 * 60 * 60))
         wrong = dict(evidence); wrong["config_sha256"] = "d" * 64
         self.assertFalse(mod.physical_evidence_payload_valid(wrong, raw, cfg, now=1001))
         incomplete = dict(evidence); incomplete["udp_ready"] = False
