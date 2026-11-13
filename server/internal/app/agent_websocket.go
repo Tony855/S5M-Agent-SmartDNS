@@ -694,14 +694,6 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 	if status["smartdns_control_supported"] != true {
 		return fmt.Errorf("目标节点已安装 SmartDNS，但 Agent 版本过旧，请先升级 Agent")
 	}
-	if enabled && status["smartdns_domestic_listener"] != true {
-		return fmt.Errorf("目标节点 SmartDNS 未配置完整的 UDP/TCP china-dot 6054 国内监听，不能启用")
-	}
-	config := strings.TrimSpace(settings["smartdns_config_"+machineCode])
-	if enabled && config == "" {
-		return fmt.Errorf("该节点尚无已保存的 SmartDNS 配置，请先读取并保存 SmartDNS 配置")
-	}
-	if len(config) > 8<<10 { return fmt.Errorf("SmartDNS 配置超过 Agent 允许的 8 KiB 限制") }
 	perClient := false
 	if rawRouting := strings.TrimSpace(settings["smartdns_routing_config"]); rawRouting != "" {
 		var routing SmartDNSRoutingConfig
@@ -710,6 +702,14 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 		}
 		perClient = strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient)
 	}
+	if enabled && !perClient && status["smartdns_domestic_listener"] != true {
+		return fmt.Errorf("目标节点 SmartDNS 未配置完整的 UDP/TCP china-dot 6054 国内监听，不能启用")
+	}
+	config := strings.TrimSpace(settings["smartdns_config_"+machineCode])
+	if enabled && config == "" && !perClient {
+		return fmt.Errorf("该节点尚无已保存的 SmartDNS 配置，请先读取并保存 SmartDNS 配置")
+	}
+	if len(config) > 8<<10 { return fmt.Errorf("SmartDNS 配置超过 Agent 允许的 8 KiB 限制") }
 	var ingressContract *SmartDNSAgentIngressContract
 	if enabled && perClient {
 		ingressContract, err = a.smartDNSIngressContractForMachine(machineCode)
