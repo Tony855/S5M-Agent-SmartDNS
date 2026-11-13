@@ -51,3 +51,19 @@ sees the original client CIDRs.
 This is still a same-host IPv4 lab. It validates Docker's dual-network
 primitive, not the production deployer's network creation, host firewall
 rules, router route installation, IPv6, or real public proxy egress.
+
+## Fail-closed unmatched client assertion
+
+The real-daemon fixture marks every mapped DoT server with
+`-exclude-default-group` and sends a third query from an unmapped client CIDR.
+The test requires that client to receive no A answer. This guards against
+SmartDNS silently placing a per-client upstream back into the default group,
+which would otherwise let unmapped clients use an arbitrary proxy exit.
+
+The same test now starts two local SOCKS5 observer sidecars on the SmartDNS
+container's loopback ports. For an uncached upstream query, the first client
+must cause CONNECT attempts only on its own named SOCKS listener, the second
+client only on the other listener, and an unmapped client must cause no SOCKS
+attempt on either listener. The observers deliberately reject the tunnel after
+recording the target; this proves SmartDNS's group-to-proxy selection without
+pretending to verify a real public proxy exit.
