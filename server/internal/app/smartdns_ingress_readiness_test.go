@@ -128,3 +128,19 @@ func TestValidateSmartDNSIngressReadinessRequiresExactFirewallCIDRSet(t *testing
 		})
 	}
 }
+
+
+func TestValidateSmartDNSIngressReadinessRejectsDefaultAndMappedCIDRs(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	for _, cidr := range []string{"0.0.0.0/0", "::/0", "::ffff:192.0.2.0/120"} {
+		t.Run(cidr, func(t *testing.T) {
+			routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+				{ClientCIDR: cidr, ProxyName: "proxy-a"},
+			}}
+			settings := readySmartDNSIngressSettings(now, cidr)
+			if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+				t.Fatalf("unsafe CIDR %s accepted by production readiness gate", cidr)
+			}
+		})
+	}
+}
