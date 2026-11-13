@@ -788,6 +788,12 @@ toggle_per_client_ingress() {
     else
       ENABLE_PER_CLIENT_INGRESS_IPV6="0"
     fi
+    if ! validate_ingress_options; then
+      ENABLE_PER_CLIENT_INGRESS="0"
+      ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+      warn "Per-client ingress 前置条件未满足，已保持关闭"
+      return 1
+    fi
     log "Per-client ingress 已启用；保存配置并重新部署后，还需按 host-ingress 文档执行网络 provision 和物理 LAN 验收"
   else
     ENABLE_PER_CLIENT_INGRESS="0"
