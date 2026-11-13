@@ -19,13 +19,13 @@ type transactionRecoveryFile struct {
 }
 
 type configTransactionRecoveryRecord struct {
-	Version       int                    `json:"version"`
-	Phase         string                 `json:"phase"`
-	SmartDNS      transactionRecoveryFile `json:"smartdns"`
-	SmartDNSUpdated bool `json:"smartdns_updated,omitempty"`
-	Mihomo        transactionRecoveryFile `json:"mihomo"`
-	ManagedRoutes transactionRecoveryFile `json:"managed_routes"`
-	Controller    transactionRecoveryFile `json:"controller"`
+	Version         int                    `json:"version"`
+	Phase           string                 `json:"phase"`
+	SmartDNS        transactionRecoveryFile `json:"smartdns"`
+	SmartDNSUpdated bool                   `json:"smartdns_updated,omitempty"`
+	Mihomo          transactionRecoveryFile `json:"mihomo"`
+	ManagedRoutes   transactionRecoveryFile `json:"managed_routes"`
+	Controller      transactionRecoveryFile `json:"controller"`
 }
 
 var (
