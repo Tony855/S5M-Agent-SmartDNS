@@ -64,3 +64,15 @@ func TestCollectSmartDNSIngressObservationFailsWhenNoNonLoopbackInterfaceExists(
 		t.Fatal("observation without a non-loopback interface must fail")
 	}
 }
+
+
+func TestProcSocketTableExactListenerRejectsWildcard(t *testing.T) {
+	wildcard := []byte("sl local_address rem_address st tx_queue\\n 0: 00000000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\\n")
+	if procSocketTableHasExactListener(wildcard, false, 6055, "192.0.2.10", false) {
+		t.Fatal("wildcard UDP bind must not satisfy an exact ingress address contract")
+	}
+	exact := []byte("sl local_address rem_address st tx_queue\\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\\n")
+	if !procSocketTableHasExactListener(exact, false, 6055, "192.0.2.10", false) {
+		t.Fatal("exact UDP ingress bind should satisfy the address contract")
+	}
+}
