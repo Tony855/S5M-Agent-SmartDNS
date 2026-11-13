@@ -60,6 +60,11 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
 
 class NetworkSafetyTests(unittest.TestCase):
+    def test_single_default_route_must_use_bridge_gateway(self):
+        self.assertTrue(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0"],"172.17.0.1"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0","default via 172.31.10.1 dev eth1"],"172.17.0.1"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.31.10.1 dev eth1"],"172.17.0.1"))
+
     def write_config(self):
         td=tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)

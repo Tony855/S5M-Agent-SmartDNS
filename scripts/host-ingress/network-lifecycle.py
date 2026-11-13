@@ -172,10 +172,15 @@ def default_routes(container):
     v6=run(["docker","exec",container,"ip","-6","route","show","default"],check=False).stdout.strip().splitlines()
     return v4,v6
 
+def preserves_single_default_route(routes, gateway):
+    entries=[line.strip() for line in routes if line.strip()]
+    return len(entries)==1 and f"via {gateway}" in entries[0]
+
 def provision(cfg):
     if run(["ip","link","show","dev",cfg["interface"]],check=False).returncode:
         raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
-    help_text=run(["docker","network","connect","--help"],check=False).stdout
+    help_result=run(["docker","network","connect","--help"],check=False)
+    help_text=help_result.stdout + help_result.stderr
     if "--gw-priority" not in help_text:
         raise LifecycleError("Docker CLI must support network connect --gw-priority to preserve default bridge egress")
     net=inspect_network(cfg["network"]); created=False; connected=False
@@ -203,6 +208,14 @@ def provision(cfg):
         try:
             run(args); connected=True
         except Exception:
+            # Docker CLI can report an error after the daemon has completed an
+            # endpoint attach. Inspect before cleanup so a newly-created network
+            # is never left behind with an unexpected live endpoint.
+            try:
+                if cfg["network"] in container_networks(cfg["container"]):
+                    run(["docker","network","disconnect",cfg["network"],cfg["container"]],check=False)
+            except Exception:
+                pass
             if created: run(["docker","network","rm",cfg["network"]],check=False)
             raise
     try:
@@ -214,14 +227,14 @@ def provision(cfg):
         routes=default_routes(cfg["container"])
         bridge=attached["bridge"]
         gw4=bridge.get("Gateway")
-        if not gw4 or not any(f"via {gw4}" in line for line in routes[0]):
-            raise LifecycleError(f"default IPv4 egress changed; expected default bridge gateway {gw4}, got {routes[0]}")
+        if not gw4 or not preserves_single_default_route(routes[0],gw4):
+            raise LifecycleError(f"default IPv4 egress changed; expected exactly one default route via bridge gateway {gw4}, got {routes[0]}")
         if 6 in cfg["_networks"]:
             gw6=bridge.get("IPv6Gateway")
             if not gw6:
                 raise LifecycleError("dual-stack ingress requires an IPv6 gateway on the default bridge to preserve default IPv6 egress")
-            if not any(f"via {gw6}" in line for line in routes[1]):
-                raise LifecycleError(f"default IPv6 egress changed; expected default bridge gateway {gw6}, got {routes[1]}")
+            if not preserves_single_default_route(routes[1],gw6):
+                raise LifecycleError(f"default IPv6 egress changed; expected exactly one default route via bridge gateway {gw6}, got {routes[1]}")
     except Exception:
         if connected: run(["docker","network","disconnect",cfg["network"],cfg["container"]],check=False)
         if created: run(["docker","network","rm",cfg["network"]],check=False)
