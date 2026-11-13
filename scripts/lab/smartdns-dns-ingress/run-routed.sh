@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -Eeuxo pipefail
+docker version
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SERVER=s5m-dns-routed-lab
 NET_A=s5m-dns-routed-a
