@@ -16,11 +16,11 @@ const smartDNSPerClientIngressContractVersion = 1
 // This validator is intentionally separate from validateSmartDNSConfig:
 // shared-mode policy remains unchanged and never accepts non-loopback binds.
 type smartDNSPerClientIngressContract struct {
-	Version      int
-	Ready        bool
-	IPv4Address  string
-	IPv6Address  string
-	ClientCIDRs  []string
+	Version      int      `json:"version"`
+	Ready        bool     `json:"ready"`
+	IPv4Address  string   `json:"ipv4_address"`
+	IPv6Address  string   `json:"ipv6_address"`
+	ClientCIDRs  []string `json:"client_cidrs"`
 }
 
 type smartDNSPerClientGroup struct {
