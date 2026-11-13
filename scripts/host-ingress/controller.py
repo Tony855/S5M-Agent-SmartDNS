@@ -154,6 +154,10 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
     return physical_evidence_payload_valid(evidence, config_raw, cfg, now)
 
 
+def build_nft_transaction(table_exists: bool, rules: str) -> str:
+    prefix = f"delete table inet {TABLE}\n" if table_exists else ""
+    return prefix + rules
+
 def render_nft(cfg: dict) -> str:
     iface = cfg["interface"]
     lines = [f'table inet {TABLE} {{ comment "managed-by:s5m-agent-ingress-v1";', "  chain forward_guard {", "    type filter hook forward priority -5; policy accept;"]
