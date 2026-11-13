@@ -254,6 +254,29 @@ func TestProbeSmartDNSDNSAtQueriesAAAAAfterA(t *testing.T) {
 	}
 }
 
+func TestSkipSmartDNSNameRejectsForwardAndSelfCompressionPointers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		message []byte
+	}{
+		{name: "self pointer", message: []byte{0xc0, 0x00}},
+		{name: "forward pointer", message: []byte{0xc0, 0x02, 0x00}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok := skipSmartDNSName(tc.message, 0); ok {
+				t.Fatal("invalid compression pointer was accepted")
+			}
+		})
+	}
+}
+
+func TestSkipSmartDNSNameAcceptsBackwardCompressionPointer(t *testing.T) {
+	message := []byte{1, 'a', 0, 0xc0, 0x00}
+	if offset, ok := skipSmartDNSName(message, 3); !ok || offset != 5 {
+		t.Fatalf("valid backward compression pointer rejected: offset=%d ok=%v", offset, ok)
+	}
+}
+
 func TestProbeSmartDNSDNSTCPAtQueriesAAAAAfterA(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
