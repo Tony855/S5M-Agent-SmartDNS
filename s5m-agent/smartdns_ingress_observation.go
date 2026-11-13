@@ -15,6 +15,7 @@ type smartDNSIngressObservation struct {
 	Interfaces []string
 	IPv4       []string
 	IPv6       []string
+	AddressInterfaces map[string]string
 	UDP        bool
 	TCP        bool
 }
@@ -35,7 +36,7 @@ func defaultSmartDNSIngressObservationDependencies() smartDNSIngressObservationD
 // Agent network namespace. It intentionally does not attest host firewall
 // persistence, source-IP preservation, routed reachability, or proxy egress.
 func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependencies) (smartDNSIngressObservation, error) {
-	var observed smartDNSIngressObservation
+	observed := smartDNSIngressObservation{AddressInterfaces: make(map[string]string)}
 	if deps.interfaces == nil || deps.readFile == nil {
 		return observed, fmt.Errorf("ingress observation dependencies are unavailable")
 	}
@@ -60,6 +61,7 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 			}
 			value := ip.String()
 			addressSet[value] = true
+			observed.AddressInterfaces[value] = iface.Name
 			ifaceAddresses = append(ifaceAddresses, value)
 			if ip.To4() != nil {
 				observed.IPv4 = append(observed.IPv4, value)
@@ -103,7 +105,7 @@ func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddre
 		if err != nil || int(parsedPort) != port { continue }
 		address, err := decodeProcSocketAddress(local[0], ipv6)
 		if err != nil { continue }
-		if !address.IsUnspecified() && interfaceAddresses[address.String()] {
+		if address.IsUnspecified() || interfaceAddresses[address.String()] {
 			return true
 		}
 	}
@@ -126,4 +128,23 @@ func decodeProcSocketAddress(raw string, ipv6 bool) (net.IP, error) {
 		decoded[i], decoded[j] = decoded[j], decoded[i]
 	}
 	return net.IP(decoded), nil
+}
+
+
+// procSocketTableHasExactListener is stricter than the diagnostic observer:
+// wildcard binds are never accepted as proof for a contract-specific address.
+func procSocketTableHasExactListener(data []byte, ipv6 bool, port int, expectedAddress string, requireTCPListen bool) bool {
+	for _, line := range strings.Split(string(data), "\n")[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 4 { continue }
+		if requireTCPListen && fields[3] != "0A" { continue }
+		local := strings.Split(fields[1], ":")
+		if len(local) != 2 { continue }
+		parsedPort, err := strconv.ParseInt(local[1], 16, 32)
+		if err != nil || int(parsedPort) != port { continue }
+		address, err := decodeProcSocketAddress(local[0], ipv6)
+		if err != nil || address.IsUnspecified() { continue }
+		if address.String() == expectedAddress { return true }
+	}
+	return false
 }
