@@ -25,12 +25,12 @@ class ConfigTests(unittest.TestCase):
         return p
 
     def test_valid_dual_stack_config(self):
-        cfg=nl.read_config(self.write(valid_config()))
+        cfg=nl.read_config(self.write(valid_config()), require_root=False)
         self.assertEqual(set(cfg["_networks"]),{4,6})
 
     def test_unknown_key_rejected(self):
         cfg=valid_config(); cfg["extra"]=True
-        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
+        with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg), require_root=False)
 
     def test_world_readable_config_rejected(self):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(valid_config(),0o644))
@@ -48,13 +48,21 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
 
 class NetworkSafetyTests(unittest.TestCase):
+    def write_config(self):
+        td=tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        p=Path(td.name)/"network.json"
+        p.write_text(json.dumps(valid_config()))
+        os.chmod(p,0o600)
+        return nl.read_config(p, require_root=False)
+
     def test_unowned_network_never_reused(self):
-        cfg=nl.read_config(ConfigTests().write(valid_config()))
+        cfg=self.write_config()
         net={"Labels":{},"Driver":"bridge"}
         with self.assertRaises(nl.LifecycleError): nl.validate_existing(net,cfg)
 
     def test_network_option_drift_rejected(self):
-        cfg=nl.read_config(ConfigTests().write(valid_config()))
+        cfg=self.write_config()
         net={"Labels":{nl.OWNER:nl.VALUE},"Driver":"bridge",
              "IPAM":{"Config":[{"Subnet":"172.31.10.0/24","Gateway":"172.31.10.1"},{"Subnet":"2001:db8:31::/64","Gateway":"2001:db8:31::1"}]},
              "Options":{"com.docker.network.bridge.gateway_mode_ipv4":"nat",

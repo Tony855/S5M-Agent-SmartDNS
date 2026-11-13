@@ -14,17 +14,19 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 class LifecycleError(RuntimeError): pass
 
-def read_config(path: Path) -> dict:
-    current = Path("/")
-    for part in path.absolute().parts[1:-1]:
-        current = current / part
-        st_parent = current.lstat()
-        if not stat.S_ISDIR(st_parent.st_mode) or st_parent.st_uid != 0 or st_parent.st_mode & 0o022:
-            raise LifecycleError(f"config parent {current} must be root-owned, non-writable directory")
+def read_config(path: Path, *, require_root: bool = True) -> dict:
+    if require_root:
+        current = Path("/")
+        for part in path.absolute().parts[1:-1]:
+            current = current / part
+            st_parent = current.lstat()
+            if not stat.S_ISDIR(st_parent.st_mode) or st_parent.st_uid != 0 or st_parent.st_mode & 0o022:
+                raise LifecycleError(f"config parent {current} must be root-owned, non-writable directory")
     if path.is_symlink(): raise LifecycleError("config must not be a symlink")
     st = path.lstat()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
-        raise LifecycleError("config must be a root-owned regular file with mode 0600 or stricter")
+    expected_owner = 0 if require_root else os.geteuid()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != expected_owner or st.st_mode & 0o077:
+        raise LifecycleError("config must be an appropriately owned regular file with mode 0600 or stricter")
     if st.st_size > 8192: raise LifecycleError("config exceeds 8 KiB")
     raw = path.read_bytes()
     try: cfg = json.loads(raw)
