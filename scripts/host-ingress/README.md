@@ -4,7 +4,7 @@ This is a **restricted firewall reconciler**, not a complete routed-Docker provi
 
 ## Host prerequisites
 
-Linux Docker host with the bridge network driver, Docker Engine/CLI supporting routed bridge gateway mode, `trusted_host_interfaces`, and `docker network connect --gw-priority`; Python 3, systemd, nftables (`nft`), iproute2 (`ip`), and util-linux (`flock`) are required. The installer checks the firewall-controller dependencies before writing units. The network lifecycle helper checks Docker gateway-priority support and the trusted host interface before creating or attaching a network. No packages are installed automatically.
+Linux Docker host with the bridge network driver, Docker Engine/CLI supporting routed bridge gateway mode, `trusted_host_interfaces`, and `docker network connect --gw-priority`; Python 3, systemd, nftables (`nft`), iproute2 (`ip`, `nsenter`), util-linux (`flock`), and Docker CLI/Engine are required for provisioning. Physical capture additionally requires `tcpdump`; the real proxy egress probe requires `curl`. On Debian/Ubuntu, the host-side packages are typically `nftables iproute2 util-linux python3 tcpdump curl` (install Docker Engine separately). The installer checks the firewall-controller dependencies before writing units. The network lifecycle helper checks Docker gateway-priority support and the trusted host interface before creating or attaching a network. No packages are installed automatically.
 
 ## Configuration
 
