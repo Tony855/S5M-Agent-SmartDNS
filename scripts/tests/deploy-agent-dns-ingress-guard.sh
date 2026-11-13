@@ -36,7 +36,7 @@ chmod 0600 "$TMP/agent.conf"
 
 export DOCKER_CALL_LOG="$TMP/docker.log"
 : >"$DOCKER_CALL_LOG"
-if sudo env PATH="$TMP/bin:/usr/bin:/bin" CONFIG_FILE="$TMP/agent.conf" \
+if sudo env PATH="$TMP/bin:/usr/bin:/bin" CONFIG_FILE="$TMP/agent.conf" DOCKER_CALL_LOG="$DOCKER_CALL_LOG" \
   bash "$DEPLOY" >"$TMP/deploy.log" 2>&1; then
   echo "unsafe DNS_PORT publication unexpectedly passed deploy preflight" >&2
   cat "$TMP/deploy.log" >&2
