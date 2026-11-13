@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-set -Eeuxo pipefail
+set -Eeuo pipefail
 docker version
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SERVER=s5m-dns-routed-lab
 NET_A=s5m-dns-routed-a
 NET_B=s5m-dns-routed-b
 NET_IN=s5m-dns-routed-ingress
-BR_A=br-s5m-dns-lab-a
-BR_B=br-s5m-dns-lab-b
+BR_A=br-s5ma
+BR_B=br-s5mb
 cleanup() {
   docker rm -f "$SERVER" >/dev/null 2>&1 || true
   docker network rm "$NET_IN" "$NET_A" "$NET_B" >/dev/null 2>&1 || true
@@ -23,7 +23,7 @@ docker network create --driver bridge --subnet 172.30.20.0/24 --gateway 172.30.2
 docker network create --driver bridge --subnet 172.31.0.0/24 --gateway 172.31.0.1 \
   --opt com.docker.network.bridge.gateway_mode_ipv4=routed \
   --opt "com.docker.network.bridge.trusted_host_interfaces=$BR_A:$BR_B" \
-  --opt com.docker.network.bridge.name=br-s5m-dns-routed "$NET_IN" >/dev/null
+  --opt com.docker.network.bridge.name=br-s5mi "$NET_IN" >/dev/null
 docker run -d --name "$SERVER" --restart no --network "$NET_IN" --ip 172.31.0.10 \
   -p 0.0.0.0::6055/udp -p 0.0.0.0::6055/tcp \
   -v "$ROOT/server.py:/lab/server.py:ro" python:3.12-alpine python -u /lab/server.py >/dev/null
