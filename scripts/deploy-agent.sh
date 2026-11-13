@@ -243,6 +243,32 @@ rollback_on_exit() { local status=$?; if (( DEPLOY_OK == 0 && ROLLBACK_ARMED == 
 trap rollback_on_exit EXIT
 deployment_failed() { local message="$1"; docker logs --tail 100 "$CONTAINER_NAME" 2>/dev/null || true; restore_previous || true; ROLLBACK_ARMED=0; die "$message"; }
 
+validate_ingress_port_publication() {
+  [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || return 0
+  python3 - "$CONTAINER_NAME" "$ENABLE_PER_CLIENT_INGRESS_IPV6" <<'PY'
+import json, subprocess, sys
+name, ipv6 = sys.argv[1], sys.argv[2] == "1"
+try:
+    item = json.loads(subprocess.check_output(["docker", "inspect", name], text=True))[0]
+    ports = item.get("NetworkSettings", {}).get("Ports") or {}
+    for proto in ("udp", "tcp"):
+        entries = ports.get(f"6055/{proto}") or []
+        expected = 2 if ipv6 else 1
+        if len(entries) != expected:
+            raise ValueError(f"6055/{proto}: expected {expected} published mapping(s), got {entries}")
+        v4 = [x for x in entries if x.get("HostIp") == "127.0.0.1" and str(x.get("HostPort", "")).isdigit()]
+        if len(v4) != 1:
+            raise ValueError(f"6055/{proto}: IPv4 mapping must bind only to 127.0.0.1 with an ephemeral host port")
+        if ipv6:
+            v6 = [x for x in entries if x.get("HostIp") == "::" and x.get("HostPort", "") in ("", None)]
+            if len(v6) != 1:
+                raise ValueError(f"6055/{proto}: IPv6 routed mapping must not allocate a host port")
+except Exception as exc:
+    print(f"unsafe per-client DNS port publication: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   HAD_OLD=1
   log "暂存旧容器：$CONTAINER_NAME"
@@ -266,6 +292,9 @@ if ! docker "${args[@]}"; then
   deployment_failed "新容器创建失败，已回滚旧容器（如存在）。"
 fi
 NEW_STARTED=1
+if ! validate_ingress_port_publication; then
+  deployment_failed "per-client DNS ingress 端口映射不安全，已回滚旧容器。"
+fi
 
 log "等待容器启动检查（最多 120 秒）..."
 ready=0
