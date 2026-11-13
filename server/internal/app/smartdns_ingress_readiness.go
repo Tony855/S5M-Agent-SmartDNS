@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/netip"
 	"regexp"
 	"strconv"
@@ -123,8 +122,8 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 		if !ok {
 			return fmt.Errorf("Agent DNS ingress 地址缺失: %s", key)
 		}
-		ip := net.ParseIP(strings.TrimSpace(value))
-		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
+		ip, err := netip.ParseAddr(strings.TrimSpace(value))
+		if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (wantIPv4 && !ip.Is4()) || (!wantIPv4 && !ip.Is6()) {
 			return fmt.Errorf("Agent DNS ingress 地址无效: %s", key)
 		}
 		return nil
