@@ -4,6 +4,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("physical_ingress_verify", HERE / "physical-ingress-verify.py")
@@ -64,17 +65,6 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         self.assertEqual(packets[0]["flags"] & 0x02, 0x02)
         self.assertEqual(packets[0]["dport"], 6055)
 
-    def test_rejects_truncated_capture(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = pathlib.Path(td) / "bad.pcap"
-            path.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 8)
-            with self.assertRaisesRegex(ValueError, "truncated pcap global header"):
-                VERIFY.pcap_packets(path, require_root=False)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_rejects_invalid_pcap_timestamp_fraction(self):
         frame = ethernet(ipv4_udp("192.168.50.10", "172.31.0.10", 42000, 6055, b"probe"))
         data = bytearray(pcap(1, [frame]))
@@ -85,3 +75,43 @@ if __name__ == "__main__":
             path.write_bytes(data)
             with self.assertRaisesRegex(ValueError, "timestamp fraction"):
                 VERIFY.pcap_packets(path, require_root=False)
+
+    def test_capture_must_match_current_container_id_pid_and_ingress_ip(self):
+        manifest={"container":"s5m-agent","container_id":"a"*64,"container_pid":123}
+        cfg={"addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
+        inspected={"Id":"a"*64,"State":{"Running":True,"Pid":123},
+            "NetworkSettings":{"Networks":{"ingress":{"IPAddress":"172.31.0.10","GlobalIPv6Address":""}}}}
+        fake=type("Completed",(),{"stdout":__import__("json").dumps([inspected])})()
+        with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+            VERIFY.validate_capture_container(manifest,cfg)
+        inspected["Id"]="b"*64
+        with unittest.mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+            with self.assertRaisesRegex(ValueError,"container ID"):
+                VERIFY.validate_capture_container(manifest,cfg)
+
+    def test_capture_rejects_restarted_container_or_missing_ingress_address(self):
+        manifest={"container":"s5m-agent","container_id":"a"*64,"container_pid":123}
+        cfg={"addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
+        inspected={"Id":"a"*64,"State":{"Running":True,"Pid":124},
+            "NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.2","GlobalIPv6Address":""}}}}
+        fake=type("Completed",(),{"stdout":__import__("json").dumps([inspected])})()
+        with unittest.mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+            with self.assertRaisesRegex(ValueError,"restarted"):
+                VERIFY.validate_capture_container(manifest,cfg)
+        inspected["State"]["Pid"]=123
+        with unittest.mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+            with self.assertRaisesRegex(ValueError,"not attached"):
+                VERIFY.validate_capture_container(manifest,cfg)
+
+    def test_rejects_truncated_capture(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "bad.pcap"
+            path.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 8)
+            with self.assertRaisesRegex(ValueError, "truncated pcap global header"):
+                VERIFY.pcap_packets(path, require_root=False)
+
+
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import socket
+import subprocess
 import stat
 import struct
 import sys
@@ -207,6 +208,29 @@ def append_result(path, record):
             pass
 
 
+def validate_capture_container(manifest: dict, cfg: dict) -> None:
+    try:
+        result=subprocess.run(["docker","inspect",manifest["container"]],check=True,capture_output=True,text=True)
+        item=json.loads(result.stdout)[0]
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, IndexError, KeyError) as exc:
+        raise ValueError(f"cannot verify current Agent container identity: {exc}") from exc
+    if item.get("Id")!=manifest["container_id"]:
+        raise ValueError("capture manifest container ID does not match the current Agent container")
+    state=item.get("State",{})
+    if state.get("Running") is not True or type(state.get("Pid")) is not int or state["Pid"]!=manifest["container_pid"]:
+        raise ValueError("Agent container restarted or stopped after capture; recapture physical ingress")
+    observed=set()
+    for endpoint in (item.get("NetworkSettings",{}).get("Networks") or {}).values():
+        for field in ("IPAddress","GlobalIPv6Address"):
+            value=endpoint.get(field)
+            if value:
+                try: observed.add(ipaddress.ip_address(value))
+                except ValueError: raise ValueError("Docker reports a noncanonical container ingress address")
+    missing=set(cfg["addresses"])-observed
+    if missing:
+        raise ValueError("current Agent container is not attached to all configured ingress addresses: "+", ".join(sorted(map(str,missing))))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("/etc/s5m-agent-ingress/config.json"))
@@ -240,6 +264,7 @@ def main():
     cfg = load_config(args.config)
     if manifest["host_interface"] != cfg["interface"]:
         raise ValueError("capture host interface does not match the configured physical ingress interface")
+    validate_capture_container(manifest,cfg)
     config_bytes = _secure_regular(args.config)
     host_packets = pcap_packets(args.host_pcap, host_pcap_raw)
     container_packets = pcap_packets(args.container_pcap, container_pcap_raw)
