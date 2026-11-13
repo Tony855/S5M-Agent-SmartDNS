@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -623,4 +624,85 @@ func TestApplySmartDNSSharedSelectRejectsMissingManualProxyGroup(t *testing.T) {
 	input := "proxy-groups: []\\nrules:\\n  - MATCH,REJECT\\n"
 	plan := SmartDNSRoutingPlan{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSStrategySelect, GroupName: "PROXY", ProxyNames: []string{"node-a"}}
 	if _, err := applySmartDNSSharedFallback(input, plan); err == nil { t.Fatal("manual selection must fail if the managed PROXY group is absent") }
+}
+
+func TestBuildSmartDNSPerClientRuntimeConfigsUsesOneSharedMappingSet(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+  - name: node-b
+    type: socks5
+    server: 192.0.2.11
+    port: 1080
+listeners:
+  - name: operator-listener
+    type: socks
+    listen: 127.0.0.1
+    port: 16000
+rules:
+  - MATCH,REJECT
+`
+	cfg := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.10.0/24", ProxyName: "node-a"},
+		{ClientCIDR: "2001:db8:10::/64", ProxyName: "node-b"},
+	}}
+	mihomo, smartdns, mappings, err := buildSmartDNSPerClientRuntimeConfigs(input, cfg, []SmartDNSProxyRef{
+		{Name: "node-a", Enabled: true}, {Name: "node-b", Enabled: true},
+	})
+	if err != nil { t.Fatalf("build isolated runtime: %v", err) }
+	if len(mappings) != 2 { t.Fatalf("got %d mappings, want 2", len(mappings)) }
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(mihomo), &doc); err != nil { t.Fatal(err) }
+	listeners := doc["listeners"].([]any)
+	if len(listeners) != 3 { t.Fatalf("operator listener was not preserved or managed listeners missing: %#v", listeners) }
+	for _, mapping := range mappings {
+		found := false
+		for _, raw := range listeners {
+			item := raw.(map[string]any)
+			if item["name"] == mapping.ListenerName {
+				found = true
+				if item["listen"] != mapping.ListenerAddress || item["port"] != mapping.ListenerPort || item["proxy"] != mapping.ProxyName {
+					t.Fatalf("Mihomo listener differs from canonical mapping: %#v vs %#v", item, mapping)
+				}
+			}
+		}
+		if !found { t.Fatalf("Mihomo listener %q missing", mapping.ListenerName) }
+		if !strings.Contains(smartdns, fmt.Sprintf("proxy-server socks5://127.0.0.1:%d -name %s", mapping.ListenerPort, mapping.ListenerName)) {
+			t.Fatalf("SmartDNS config did not consume mapping %#v:\n%s", mapping, smartdns)
+		}
+	}
+	if !strings.Contains(smartdns, "No default upstream") || strings.Contains(smartdns, "server 8.8.8.8") {
+		t.Fatalf("per-client resolver must have no global/default upstream:\n%s", smartdns)
+	}
+}
+
+func TestBuildSmartDNSPerClientRuntimeConfigsFailsClosedOnInvalidRoutes(t *testing.T) {
+	input := `proxies:
+  - name: node-a
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+rules: [MATCH,REJECT]
+`
+	cases := []struct {
+		name string
+		cfg SmartDNSRoutingConfig
+		proxies []SmartDNSProxyRef
+	}{
+		{name: "overlapping CIDRs", cfg: SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+			{ClientCIDR: "192.168.0.0/16", ProxyName: "node-a"},
+			{ClientCIDR: "192.168.1.0/24", ProxyName: "node-a"},
+		}}, proxies: []SmartDNSProxyRef{{Name:"node-a",Enabled:true}}},
+		{name: "disabled proxy", cfg: SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{{ClientCIDR:"192.168.1.0/24",ProxyName:"node-a"}}}, proxies: []SmartDNSProxyRef{{Name:"node-a",Enabled:false}}},
+		{name: "missing proxy in node YAML", cfg: SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{{ClientCIDR:"192.168.1.0/24",ProxyName:"node-b"}}}, proxies: []SmartDNSProxyRef{{Name:"node-b",Enabled:true}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, _, err := buildSmartDNSPerClientRuntimeConfigs(input, tc.cfg, tc.proxies); err == nil {
+				t.Fatal("invalid per-client runtime was accepted")
+			}
+		})
+	}
 }

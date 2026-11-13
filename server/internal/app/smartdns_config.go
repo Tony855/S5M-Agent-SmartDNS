@@ -34,15 +34,24 @@ func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (stri
 
 	seenCIDR := make(map[string]bool, len(ordered))
 	seenProxy := make(map[string]bool, len(ordered))
+	seenNetworks := make([]netip.Prefix, 0, len(ordered))
 	for _, m := range ordered {
 		prefix, err := netip.ParsePrefix(strings.TrimSpace(m.ClientCIDR))
 		if err != nil {
 			return "", fmt.Errorf("SmartDNS 客户端 CIDR %q 无效: %w", m.ClientCIDR, err)
 		}
-		cidr := prefix.Masked().String()
+		prefix = prefix.Masked()
+		cidr := prefix.String()
 		if seenCIDR[cidr] {
 			return "", fmt.Errorf("SmartDNS 客户端 CIDR %q 重复", cidr)
 		}
+		for _, existing := range seenNetworks {
+			if prefix.Addr().Is4() == existing.Addr().Is4() &&
+				(prefix.Contains(existing.Addr()) || existing.Contains(prefix.Addr())) {
+				return "", fmt.Errorf("SmartDNS 客户端 CIDR 存在重叠映射: %s 与 %s", cidr, existing.String())
+			}
+		}
+		seenNetworks = append(seenNetworks, prefix)
 		seenCIDR[cidr] = true
 		if m.ListenerAddress != "127.0.0.1" || m.ListenerPort < 1024 || m.ListenerPort > 65535 {
 			return "", fmt.Errorf("客户端 %s 的 SOCKS 映射必须绑定 127.0.0.1 且端口在 1024-65535", cidr)
