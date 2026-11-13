@@ -733,7 +733,7 @@ rules: [MATCH,REJECT]
 	for _, want := range []string{
 		"bind 172.31.0.10:6055", "bind-tcp 172.31.0.10:6055",
 		"bind [2001:db8:31::10]:6055", "bind-tcp [2001:db8:31::10]:6055",
-		"bind 127.0.0.1:6053", "No default upstream",
+		"bind 127.0.0.1:6053", "bind 127.0.0.1:6054 -group china-dot", "bind-tcp 127.0.0.1:6054 -group china-dot", "server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group", "No default upstream",
 	} {
 		if !strings.Contains(smartdns, want) { t.Errorf("generated ingress config missing %q:\\n%s", want, smartdns) }
 	}
