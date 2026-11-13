@@ -29,7 +29,8 @@ cat >"$TMP/network.json" <<EOF
   "ipv4_address": "172.31.250.2",
   "ipv6_subnet": null,
   "ipv6_gateway": null,
-  "ipv6_address": null
+  "ipv6_address": null,
+  "client_cidrs": ["192.168.50.0/24"]
 }
 EOF
 cat >"$TMP/firewall.json" <<'EOF'

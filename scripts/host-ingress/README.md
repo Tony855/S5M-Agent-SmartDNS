@@ -62,7 +62,8 @@ Create `/etc/s5m-agent-ingress/network.json` as root-owned mode `0600` (replace 
   "ipv4_address": "172.31.10.2",
   "ipv6_subnet": null,
   "ipv6_gateway": null,
-  "ipv6_address": null
+  "ipv6_address": null,
+  "client_cidrs": ["192.168.50.0/24"]
 }
 ```
 

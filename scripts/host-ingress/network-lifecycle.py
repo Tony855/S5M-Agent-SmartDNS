@@ -31,7 +31,7 @@ def read_config(path: Path, *, require_root: bool = True) -> dict:
     raw = path.read_bytes()
     try: cfg = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as e: raise LifecycleError("config must be valid UTF-8 JSON") from e
-    keys = {"version","network","container","interface","ipv4_subnet","ipv4_gateway","ipv4_address","ipv6_subnet","ipv6_gateway","ipv6_address"}
+    keys = {"version","network","container","interface","ipv4_subnet","ipv4_gateway","ipv4_address","ipv6_subnet","ipv6_gateway","ipv6_address","client_cidrs"}
     if not isinstance(cfg,dict) or set(cfg) != keys or type(cfg["version"]) is not int or cfg["version"] != 1:
         raise LifecycleError("invalid config schema/version")
     for key in ("network","container"):
@@ -61,7 +61,29 @@ def read_config(path: Path, *, require_root: bool = True) -> dict:
         values[family]=(net,gw,addr)
     if 4 not in values: raise LifecycleError("IPv4 ingress is mandatory")
     if len(values)==2 and values[4][0].overlaps(values[6][0]): raise LifecycleError("overlapping address families")
+    cidr_values=cfg["client_cidrs"]
+    if not isinstance(cidr_values,list) or not cidr_values or len(cidr_values)>128:
+        raise LifecycleError("client_cidrs must contain 1..128 entries")
+    client_networks=[]
+    for value in cidr_values:
+        if not isinstance(value,str): raise LifecycleError("each client CIDR must be a string")
+        try: net=ipaddress.ip_network(value,strict=True)
+        except ValueError as e: raise LifecycleError(f"invalid or non-canonical client CIDR: {value}") from e
+        if net.prefixlen==0 or net.is_loopback or net.is_link_local or net.is_multicast or net.is_unspecified or net.is_reserved or getattr(net.network_address,"ipv4_mapped",None):
+            raise LifecycleError(f"client CIDR is not an allowed unicast network: {value}")
+        client_networks.append(net)
+    if len(set(client_networks))!=len(client_networks): raise LifecycleError("duplicate client CIDR")
+    for i,left in enumerate(client_networks):
+        for right in client_networks[i+1:]:
+            if left.version==right.version and left.overlaps(right): raise LifecycleError("overlapping client CIDRs")
+    if {n.version for n in client_networks}!={n.version for n in values.values()}:
+        raise LifecycleError("client CIDR families must exactly match configured ingress address families")
+    for client_net in client_networks:
+        for ingress_net,_,_ in values.values():
+            if client_net.version==ingress_net.version and client_net.overlaps(ingress_net):
+                raise LifecycleError("client CIDRs must not overlap the routed Docker ingress subnet")
     cfg["_networks"]=values
+    cfg["_client_networks"]=client_networks
     return cfg
 
 def run(args, *, check=True):
@@ -90,7 +112,7 @@ def validate_firewall_contract(cfg: dict, path: Path, *, require_root: bool = Tr
         raise LifecycleError("firewall config schema/version mismatch")
     expected4=str(cfg["_networks"][4][2])
     expected6=str(cfg["_networks"][6][2]) if 6 in cfg["_networks"] else None
-    cidrs=sorted(str(values[0]) for values in cfg["_networks"].values())
+    cidrs=sorted(str(net) for net in cfg["_client_networks"])
     if fw["interface"]!=cfg["interface"] or fw["ipv4_address"]!=expected4 or fw["ipv6_address"]!=expected6:
         raise LifecycleError("firewall config interface/ingress addresses do not match routed Docker network config")
     if not isinstance(fw["client_cidrs"],list) or sorted(fw["client_cidrs"])!=cidrs:

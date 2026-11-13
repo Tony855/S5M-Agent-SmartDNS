@@ -13,6 +13,7 @@ def valid_config():
         "interface": "eth1",
         "ipv4_subnet": "172.31.10.0/24", "ipv4_gateway": "172.31.10.1", "ipv4_address": "172.31.10.2",
         "ipv6_subnet": "2001:db8:31::/64", "ipv6_gateway": "2001:db8:31::1", "ipv6_address": "2001:db8:31::2",
+        "client_cidrs": ["192.168.50.0/24", "2001:db8:50::/64"],
     }
 
 class ConfigTests(unittest.TestCase):
