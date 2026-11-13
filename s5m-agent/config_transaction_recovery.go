@@ -22,7 +22,6 @@ type configTransactionRecoveryRecord struct {
 	Version         int                    `json:"version"`
 	Phase           string                 `json:"phase"`
 	SmartDNS        transactionRecoveryFile `json:"smartdns"`
-	SmartDNSUpdated bool                   `json:"smartdns_updated,omitempty"`
 	Mihomo          transactionRecoveryFile `json:"mihomo"`
 	ManagedRoutes   transactionRecoveryFile `json:"managed_routes"`
 	Controller      transactionRecoveryFile `json:"controller"`
@@ -160,7 +159,7 @@ func recoverInterruptedConfigTransactionWithRuntimeChecks(checkRuntime bool) err
 				if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 					return fmt.Errorf("恢复后的 SmartDNS 未通过 UDP/TCP DNS 健康检查，恢复记录保留")
 				}
-			} else if !record.SmartDNS.Existed && record.SmartDNSUpdated {
+			} else if !record.SmartDNS.Existed {
 				// The transaction may have created and started SmartDNS for the
 				// first time. Restoring an absent prior config is not enough while
 				// the daemon is still serving the uncommitted candidate in memory.
