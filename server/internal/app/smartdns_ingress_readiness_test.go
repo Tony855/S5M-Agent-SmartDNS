@@ -179,3 +179,33 @@ func TestValidateSmartDNSIngressReadinessRejectsNonRoutableClientCIDRs(t *testin
 		})
 	}
 }
+
+
+func TestBuildSmartDNSAgentIngressContractFromFreshReadiness(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-v4"},
+		{ClientCIDR: "2001:db8:50::/64", ProxyName: "proxy-v6"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24", "2001:db8:50::/64")
+	contract, err := buildSmartDNSAgentIngressContract(settings, "node-a", routing, now)
+	if err != nil { t.Fatalf("build ingress contract: %v", err) }
+	if contract.Version != 1 || !contract.Ready || contract.IPv4Address != "192.0.2.1" || contract.IPv6Address != "2001:db8::1" {
+		t.Fatalf("unexpected ingress contract: %#v", contract)
+	}
+	if len(contract.ClientCIDRs) != 2 || contract.ClientCIDRs[0] != "192.168.50.0/24" || contract.ClientCIDRs[1] != "2001:db8:50::/64" {
+		t.Fatalf("unexpected contract CIDR set: %#v", contract.ClientCIDRs)
+	}
+}
+
+func TestBuildSmartDNSAgentIngressContractRejectsStaleOrIncompleteStatus(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-v4"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	delete(settings, "agent_status_node-a")
+	if _, err := buildSmartDNSAgentIngressContract(settings, "node-a", routing, now); err == nil {
+		t.Fatal("contract builder accepted missing Agent readiness status")
+	}
+}
