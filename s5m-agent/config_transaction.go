@@ -173,6 +173,27 @@ func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []b
 // Runtime YAML may be sanitized for an image capability while the exact
 // controller payload is retained separately for WebSocket SHA-256 consistency.
 func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool) error {
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, controllerPayload, skipSmartDNSHealth, transactionApplySmartDNS)
+}
+
+// applyAgentConfigTransactionWithIngress validates per-client configuration
+// against the explicit Master-provided ingress contract, then uses the same
+// durable Mihomo+SmartDNS transaction and rollback journal as shared mode.
+func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, centralURL string, contract smartDNSPerClientIngressContract) error {
+	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
+	if err := validator(smartDNSConfig); err != nil {
+		return fmt.Errorf("per-client SmartDNS ingress contract validation failed: %w", err)
+	}
+	apply := func(data []byte, cleanupBackup bool) (string, error) {
+		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
+	}
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, true, "", false, mihomoYAML, false, apply)
+}
+
+func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error)) error {
+	if applySmartDNS == nil {
+		return fmt.Errorf("SmartDNS transaction apply function is unavailable")
+	}
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
 	mihomoConfigApplyMu.Lock()
@@ -298,7 +319,7 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 	}
 
 	if updateSmartDNS {
-		if _, err := transactionApplySmartDNS(smartDNSConfig, false); err != nil {
+		if _, err := applySmartDNS(smartDNSConfig, false); err != nil {
 			return rollback(fmt.Errorf("应用 SmartDNS 配置失败: %w", err))
 		}
 	}
