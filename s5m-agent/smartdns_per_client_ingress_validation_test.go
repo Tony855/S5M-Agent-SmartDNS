@@ -29,7 +29,7 @@ func validPerClientIngressFixture() ([]byte, smartDNSPerClientIngressContract) {
 }
 
 func TestValidateSmartDNSConfigWithIngressAcceptsExactAttestedPlan(t *testing.T) {
-	config, _ := validPerClientIngressFixture()
+	config, contract := validPerClientIngressFixture()
 	if err := validateSmartDNSConfigWithIngress(config, contract); err != nil {
 		t.Fatalf("valid contract-bound config rejected: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestValidateSmartDNSConfigWithIngressRejectsMappedAndNonRoutableAddresses(t
 	if err := addValidatedIngressAddress(addresses, "::ffff:172.31.0.10", false); err == nil {
 		t.Fatal("IPv4-mapped IPv6 ingress address accepted")
 	}
-	config, contract := validPerClientIngressFixture()
+	config, _ := validPerClientIngressFixture()
 	for _, cidr := range []string{"127.0.0.0/8", "169.254.0.0/16", "fe80::/64", "::1/128"} {
 		_, invalid := validPerClientIngressFixture()
 		invalid.ClientCIDRs = []string{cidr}
