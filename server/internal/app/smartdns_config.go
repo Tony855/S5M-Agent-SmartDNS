@@ -19,6 +19,13 @@ const smartDNSAgentConfigMaxBytes = 8 << 10
 // dedicated SmartDNS group, whose encrypted upstreams use the matching named
 // loopback SOCKS5 proxy. Unmatched clients have no configured default upstream.
 func buildSmartDNSPerClientConfig(mappings []SmartDNSClientRuntimeMapping) (string, error) {
+	return buildSmartDNSPerClientConfigWithIngress(mappings, "", "")
+}
+
+// buildSmartDNSPerClientConfigWithIngress adds dedicated LAN-facing UDP/TCP
+// listeners only for addresses supplied by a separately attested host ingress
+// contract. Empty addresses preserve the existing loopback-only lab output.
+func buildSmartDNSPerClientConfigWithIngress(mappings []SmartDNSClientRuntimeMapping, ingressIPv4, ingressIPv6 string) (string, error) {
 	if len(mappings) == 0 {
 		return "", fmt.Errorf("SmartDNS per-client 运行时映射不能为空")
 	}
