@@ -124,7 +124,7 @@ func validateSmartDNSIngressReadiness(settings map[string]string, machineCode st
 			return fmt.Errorf("Agent DNS ingress 地址缺失: %s", key)
 		}
 		ip := net.ParseIP(strings.TrimSpace(value))
-		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
+		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (wantIPv4 && ip.To4() == nil) || (!wantIPv4 && ip.To4() != nil) {
 			return fmt.Errorf("Agent DNS ingress 地址无效: %s", key)
 		}
 		return nil
