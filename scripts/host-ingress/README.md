@@ -81,7 +81,7 @@ Configure matching static routes on the upstream LAN router for each client subn
 To remove only the dedicated network, first stop the Agent or ensure no other containers are attached, then run:
 
 ```sh
-sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py uninstall --config /etc/s5m-agent-ingress/network.json --firewall-config /etc/s5m-agent-ingress/config.json
+sudo /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py uninstall --config /etc/s5m-agent-ingress/network.json
 ```
 
-For IPv6 ingress, the ordinary default Docker bridge must itself have an IPv6 gateway/default route; otherwise the helper refuses to attach the routed IPv6 network because it cannot prove IPv6 egress preservation. The helper refuses to remove a network not carrying its ownership label or one with unexpected attached containers. It does not touch the default Docker bridge.
+For IPv6 ingress, the ordinary default Docker bridge must itself have an IPv6 gateway/default route; otherwise the helper refuses to attach the routed IPv6 network because it cannot prove IPv6 egress preservation. Cleanup does not depend on the current firewall config, so it remains possible after firewall CIDRs are changed; it still requires the saved network config to match the exact owned Docker network. The helper refuses to remove a network not carrying its ownership label or one with unexpected attached containers. It does not touch the default Docker bridge.

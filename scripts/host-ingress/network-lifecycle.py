@@ -260,9 +260,13 @@ def main():
     a=p.parse_args()
     if os.geteuid()!=0: raise LifecycleError("run on Docker host as root")
     cfg=read_config(a.config)
-    validate_firewall_contract(cfg,a.firewall_config)
-    if a.action=="provision": provision(cfg)
-    else: uninstall(cfg)
+    if a.action=="provision":
+        validate_firewall_contract(cfg,a.firewall_config)
+        provision(cfg)
+    else:
+        # Cleanup must remain possible after firewall settings change; network
+        # ownership and exact Docker network shape are still independently checked.
+        uninstall(cfg)
 
 if __name__=="__main__":
     try: main()
