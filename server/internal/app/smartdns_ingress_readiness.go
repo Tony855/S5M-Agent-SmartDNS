@@ -155,7 +155,9 @@ func validateSmartDNSIngressState(settings map[string]string, machineCode string
 		return nil
 	}
 	if !hasIPv4 {
-		if value, ok := status["dns_ingress_ipv4_address"].(string); ok && value != "" {
+		value, exists := status["dns_ingress_ipv4_address"]
+		address, isString := value.(string)
+		if (exists && (!isString || address != "")) || status["dns_ingress_ipv4_ready"] == true || status["dns_ingress_smartdns_ipv4_bound"] == true {
 			return fmt.Errorf("Agent 提供了未映射的额外 IPv4 ingress 地址")
 		}
 	}
@@ -180,8 +182,12 @@ func validateSmartDNSIngressState(settings map[string]string, machineCode string
 		if requireRuntimeListener && (status["dns_ingress_smartdns_ipv6_bound"] != true || status["dns_ingress_smartdns_ipv6_bind_address"] != status["dns_ingress_ipv6_address"]) {
 			return fmt.Errorf("SmartDNS 未在已验收的 IPv6 ingress 地址上同时监听")
 		}
-	} else if value, ok := status["dns_ingress_ipv6_address"].(string); ok && value != "" {
-		return fmt.Errorf("Agent 提供了未映射的额外 IPv6 ingress 地址")
+	} else {
+		value, exists := status["dns_ingress_ipv6_address"]
+		address, isString := value.(string)
+		if (exists && (!isString || address != "")) || status["dns_ingress_ipv6_ready"] == true || status["dns_ingress_smartdns_ipv6_bound"] == true {
+			return fmt.Errorf("Agent 提供了未映射的额外 IPv6 ingress 地址")
+		}
 	}
 	for cidr := range requiredCIDRs {
 		prefix, _ := netip.ParsePrefix(cidr)
