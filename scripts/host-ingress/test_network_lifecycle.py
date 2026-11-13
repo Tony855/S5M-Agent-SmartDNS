@@ -63,20 +63,32 @@ class NetworkSafetyTests(unittest.TestCase):
     def test_dns_port_bindings_are_loopback_only(self):
         cfg=self.write_config()
         cfg["_networks"].pop(6)
-        container={"NetworkSettings":{"Ports":{
+        container={"NetworkSettings":{"Networks":{},"Ports":{
             "6055/udp":[{"HostIp":"127.0.0.1","HostPort":"32768"}],
             "6055/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}]}}}
         nl.validate_dns_port_bindings(container,cfg)
         container["NetworkSettings"]["Ports"]["6055/udp"][0]["HostIp"]="0.0.0.0"
         with self.assertRaises(nl.LifecycleError): nl.validate_dns_port_bindings(container,cfg)
 
+    def test_routed_ipv4_mapping_has_no_public_host_port(self):
+        cfg=self.write_config(); cfg["_networks"].pop(6)
+        container={"NetworkSettings":{"Networks":{cfg["network"]:{"IPAddress":"172.31.10.2"}},
+            "Ports":{"6055/udp":[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"0.0.0.0","HostPort":""}],
+                     "6055/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"},{"HostIp":"0.0.0.0","HostPort":""}]}}}
+        nl.validate_dns_port_bindings(container,cfg)
+        container["NetworkSettings"]["Ports"]["6055/udp"][1]["HostPort"]="32770"
+        with self.assertRaises(nl.LifecycleError): nl.validate_dns_port_bindings(container,cfg)
+
     def test_dual_stack_dns_port_mapping_has_no_public_ipv6_host_port(self):
         cfg=self.write_config()
-        container={"NetworkSettings":{"Ports":{}}}
+        container={"NetworkSettings":{"Networks":{},
+            "Ports":{}}}
         for proto in ("udp","tcp"):
             container["NetworkSettings"]["Ports"][f"6055/{proto}"]=[
                 {"HostIp":"127.0.0.1","HostPort":"32768"},
+                {"HostIp":"0.0.0.0","HostPort":""},
                 {"HostIp":"::","HostPort":""}]
+        container["NetworkSettings"]["Networks"][cfg["network"]]={"IPAddress":"172.31.10.2","GlobalIPv6Address":"2001:db8:31::2"}
         nl.validate_dns_port_bindings(container,cfg)
         container["NetworkSettings"]["Ports"]["6055/tcp"][1]["HostPort"]="32770"
         with self.assertRaises(nl.LifecycleError): nl.validate_dns_port_bindings(container,cfg)

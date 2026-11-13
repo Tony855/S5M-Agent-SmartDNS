@@ -188,19 +188,27 @@ def inspect_container(name):
     except Exception as e: raise LifecycleError(f"cannot inspect container: {e}") from e
 
 def validate_dns_port_bindings(container: dict, cfg: dict) -> None:
+    networks=container.get("NetworkSettings",{}).get("Networks") or {}
+    routed_attached=cfg["network"] in networks
     ports=container.get("NetworkSettings",{}).get("Ports") or {}
     for proto in ("udp","tcp"):
         entries=ports.get(f"6055/{proto}") or []
-        expected=1 + (1 if 6 in cfg["_networks"] else 0)
-        if len(entries)!=expected:
-            raise LifecycleError(f"container must publish DNS 6055/{proto} only through loopback/routed-family bindings; found {entries!r}; redeploy with ENABLE_PER_CLIENT_INGRESS=1")
-        ipv4=[x for x in entries if x.get("HostIp")=="127.0.0.1" and str(x.get("HostPort","")).isdigit() and 1<=int(x["HostPort"])<=65535]
-        if len(ipv4)!=1:
-            raise LifecycleError(f"DNS 6055/{proto} must have exactly one IPv4 host mapping bound to 127.0.0.1 with an allocated ephemeral port")
+        ipv4_loopback=[x for x in entries if x.get("HostIp")=="127.0.0.1" and str(x.get("HostPort","")).isdigit() and 1<=int(x["HostPort"])<=65535]
+        if len(ipv4_loopback)!=1:
+            raise LifecycleError(f"DNS 6055/{proto} must have exactly one IPv4 host mapping bound to 127.0.0.1 with an allocated ephemeral port; found {entries!r}")
+        routed_v4=[x for x in entries if x.get("HostIp")=="0.0.0.0" and x.get("HostPort","") in ("",None)]
+        routed_v6=[x for x in entries if x.get("HostIp")=="::" and x.get("HostPort","") in ("",None)]
+        allowed=[*ipv4_loopback]
+        if routed_attached:
+            if len(routed_v4)!=1:
+                raise LifecycleError(f"routed IPv4 DNS 6055/{proto} mapping must have an empty host port; found {entries!r}")
+            allowed.extend(routed_v4)
         if 6 in cfg["_networks"]:
-            ipv6=[x for x in entries if x.get("HostIp")=="::" and x.get("HostPort","") in ("",None)]
-            if len(ipv6)!=1:
-                raise LifecycleError(f"DNS 6055/{proto} IPv6 mapping must be routed-only with no host port; refuse public IPv6 exposure")
+            if len(routed_v6)!=1:
+                raise LifecycleError(f"routed IPv6 DNS 6055/{proto} mapping must have an empty host port; refuse public IPv6 exposure")
+            allowed.extend(routed_v6)
+        if len(entries)!=len(allowed):
+            raise LifecycleError(f"DNS 6055/{proto} contains an unexpected or public host binding: {entries!r}")
 
 def container_networks(name):
     return inspect_container(name)["NetworkSettings"]["Networks"]
@@ -260,7 +268,9 @@ def provision(cfg):
             if created: run(["docker","network","rm",cfg["network"]],check=False)
             raise
     try:
-        attached=container_networks(cfg["container"])
+        verified_container=inspect_container(cfg["container"])
+        validate_dns_port_bindings(verified_container,cfg)
+        attached=verified_container["NetworkSettings"]["Networks"]
         if "bridge" not in attached or cfg["network"] not in attached: raise LifecycleError("container must retain default bridge plus routed ingress network")
         for family,(_,_,address) in cfg["_networks"].items():
             field="IPAddress" if family==4 else "GlobalIPv6Address"
