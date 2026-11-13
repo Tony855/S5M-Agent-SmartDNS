@@ -28,7 +28,10 @@ jobs:
           python3 -m py_compile scripts/host-ingress/controller.py
           python3 -m unittest discover -s scripts/host-ingress -p 'test_*.py'
           bash -n scripts/host-ingress/install-host-controller.sh
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/s5m-agent-ingress
+          sudo install -o root -g root -m 0755 scripts/host-ingress/controller.py /usr/local/libexec/s5m-agent-ingress/controller.py
           systemd-analyze verify scripts/host-ingress/s5m-agent-ingress.service scripts/host-ingress/s5m-agent-ingress.timer
+          sudo rm -rf /usr/local/libexec/s5m-agent-ingress
           rm -rf scripts/host-ingress/__pycache__
       - name: Run isolated Docker source-IP experiment
         run: |
