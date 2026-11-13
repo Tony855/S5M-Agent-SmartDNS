@@ -153,7 +153,6 @@ func buildSmartDNSPerClientConfigInternal(mappings []SmartDNSClientRuntimeMappin
 	b.WriteString("# Preserve A and AAAA answers; allow IPv6-only domains on dual-stack resolvers.\n")
 	b.WriteString("dualstack-ip-selection no\ndualstack-ip-selection-threshold 10\ndualstack-ip-allow-force-AAAA yes\n")
 	b.WriteString("cache-size 16384\ncache-persist yes\ncache-file /data/smartdns.cache\ncache-checkpoint-time 3600\nprefetch-domain yes\nserve-expired yes\nlog-level info\nlog-console yes\nlog-syslog no\n")
-	b.WriteString("cache-size 16384\nprefetch-domain yes\nserve-expired yes\nlog-level info\nlog-console yes\nlog-syslog no\n")
 
 	config := b.String()
 	if len(config) > smartDNSAgentConfigMaxBytes {
