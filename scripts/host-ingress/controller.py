@@ -234,8 +234,8 @@ def live_nft_table_matches(cfg: dict, output: str) -> bool:
     }
 
     def normalize_rule(value: str) -> str:
-        value = re.sub(r"\\{\\s*([^{}]+?)\\s*\\}", r"\\1", value)
-        return re.sub(r"\\s+", " ", value).strip()
+        value = re.sub(r"\{\s*([^{}]+?)\s*\}", r"\1", value)
+        return re.sub(r"\s+", " ", value).strip()
 
     expected = []
     for line in render_nft(cfg).splitlines():
@@ -257,7 +257,7 @@ def live_nft_table_matches(cfg: dict, output: str) -> bool:
         value = raw_line.strip()
         if not value:
             continue
-        value = re.sub(r"\\s+# handle [0-9]+$", "", value).strip()
+        value = re.sub(r"\s+# handle [0-9]+$", "", value).strip()
 
         if not table_seen:
             if not value.startswith(table_header):
