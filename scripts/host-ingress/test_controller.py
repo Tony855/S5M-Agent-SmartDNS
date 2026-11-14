@@ -140,7 +140,7 @@ class ControllerTests(unittest.TestCase):
             for line in mod.render_nft(cfg).splitlines()
             if line.strip().startswith(("iifname ", "ip daddr ", "ip6 daddr "))
         ]
-        live_output = "\\n".join([
+        live_output = "\n".join([
             f"table inet {mod.TABLE} {{",
             '    comment "managed-by:s5m-agent-ingress-v1"',
             "    chain forward_guard {",
