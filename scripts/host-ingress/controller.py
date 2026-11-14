@@ -184,6 +184,21 @@ def build_nft_transaction(table_exists: bool, rules: str) -> str:
     prefix = f"delete table inet {TABLE}\n" if table_exists else ""
     return prefix + rules
 
+def live_nft_table_matches(cfg: dict, output: str) -> bool:
+    if not isinstance(output, str) or f"table inet {TABLE}" not in output or "chain forward_guard" not in output:
+        return False
+    def rule_lines(text: str) -> list[str]:
+        result = []
+        for line in text.splitlines():
+            value = line.strip()
+            if value.startswith(("iifname ", "ip daddr ", "ip6 daddr ")):
+                result.append(value)
+        return result
+    expected = rule_lines(render_nft(cfg))
+    actual = rule_lines(output)
+    return bool(expected) and actual == expected
+
+
 def render_nft(cfg: dict) -> str:
     iface = cfg["interface"]
     lines = [f'table inet {TABLE} {{ comment "managed-by:s5m-agent-ingress-v1";', "  chain forward_guard {", "    type filter hook forward priority -5; policy accept;"]
@@ -305,6 +320,9 @@ def main(argv=None) -> int:
             if check.returncode: raise ConfigError(f"nft validation failed: {check.stderr.strip()}")
             applied = subprocess.run(["nft", "-f", "-"], input=transaction, text=True, capture_output=True)
             if applied.returncode: raise ConfigError(f"nft apply failed: {applied.stderr.strip()}")
+            live = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
+            if live.returncode or not live_nft_table_matches(cfg, live.stdout):
+                raise ConfigError("live nftables table does not exactly match the configured source-CIDR UDP/TCP allowlist")
             now = int(time.time())
             timer_enabled = subprocess.run(["systemctl", "is-enabled", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
             timer_active = subprocess.run(["systemctl", "is-active", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
