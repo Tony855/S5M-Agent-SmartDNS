@@ -249,10 +249,12 @@ def physical_evidence_container_matches_current(evidence: dict, inspect_output: 
     if not isinstance(containers, list) or len(containers) != 1 or not isinstance(containers[0], dict):
         return False
     current = containers[0]
+    state = current.get("State")
     return (
         current.get("Id") == evidence.get("container_id")
         and str(current.get("Name", "")).lstrip("/") == evidence.get("container")
-        and current.get("State", {}).get("Running") is True
+        and isinstance(state, dict)
+        and state.get("Running") is True
     )
 
 
@@ -272,16 +274,24 @@ def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network
         return False
     if network.get("Driver") != "bridge":
         return False
-    if (network.get("Labels") or {}).get("com.s5m.managed") != "s5m-agent-dns-ingress":
+    labels = network.get("Labels")
+    if not isinstance(labels, dict) or labels.get("com.s5m.managed") != "s5m-agent-dns-ingress":
         return False
-    options = network.get("Options") or {}
+    options = network.get("Options")
+    if not isinstance(options, dict):
+        return False
     if options.get("com.docker.network.bridge.gateway_mode_ipv4") != "routed":
         return False
     if options.get("com.docker.network.bridge.trusted_host_interfaces") != cfg.get("interface"):
         return False
     if any(address.version == 6 for address in cfg.get("addresses", [])) and options.get("com.docker.network.bridge.gateway_mode_ipv6") != "routed":
         return False
-    ipam = network.get("IPAM", {}).get("Config") or []
+    ipam_state = network.get("IPAM")
+    if not isinstance(ipam_state, dict):
+        return False
+    ipam = ipam_state.get("Config") or []
+    if not isinstance(ipam, list):
+        return False
     for address in cfg.get("addresses", []):
         if not any(
             isinstance(item, dict)
@@ -289,7 +299,13 @@ def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network
             for item in ipam
         ):
             return False
-    attached = (container.get("NetworkSettings", {}).get("Networks") or {}).get(evidence.get("network"))
+    network_settings = container.get("NetworkSettings")
+    if not isinstance(network_settings, dict):
+        return False
+    attached_networks = network_settings.get("Networks")
+    if not isinstance(attached_networks, dict):
+        return False
+    attached = attached_networks.get(evidence.get("network"))
     if not isinstance(attached, dict) or attached.get("NetworkID") != evidence.get("network_id"):
         return False
     expected4 = next((str(address) for address in cfg.get("addresses", []) if address.version == 4), "")

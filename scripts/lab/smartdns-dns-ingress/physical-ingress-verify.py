@@ -247,8 +247,8 @@ def validate_capture_container(manifest: dict, cfg: dict) -> None:
         raise ValueError(f"cannot verify current Agent container identity: {exc}") from exc
     if item.get("Id")!=manifest["container_id"]:
         raise ValueError("capture manifest container ID does not match the current Agent container")
-    state=item.get("State",{})
-    if state.get("Running") is not True or type(state.get("Pid")) is not int or state["Pid"]!=manifest["container_pid"]:
+    state=item.get("State")
+    if not isinstance(state, dict) or state.get("Running") is not True or type(state.get("Pid")) is not int or state["Pid"]!=manifest["container_pid"]:
         raise ValueError("Agent container restarted or stopped after capture; recapture physical ingress")
     observed=set()
     for endpoint in (item.get("NetworkSettings",{}).get("Networks") or {}).values():
