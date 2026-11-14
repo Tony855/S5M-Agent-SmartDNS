@@ -24,7 +24,7 @@ except FileNotFoundError:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, "w", encoding="ascii") as stream:
-        stream.write(secrets.token_hex(32) + "\\n")
+        stream.write(secrets.token_hex(32) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
     directory_fd = os.open(os.path.dirname(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -35,7 +35,7 @@ if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
     raise SystemExit("physical evidence HMAC key must be root-owned mode 0600; refusing unsafe key")
 with open(path, "rb") as stream:
     raw = stream.read(128)
-if not re.fullmatch(rb"[0-9a-f]{64}\\n?", raw):
+if not re.fullmatch(rb"[0-9a-f]{64}", raw.strip()):
     raise SystemExit("physical evidence HMAC key must contain 32 bytes encoded as lowercase hex")
 PY
 install -o root -g root -m 0755 "$ROOT/controller.py" "$DEST/controller.py"
