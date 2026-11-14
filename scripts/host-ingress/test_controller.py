@@ -145,7 +145,10 @@ class ControllerTests(unittest.TestCase):
         }])
         self.assertTrue(mod.interface_state_matches(cfg, valid))
         self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"UP", ', "")))
-        self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"inet6", "local": "2001:db8:1::2", "scope": "global",', '"inet6", "local": "fe80::2", "scope": "link",')))
+        no_global_ipv6 = json.loads(valid)
+        no_global_ipv6[0]["addr_info"][1]["local"] = "fe80::2"
+        no_global_ipv6[0]["addr_info"][1]["scope"] = "link"
+        self.assertFalse(mod.interface_state_matches(cfg, json.dumps(no_global_ipv6)))
         self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"ifname": "eth1"', '"ifname": "eth2"')))
 
 if __name__ == "__main__": unittest.main()
