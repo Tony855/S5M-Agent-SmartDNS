@@ -224,6 +224,8 @@ def live_nft_table_matches(cfg: dict, output: str) -> bool:
         for line in text.splitlines():
             value = line.strip()
             if value.startswith(("iifname ", "ip daddr ", "ip6 daddr ")):
+                value = re.sub(r"\\{\\s*([^{}]+?)\\s*\\}", r"\\1", value)
+                value = re.sub(r"\\s+", " ", value)
                 result.append(value)
         return result
     expected = rule_lines(render_nft(cfg))
