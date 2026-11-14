@@ -51,7 +51,7 @@ Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/
 4. Agent 新心跳报告 listener ready 后，Master 才允许常规 per-client 配置发布。
 5. 任何 attestation 过期、CIDR 变化、接口/地址变化、firewall 失效或监听丢失均必须 fail closed。
 
-**注意：当前仓库已实现 Agent 对该文件的安全读取和状态合并，并新增受限 nftables host controller。`source_ip_preserved`、`udp_ready`、`tcp_ready` 只有在物理 LAN verifier 生成的 root-owned 证据文件与当前配置 SHA256 匹配且未超过 7 天时才会置 true。routed Docker lifecycle 和外部路由器静态路由仍未完成；没有真实 LAN 抓包证据时 per-client 必须保持禁用。**
+**注意：当前仓库已实现 Agent 对该文件的安全读取和状态合并，并新增受限 nftables host controller。物理证据必须由 verifier 根据真实 LAN 双端抓包生成，并使用安装器创建的宿主机专属 root-only HMAC key 签名；controller 同时验证签名、当前配置 SHA256、CIDR 覆盖和 7 天有效期。缺少签名或手工修改任一布尔值都会 fail closed。routed Docker lifecycle 和外部路由器静态路由仍未完成；没有真实 LAN 抓包证据时 per-client 必须保持禁用。**
 
 
 ## 受限宿主机防火墙控制器（新增）
