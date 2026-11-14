@@ -96,7 +96,7 @@ def read_evidence_key(path: Path = EVIDENCE_KEY) -> bytes:
     if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
         raise ConfigError("physical evidence HMAC key must be a root-owned regular file with mode 0600")
     raw = _secure_regular(path, max_bytes=128)
-    if not re.fullmatch(rb"[0-9a-f]{64}\\n?", raw):
+    if not re.fullmatch(rb"[0-9a-f]{64}", raw.strip()):
         raise ConfigError("physical evidence HMAC key must contain exactly 32 bytes encoded as lowercase hex")
     return bytes.fromhex(raw.strip().decode("ascii"))
 
