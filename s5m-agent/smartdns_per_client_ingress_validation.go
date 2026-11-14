@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"net/url"
 	"strconv"
 	"strings"
@@ -508,13 +509,49 @@ func smartDNSIngressAddressSocketsBound(address string) (bool, error) {
 	}
 	var udpPath, tcpPath string
 	ipv6 := ip.Is6()
-	if ipv6 { udpPath, tcpPath = "/proc/net/udp6", "/proc/net/tcp6" } else { udpPath, tcpPath = "/proc/net/udp", "/proc/net/tcp" }
+	if ipv6 {
+		udpPath, tcpPath = "/proc/net/udp6", "/proc/net/tcp6"
+	} else {
+		udpPath, tcpPath = "/proc/net/udp", "/proc/net/tcp"
+	}
 	udp, err := os.ReadFile(udpPath)
-	if err != nil { return false, fmt.Errorf("read UDP socket table: %w", err) }
+	if err != nil {
+		return false, fmt.Errorf("read UDP socket table: %w", err)
+	}
 	tcp, err := os.ReadFile(tcpPath)
-	if err != nil { return false, fmt.Errorf("read TCP socket table: %w", err) }
-	return procSocketTableHasExactListener(udp, ipv6, smartDNSPerClientIngressPort, ip.String(), false) &&
-		procSocketTableHasExactListener(tcp, ipv6, smartDNSPerClientIngressPort, ip.String(), true), nil
+	if err != nil {
+		return false, fmt.Errorf("read TCP socket table: %w", err)
+	}
+	udpInodes := procSocketTableExactListenerInodes(udp, ipv6, smartDNSPerClientIngressPort, ip.String(), false)
+	tcpInodes := procSocketTableExactListenerInodes(tcp, ipv6, smartDNSPerClientIngressPort, ip.String(), true)
+	if len(udpInodes) == 0 || len(tcpInodes) == 0 {
+		return false, nil
+	}
+
+	// Socket-table presence alone is insufficient: another local process could
+	// occupy 6055 while SmartDNS failed to bind. Require both socket inodes to
+	// be held by one PID returned for the SmartDNS executable.
+	pidsOutput, err := exec.Command("pidof", "smartdns").Output()
+	if err != nil {
+		return false, nil
+	}
+	for _, rawPID := range strings.Fields(string(pidsOutput)) {
+		pid, parseErr := strconv.Atoi(rawPID)
+		if parseErr != nil || pid <= 0 {
+			continue
+		}
+		owned, ownerErr := procProcessOwnsSocketInodes("/proc", pid, udpInodes, tcpInodes)
+		if ownerErr != nil {
+			if os.IsNotExist(ownerErr) {
+				continue // process exited during the readiness snapshot
+			}
+			return false, ownerErr
+		}
+		if owned {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // waitForSmartDNSIngressListeners confirms exact UDP and TCP socket binds. It
