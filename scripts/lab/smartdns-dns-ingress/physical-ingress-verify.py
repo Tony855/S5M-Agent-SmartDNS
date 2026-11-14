@@ -2,7 +2,6 @@
 """Verify real LAN source-IP preservation from paired host/container pcaps."""
 import argparse
 import hashlib
-import hmac
 import ipaddress
 import json
 import os
