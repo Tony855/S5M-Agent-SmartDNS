@@ -21,7 +21,7 @@ class ControllerTests(unittest.TestCase):
         })
         transaction = mod.build_nft_transaction(True, rules)
         self.assertTrue(transaction.startswith("delete table inet s5m_agent_ingress\n"))
-        self.assertNotIn("\n", transaction)
+        self.assertNotIn("\\n", transaction)
 
     def test_valid_config_and_rules_are_scoped(self):
         self.write(self.valid()); cfg=mod.load_config(self.path, require_root=False); rules=mod.render_nft(cfg)
