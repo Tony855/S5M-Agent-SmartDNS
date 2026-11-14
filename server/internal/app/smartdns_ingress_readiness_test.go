@@ -328,3 +328,15 @@ func TestValidateSmartDNSIngressReadinessRejectsNonCanonicalIngressAddress(t *te
 		t.Fatal("non-canonical ingress address was accepted")
 	}
 }
+
+func TestSmartDNSAgentIngressMappingsFromRuntimePreservesExactAssignments(t *testing.T) {
+	got := smartDNSAgentIngressMappingsFromRuntime([]SmartDNSClientRuntimeMapping{{
+		ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a",
+		ListenerName: "s5m-smartdns-16000", ListenerAddress: "127.0.0.1", ListenerPort: 16000,
+	}})
+	if len(got) != 1 || got[0].ClientCIDR != "192.168.50.0/24" ||
+		got[0].ProxyName != "proxy-a" || got[0].ListenerName != "s5m-smartdns-16000" ||
+		got[0].ListenerAddress != "127.0.0.1" || got[0].ListenerPort != 16000 {
+		t.Fatalf("runtime mapping was not preserved in the Agent contract: %#v", got)
+	}
+}
