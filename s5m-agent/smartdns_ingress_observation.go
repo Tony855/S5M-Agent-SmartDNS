@@ -137,7 +137,11 @@ func procSocketTableHasExactListener(data []byte, ipv6 bool, port int, expectedA
 	for _, line := range strings.Split(string(data), "\n")[1:] {
 		fields := strings.Fields(line)
 		if len(fields) < 4 { continue }
-		if requireTCPListen && fields[3] != "0A" { continue }
+		if requireTCPListen {
+			if fields[3] != "0A" { continue }
+		} else if fields[3] != "07" {
+			continue
+		}
 		local := strings.Split(fields[1], ":")
 		if len(local) != 2 { continue }
 		parsedPort, err := strconv.ParseInt(local[1], 16, 32)
