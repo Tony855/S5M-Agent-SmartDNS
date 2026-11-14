@@ -113,7 +113,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         "version", "verified_at", "config_sha256", "client_cidrs", "ipv4_address",
         "ipv6_address", "coverage", "verified_client_sources", "source_ip_preserved",
         "udp_ready", "tcp_ready", "host_pcap_sha256", "container_pcap_sha256",
-        "probe_results_sha256", "capture_manifest_sha256", "evidence_hmac_sha256",
+        "probe_results_sha256", "capture_manifest_sha256", "container", "container_id", "evidence_hmac_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
         return False
@@ -123,6 +123,10 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-f]{64}", signature):
         return False
     if not hmac.compare_digest(signature, physical_evidence_signature(evidence, evidence_key)):
+        return False
+    if not isinstance(evidence["container"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", evidence["container"]):
+        return False
+    if not isinstance(evidence["container_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", evidence["container_id"]):
         return False
     if type(evidence["version"]) is not int or evidence["version"] != 1:
         return False
@@ -209,7 +213,33 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
         evidence_key = read_evidence_key()
     except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError):
         return False
-    return physical_evidence_payload_valid(evidence, config_raw, cfg, now, evidence_key=evidence_key)
+    if not physical_evidence_payload_valid(evidence, config_raw, cfg, now, evidence_key=evidence_key):
+        return False
+    # A signed packet capture is tied to the Docker container that was actually
+    # observed. Do not keep source-preservation readiness after redeploy has
+    # replaced that container, even if the configured IP/CIDRs are unchanged.
+    try:
+        current = subprocess.run(
+            ["docker", "inspect", evidence["container"]],
+            text=True, capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return physical_evidence_container_matches_current(evidence, current.stdout)
+
+
+def physical_evidence_container_matches_current(evidence: dict, inspect_output: str) -> bool:
+    try:
+        containers = json.loads(inspect_output)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(containers, list) or len(containers) != 1 or not isinstance(containers[0], dict):
+        return False
+    current = containers[0]
+    return (
+        current.get("Id") == evidence.get("container_id")
+        and str(current.get("Name", "")).lstrip("/") == evidence.get("container")
+    )
 
 
 def build_nft_transaction(table_exists: bool, rules: str) -> str:

@@ -368,6 +368,8 @@ def main():
         "container_pcap_sha256": hashlib.sha256(container_pcap_raw).hexdigest(),
         "probe_results_sha256": hashlib.sha256(probe_results_raw).hexdigest(),
         "capture_manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+        "container": manifest["container"],
+        "container_id": manifest["container_id"],
     }
     evidence_key = read_evidence_key(args.key)
     evidence["evidence_hmac_sha256"] = physical_evidence_signature(evidence, evidence_key)

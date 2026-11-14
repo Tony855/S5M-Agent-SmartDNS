@@ -83,6 +83,7 @@ class ControllerTests(unittest.TestCase):
             "source_ip_preserved": True, "udp_ready": True, "tcp_ready": True,
             "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
             "probe_results_sha256": "c" * 64, "capture_manifest_sha256": "e" * 64,
+            "container": "s5m-agent", "container_id": "f" * 64,
         }
         key = bytes.fromhex("ab" * 32)
         evidence["evidence_hmac_sha256"] = mod.physical_evidence_signature(evidence, key)
@@ -101,6 +102,15 @@ class ControllerTests(unittest.TestCase):
         tampered = dict(evidence); tampered["source_ip_preserved"] = False
         self.assertFalse(mod.physical_evidence_payload_valid(tampered, raw, cfg, now=1001, evidence_key=key))
         self.assertFalse(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001, evidence_key=bytes.fromhex("cd" * 32)))
+    def test_physical_evidence_is_bound_to_the_current_docker_container(self):
+        evidence = {"container": "s5m-agent", "container_id": "a" * 64}
+        current = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent"}])
+        replaced = json.dumps([{"Id": "b" * 64, "Name": "/s5m-agent"}])
+        renamed = json.dumps([{"Id": "a" * 64, "Name": "/other-agent"}])
+        self.assertTrue(mod.physical_evidence_container_matches_current(evidence, current))
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, replaced))
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, renamed))
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, "not-json"))
     def test_systemd_preserves_attestation_directory_after_oneshot_exit(self):
         unit = pathlib.Path(__file__).with_name("s5m-agent-ingress.service").read_text()
         self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)
