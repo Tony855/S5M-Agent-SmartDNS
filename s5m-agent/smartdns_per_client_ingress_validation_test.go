@@ -28,6 +28,10 @@ func validPerClientIngressFixture() ([]byte, smartDNSPerClientIngressContract) {
 		Ready: true,
 		IPv4Address: "172.31.0.10",
 		ClientCIDRs: []string{"192.168.50.10/32"},
+		Mappings: []smartDNSPerClientIngressMapping{{
+			ClientCIDR: "192.168.50.10/32", ProxyName: "node-a-egress",
+			ListenerName: "s5m-smartdns-16000", ListenerAddress: "127.0.0.1", ListenerPort: 16000,
+		}},
 	}
 	return []byte(config), contract
 }
@@ -189,7 +193,7 @@ func TestSmartDNSIngressContractJSONSchema(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	var got map[string]any
 	if err := json.Unmarshal(data, &got); err != nil { t.Fatal(err) }
-	for _, key := range []string{"version", "ready", "ipv4_address", "client_cidrs"} {
+	for _, key := range []string{"version", "ready", "ipv4_address", "client_cidrs", "mappings"} {
 		if _, ok := got[key]; !ok { t.Fatalf("contract JSON missing stable field %q: %s", key, data) }
 	}
 	var roundTrip smartDNSPerClientIngressContract
@@ -219,5 +223,54 @@ func TestValidateSmartDNSConfigWithIngressRejectsCIDRContainingIngressAddress(t 
 	contract.ClientCIDRs = []string{"172.31.0.0/24"}
 	if err := validateSmartDNSConfigWithIngress([]byte(configText), contract); err == nil {
 		t.Fatal("client source CIDR containing the ingress address was accepted")
+	}
+}
+
+func TestValidateSmartDNSConfigWithIngressRequiresExactContractListenerMapping(t *testing.T) {
+	config, contract := validPerClientIngressFixture()
+	tests := []struct {
+		name string
+		mutate func(*smartDNSPerClientIngressContract)
+	}{
+		{name: "missing mapping", mutate: func(c *smartDNSPerClientIngressContract) { c.Mappings = nil }},
+		{name: "wrong CIDR", mutate: func(c *smartDNSPerClientIngressContract) { c.Mappings[0].ClientCIDR = "192.168.50.11/32" }},
+		{name: "wrong port", mutate: func(c *smartDNSPerClientIngressContract) { c.Mappings[0].ListenerPort = 16001 }},
+		{name: "non-loopback listener", mutate: func(c *smartDNSPerClientIngressContract) { c.Mappings[0].ListenerAddress = "0.0.0.0" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := contract
+			changed.Mappings = append([]smartDNSPerClientIngressMapping(nil), contract.Mappings...)
+			tt.mutate(&changed)
+			if err := validateSmartDNSConfigWithIngress(config, changed); err == nil {
+				t.Fatal("configuration accepted without an exact contract-bound listener mapping")
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSPerClientMihomoBindings(t *testing.T) {
+	_, contract := validPerClientIngressFixture()
+	valid := []byte("proxies:\n  - name: node-a-egress\n    type: socks5\n    server: 192.0.2.10\n    port: 1080\nlisteners:\n  - name: s5m-smartdns-16000\n    type: socks\n    listen: 127.0.0.1\n    port: 16000\n    udp: true\n    proxy: node-a-egress\n")
+	if err := validateSmartDNSPerClientMihomoBindings(valid, contract); err != nil {
+		t.Fatalf("valid contract-bound Mihomo listener rejected: %v", err)
+	}
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "missing listener", yaml: "proxies:\n  - name: node-a-egress\n"},
+		{name: "wildcard listener", yaml: strings.ReplaceAll(string(valid), "listen: 127.0.0.1", "listen: 0.0.0.0")},
+		{name: "wrong port", yaml: strings.ReplaceAll(string(valid), "port: 16000", "port: 16001")},
+		{name: "wrong outbound", yaml: strings.ReplaceAll(string(valid), "proxy: node-a-egress", "proxy: other-egress")},
+		{name: "UDP disabled", yaml: strings.ReplaceAll(string(valid), "udp: true", "udp: false")},
+		{name: "unexpected reserved listener", yaml: string(valid) + "  - name: s5m-smartdns-16001\n    type: socks\n    listen: 127.0.0.1\n    port: 16001\n    udp: true\n    proxy: node-a-egress\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateSmartDNSPerClientMihomoBindings([]byte(tt.yaml), contract); err == nil {
+				t.Fatal("Mihomo listener mismatch accepted")
+			}
+		})
 	}
 }
