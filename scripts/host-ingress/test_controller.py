@@ -144,12 +144,14 @@ class ControllerTests(unittest.TestCase):
             f"table inet {mod.TABLE} {{",
             '    comment "managed-by:s5m-agent-ingress-v1"',
             "    chain forward_guard {",
-            "        type filter hook forward priority filter -5; policy accept;",
+            "        type filter hook forward priority filter - 5; policy accept;",
             *[f"        {rule}" for rule in rules],
             "    }",
             "}",
         ])
         self.assertTrue(mod.live_nft_table_matches(cfg, live_output))
+        wrong_priority = live_output.replace("priority filter - 5", "priority filter - 4")
+        self.assertFalse(mod.live_nft_table_matches(cfg, wrong_priority))
 
     def test_live_nft_table_rejects_unscoped_accept_and_extra_chains(self):
         self.write(self.valid())

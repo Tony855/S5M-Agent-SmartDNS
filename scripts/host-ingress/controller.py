@@ -231,6 +231,9 @@ def live_nft_table_matches(cfg: dict, output: str) -> bool:
     allowed_hooks = {
         "type filter hook forward priority -5; policy accept;",
         "type filter hook forward priority filter -5; policy accept;",
+        # nft list renders numeric priority -5 as the named base priority
+        # plus an offset on current Ubuntu nftables builds.
+        "type filter hook forward priority filter - 5; policy accept;",
     }
 
     def normalize_rule(value: str) -> str:
