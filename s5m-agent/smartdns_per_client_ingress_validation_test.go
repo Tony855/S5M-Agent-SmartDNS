@@ -242,7 +242,7 @@ func TestValidateSmartDNSConfigWithIngressRequiresExactContractListenerMapping(t
 			changed := contract
 			changed.Mappings = append([]smartDNSPerClientIngressMapping(nil), contract.Mappings...)
 			tt.mutate(&changed)
-			if err := validateSmartDNSConfigWithIngress(config, changed); err == nil {
+			if err := validateSmartDNSConfigWithContractBoundIngress(config, changed); err == nil {
 				t.Fatal("configuration accepted without an exact contract-bound listener mapping")
 			}
 		})
