@@ -121,4 +121,13 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(mod.ConfigError):
             mod.invalidate_attestation(parent / "ingress.json")
 
+    def test_live_nft_table_attestation_requires_exact_applied_rules(self):
+        self.write(self.valid())
+        cfg = mod.load_config(self.path, require_root=False)
+        expected = mod.render_nft(cfg)
+        self.assertTrue(mod.live_nft_table_matches(cfg, expected))
+        self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("udp dport 6055 accept", "udp dport 53 accept", 1)))
+        self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("tcp dport 6055 accept", "", 1)))
+        self.assertFalse(mod.live_nft_table_matches(cfg, expected + '    ip daddr 172.31.10.2 tcp dport 80 accept\\n'))
+
 if __name__ == "__main__": unittest.main()
