@@ -217,20 +217,101 @@ def build_nft_transaction(table_exists: bool, rules: str) -> str:
     return prefix + rules
 
 def live_nft_table_matches(cfg: dict, output: str) -> bool:
-    if not isinstance(output, str) or f"table inet {TABLE}" not in output or "chain forward_guard" not in output:
+    """Attest the entire owned table, not just rules that look like our allowlist.
+
+    Ignoring unknown nft statements is unsafe: an extra broad accept rule could
+    bypass the source-CIDR allowlist while the old prefix-filtered comparison
+    still reported the table as ready.
+    """
+    if not isinstance(output, str):
         return False
-    def rule_lines(text: str) -> list[str]:
-        result = []
-        for line in text.splitlines():
-            value = line.strip()
-            if value.startswith(("iifname ", "ip daddr ", "ip6 daddr ")):
-                value = re.sub(r"\{\s*([^{}]+?)\s*\}", r"\1", value)
-                value = re.sub(r"\s+", " ", value)
-                result.append(value)
-        return result
-    expected = rule_lines(render_nft(cfg))
-    actual = rule_lines(output)
-    return bool(expected) and actual == expected
+
+    table_header = f"table inet {TABLE} {{"
+    table_comment = 'comment "managed-by:s5m-agent-ingress-v1"'
+    allowed_hooks = {
+        "type filter hook forward priority -5; policy accept;",
+        "type filter hook forward priority filter -5; policy accept;",
+    }
+
+    def normalize_rule(value: str) -> str:
+        value = re.sub(r"\\{\\s*([^{}]+?)\\s*\\}", r"\\1", value)
+        return re.sub(r"\\s+", " ", value).strip()
+
+    expected = []
+    for line in render_nft(cfg).splitlines():
+        value = line.strip()
+        if value.startswith(("iifname ", "ip daddr ", "ip6 daddr ")):
+            expected.append(normalize_rule(value))
+    if not expected:
+        return False
+
+    table_seen = False
+    table_comment_seen = False
+    chain_seen = False
+    chain_open = False
+    table_closed = False
+    hook_count = 0
+    actual = []
+
+    for raw_line in output.splitlines():
+        value = raw_line.strip()
+        if not value:
+            continue
+        value = re.sub(r"\\s+# handle [0-9]+$", "", value).strip()
+
+        if not table_seen:
+            if not value.startswith(table_header):
+                return False
+            table_seen = True
+            remainder = value[len(table_header):].strip()
+            if remainder:
+                if remainder.rstrip(";") != table_comment:
+                    return False
+                table_comment_seen = True
+            continue
+
+        if table_closed:
+            # The command must return exactly the one table we own.
+            return False
+
+        if chain_open:
+            if value == "}":
+                chain_open = False
+            elif value in allowed_hooks:
+                hook_count += 1
+                if hook_count > 1:
+                    return False
+            else:
+                # Include every statement. Unknown rules must make the exact
+                # comparison fail rather than silently escaping inspection.
+                actual.append(normalize_rule(value))
+            continue
+
+        if value in (table_comment, table_comment + ";"):
+            if table_comment_seen:
+                return False
+            table_comment_seen = True
+        elif value == "chain forward_guard {":
+            if chain_seen:
+                return False
+            chain_seen = True
+            chain_open = True
+        elif value == "}":
+            table_closed = True
+        else:
+            # Reject extra chains, sets, maps, counters and unknown table-level
+            # statements; this table has one chain and no auxiliary objects.
+            return False
+
+    return (
+        table_seen
+        and table_comment_seen
+        and chain_seen
+        and not chain_open
+        and table_closed
+        and hook_count == 1
+        and actual == expected
+    )
 
 
 def render_nft(cfg: dict) -> str:
