@@ -183,7 +183,7 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 	if !smartDNSFeatureSupported() {
 		return fmt.Errorf("当前 Agent 镜像不包含 SmartDNS，拒绝应用 per-client 配置")
 	}
-	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
+	validator := func(data []byte) error { return validateSmartDNSConfigWithContractBoundIngress(data, contract) }
 	if err := validator(smartDNSConfig); err != nil {
 		return fmt.Errorf("per-client SmartDNS ingress contract validation failed: %w", err)
 	}
@@ -468,7 +468,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 }
 
 func applyAgentSmartDNSEnabledWithIngress(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string, contract smartDNSPerClientIngressContract) error {
-	validator := func(data []byte) error { return validateSmartDNSConfigWithIngress(data, contract) }
+	validator := func(data []byte) error { return validateSmartDNSConfigWithContractBoundIngress(data, contract) }
 	return applyAgentSmartDNSEnabledWithValidator(enabled, mihomoYAML, smartDNSConfig, centralURL, validator,
 		func(mihomo, smart []byte, central string) error { return applyAgentConfigTransactionWithIngress(mihomo, smart, true, central, contract) })
 }
