@@ -84,6 +84,7 @@ class ControllerTests(unittest.TestCase):
             "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
             "probe_results_sha256": "c" * 64, "capture_manifest_sha256": "e" * 64,
             "container": "s5m-agent", "container_id": "f" * 64,
+            "network": "s5m-agent-ingress", "network_id": "9" * 64,
         }
         key = bytes.fromhex("ab" * 32)
         evidence["evidence_hmac_sha256"] = mod.physical_evidence_signature(evidence, key)
@@ -104,13 +105,39 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001, evidence_key=bytes.fromhex("cd" * 32)))
     def test_physical_evidence_is_bound_to_the_current_docker_container(self):
         evidence = {"container": "s5m-agent", "container_id": "a" * 64}
-        current = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent"}])
-        replaced = json.dumps([{"Id": "b" * 64, "Name": "/s5m-agent"}])
-        renamed = json.dumps([{"Id": "a" * 64, "Name": "/other-agent"}])
+        current = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {"Running": True}}])
+        replaced = json.dumps([{"Id": "b" * 64, "Name": "/s5m-agent", "State": {"Running": True}}])
+        renamed = json.dumps([{"Id": "a" * 64, "Name": "/other-agent", "State": {"Running": True}}])
         self.assertTrue(mod.physical_evidence_container_matches_current(evidence, current))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, replaced))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, renamed))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, "not-json"))
+    def test_physical_evidence_is_bound_to_current_routed_docker_network(self):
+        evidence = {"network": "s5m-agent-ingress", "network_id": "a" * 64}
+        cfg = {"interface": "eth1", "addresses": [ipaddress.ip_address("172.31.10.2")]}
+        network = {
+            "Id": "a" * 64, "Name": "s5m-agent-ingress", "Driver": "bridge",
+            "Labels": {"com.s5m.managed": "s5m-agent-dns-ingress"},
+            "Options": {
+                "com.docker.network.bridge.gateway_mode_ipv4": "routed",
+                "com.docker.network.bridge.trusted_host_interfaces": "eth1",
+            },
+            "IPAM": {"Config": [{"Subnet": "172.31.10.0/24", "Gateway": "172.31.10.1"}]},
+        }
+        container = {"NetworkSettings": {"Networks": {
+            "s5m-agent-ingress": {"NetworkID": "a" * 64, "IPAddress": "172.31.10.2", "GlobalIPv6Address": ""}
+        }}}
+        self.assertTrue(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([network]), json.dumps([container])))
+        changed_id = dict(network); changed_id["Id"] = "b" * 64
+        self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([changed_id]), json.dumps([container])))
+        changed_mode = dict(network); changed_mode["Options"] = dict(network["Options"], **{"com.docker.network.bridge.gateway_mode_ipv4": "nat"})
+        self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([changed_mode]), json.dumps([container])))
+        changed_interface = dict(network); changed_interface["Options"] = dict(network["Options"], **{"com.docker.network.bridge.trusted_host_interfaces": "eth0"})
+        self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([changed_interface]), json.dumps([container])))
+        changed_endpoint = {"NetworkSettings": {"Networks": {
+            "s5m-agent-ingress": {"NetworkID": "a" * 64, "IPAddress": "172.31.10.99", "GlobalIPv6Address": ""}
+        }}}
+        self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([network]), json.dumps([changed_endpoint])))
     def test_systemd_preserves_attestation_directory_after_oneshot_exit(self):
         unit = pathlib.Path(__file__).with_name("s5m-agent-ingress.service").read_text()
         self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)

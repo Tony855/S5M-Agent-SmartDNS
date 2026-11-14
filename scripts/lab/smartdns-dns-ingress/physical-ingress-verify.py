@@ -17,7 +17,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "host-ingress"))
-from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature
+from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature, physical_evidence_network_matches_current
 
 
 def secure_read(path, require_root=True, max_bytes=2 * 1024 * 1024 * 1024):
@@ -259,6 +259,14 @@ def validate_capture_container(manifest: dict, cfg: dict) -> None:
     missing=set(cfg["addresses"])-observed
     if missing:
         raise ValueError("current Agent container is not attached to all configured ingress addresses: "+", ".join(sorted(map(str,missing))))
+    if not isinstance(manifest.get("network"), str) or not isinstance(manifest.get("network_id"), str):
+        raise ValueError("capture manifest is missing the routed Docker network identity")
+    try:
+        network_result=subprocess.run(["docker","network","inspect",manifest["network"]],check=True,capture_output=True,text=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(f"cannot verify current routed Docker network: {exc}") from exc
+    if not physical_evidence_network_matches_current(manifest, cfg, network_result.stdout, result.stdout):
+        raise ValueError("capture manifest routed Docker network ID/options/endpoint no longer match the current Agent")
 
 
 def main():
@@ -280,7 +288,7 @@ def main():
     container_pcap_raw = secure_read(args.container_pcap, require_root=True)
     probe_results_raw = secure_read(args.probe_results, require_root=False, max_bytes=8 * 1024 * 1024)
     manifest = json.loads(manifest_raw)
-    manifest_keys = {"version", "container", "container_id", "container_pid", "host_interface", "started_at", "finished_at", "host_pcap", "container_pcap"}
+    manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "host_interface", "started_at", "finished_at", "host_pcap", "container_pcap"}
     if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 1:
         raise ValueError("capture manifest schema is invalid")
     if manifest["host_interface"] == "" or type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or type(manifest["container_pid"]) is not int or manifest["container_pid"] <= 0:
@@ -289,6 +297,8 @@ def main():
         raise ValueError("capture manifest does not match the supplied pcap files")
     if not isinstance(manifest["container"], str) or not manifest["container"] or not isinstance(manifest["container_id"], str) or len(manifest["container_id"]) != 64 or any(ch not in "0123456789abcdef" for ch in manifest["container_id"]):
         raise ValueError("capture manifest container identity is invalid")
+    if not isinstance(manifest["network"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", manifest["network"]) or not isinstance(manifest["network_id"], str) or len(manifest["network_id"]) != 64 or any(ch not in "0123456789abcdef" for ch in manifest["network_id"]):
+        raise ValueError("capture manifest routed Docker network identity is invalid")
     now = int(time.time())
     if manifest["finished_at"] < manifest["started_at"] or manifest["finished_at"] - manifest["started_at"] > 610 or manifest["finished_at"] > now + 30 or now - manifest["finished_at"] > 3600:
         raise ValueError("capture manifest is outside the accepted time window")
@@ -370,6 +380,8 @@ def main():
         "capture_manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
         "container": manifest["container"],
         "container_id": manifest["container_id"],
+        "network": manifest["network"],
+        "network_id": manifest["network_id"],
     }
     evidence_key = read_evidence_key(args.key)
     evidence["evidence_hmac_sha256"] = physical_evidence_signature(evidence, evidence_key)

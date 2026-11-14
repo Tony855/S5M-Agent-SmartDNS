@@ -113,7 +113,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         "version", "verified_at", "config_sha256", "client_cidrs", "ipv4_address",
         "ipv6_address", "coverage", "verified_client_sources", "source_ip_preserved",
         "udp_ready", "tcp_ready", "host_pcap_sha256", "container_pcap_sha256",
-        "probe_results_sha256", "capture_manifest_sha256", "container", "container_id", "evidence_hmac_sha256",
+        "probe_results_sha256", "capture_manifest_sha256", "container", "container_id", "network", "network_id", "evidence_hmac_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
         return False
@@ -127,6 +127,10 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     if not isinstance(evidence["container"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", evidence["container"]):
         return False
     if not isinstance(evidence["container_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", evidence["container_id"]):
+        return False
+    if not isinstance(evidence["network"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", evidence["network"]):
+        return False
+    if not isinstance(evidence["network_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", evidence["network_id"]):
         return False
     if type(evidence["version"]) is not int or evidence["version"] != 1:
         return False
@@ -225,7 +229,16 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
         )
     except (OSError, subprocess.CalledProcessError):
         return False
-    return physical_evidence_container_matches_current(evidence, current.stdout)
+    if not physical_evidence_container_matches_current(evidence, current.stdout):
+        return False
+    try:
+        network = subprocess.run(
+            ["docker", "network", "inspect", evidence["network"]],
+            text=True, capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return physical_evidence_network_matches_current(evidence, cfg, network.stdout, current.stdout)
 
 
 def physical_evidence_container_matches_current(evidence: dict, inspect_output: str) -> bool:
@@ -239,7 +252,59 @@ def physical_evidence_container_matches_current(evidence: dict, inspect_output: 
     return (
         current.get("Id") == evidence.get("container_id")
         and str(current.get("Name", "")).lstrip("/") == evidence.get("container")
+        and current.get("State", {}).get("Running") is True
     )
+
+
+def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network_output: str, container_output: str) -> bool:
+    try:
+        networks = json.loads(network_output)
+        containers = json.loads(container_output)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(networks, list) or len(networks) != 1 or not isinstance(networks[0], dict):
+        return False
+    if not isinstance(containers, list) or len(containers) != 1 or not isinstance(containers[0], dict):
+        return False
+    network = networks[0]
+    container = containers[0]
+    if network.get("Id") != evidence.get("network_id") or network.get("Name") != evidence.get("network"):
+        return False
+    if network.get("Driver") != "bridge":
+        return False
+    if (network.get("Labels") or {}).get("com.s5m.managed") != "s5m-agent-dns-ingress":
+        return False
+    options = network.get("Options") or {}
+    if options.get("com.docker.network.bridge.gateway_mode_ipv4") != "routed":
+        return False
+    if options.get("com.docker.network.bridge.trusted_host_interfaces") != cfg.get("interface"):
+        return False
+    if any(address.version == 6 for address in cfg.get("addresses", [])) and options.get("com.docker.network.bridge.gateway_mode_ipv6") != "routed":
+        return False
+    ipam = network.get("IPAM", {}).get("Config") or []
+    for address in cfg.get("addresses", []):
+        if not any(
+            isinstance(item, dict)
+            and _network_contains_address(item.get("Subnet"), address)
+            for item in ipam
+        ):
+            return False
+    attached = (container.get("NetworkSettings", {}).get("Networks") or {}).get(evidence.get("network"))
+    if not isinstance(attached, dict) or attached.get("NetworkID") != evidence.get("network_id"):
+        return False
+    expected4 = next((str(address) for address in cfg.get("addresses", []) if address.version == 4), "")
+    expected6 = next((str(address) for address in cfg.get("addresses", []) if address.version == 6), "")
+    return attached.get("IPAddress", "") == expected4 and attached.get("GlobalIPv6Address", "") == expected6
+
+
+def _network_contains_address(raw_subnet: object, address) -> bool:
+    if not isinstance(raw_subnet, str):
+        return False
+    try:
+        subnet = ipaddress.ip_network(raw_subnet, strict=True)
+    except ValueError:
+        return False
+    return subnet.version == address.version and address in subnet
 
 
 def build_nft_transaction(table_exists: bool, rules: str) -> str:

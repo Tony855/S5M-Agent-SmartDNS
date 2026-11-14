@@ -104,22 +104,25 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         VERIFY.correlate_probe_packets([syn],[dict(syn)],key,"tcp",b"S5M-INGRESS-PROBE:nonce","connection-refused",9,11)
 
     def test_capture_must_match_current_container_id_pid_and_ingress_ip(self):
-        manifest={"container":"s5m-agent","container_id":"a"*64,"container_pid":123}
-        cfg={"addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
-        inspected={"Id":"a"*64,"State":{"Running":True,"Pid":123},
-            "NetworkSettings":{"Networks":{"ingress":{"IPAddress":"172.31.0.10","GlobalIPv6Address":""}}}}
-        fake=SimpleNamespace(stdout=json.dumps([inspected]))
-        with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+        manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123}
+        cfg={"interface":"eth1","addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
+        inspected={"Id":"a"*64,"Name":"/s5m-agent","State":{"Running":True,"Pid":123},
+            "NetworkSettings":{"Networks":{"ingress":{"NetworkID":"b"*64,"IPAddress":"172.31.0.10","GlobalIPv6Address":""}}}}
+        network={"Id":"b"*64,"Name":"ingress","Driver":"bridge","Labels":{"com.s5m.managed":"s5m-agent-dns-ingress"},
+            "Options":{"com.docker.network.bridge.gateway_mode_ipv4":"routed","com.docker.network.bridge.trusted_host_interfaces":"eth1"},
+            "IPAM":{"Config":[{"Subnet":"172.31.0.0/24","Gateway":"172.31.0.1"}]}}
+        with mock.patch.object(VERIFY.subprocess,"run",side_effect=[
+            SimpleNamespace(stdout=json.dumps([inspected])),SimpleNamespace(stdout=json.dumps([network]))
+        ]):
             VERIFY.validate_capture_container(manifest,cfg)
-        inspected["Id"]="b"*64
-        fake=SimpleNamespace(stdout=json.dumps([inspected]))
-        with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+        inspected["Id"]="c"*64
+        with mock.patch.object(VERIFY.subprocess,"run",return_value=SimpleNamespace(stdout=json.dumps([inspected]))):
             with self.assertRaisesRegex(ValueError,"container ID"):
                 VERIFY.validate_capture_container(manifest,cfg)
 
     def test_capture_rejects_restarted_container_or_missing_ingress_address(self):
-        manifest={"container":"s5m-agent","container_id":"a"*64,"container_pid":123}
-        cfg={"addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
+        manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123}
+        cfg={"interface":"eth1","addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
         inspected={"Id":"a"*64,"State":{"Running":True,"Pid":124},
             "NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.2","GlobalIPv6Address":""}}}}
         fake=SimpleNamespace(stdout=json.dumps([inspected]))

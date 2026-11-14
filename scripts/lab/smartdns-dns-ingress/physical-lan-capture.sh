@@ -16,11 +16,29 @@ DURATION=${3:-90}
 OUT_DIR=${4:-}
 [[ "$DURATION" =~ ^[0-9]+$ ]] && (( DURATION >= 10 && DURATION <= 600 )) || usage
 [[ "$LAN_IF" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || usage
-for cmd in docker ip tcpdump nsenter timeout; do
+for cmd in docker ip tcpdump nsenter timeout python3; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: missing required command: $cmd" >&2; exit 1; }
 done
 ip link show dev "$LAN_IF" >/dev/null 2>&1 || { echo "ERROR: interface not found: $LAN_IF" >&2; exit 1; }
 docker inspect "$CONTAINER" >/dev/null 2>&1 || { echo "ERROR: container not found: $CONTAINER" >&2; exit 1; }
+NETWORK_CONFIG="${S5M_INGRESS_NETWORK_CONFIG:-/etc/s5m-agent-ingress/network.json}"
+[[ -f "$NETWORK_CONFIG" && ! -L "$NETWORK_CONFIG" ]] || { echo "ERROR: routed ingress network config missing or unsafe: $NETWORK_CONFIG" >&2; exit 1; }
+NETWORK=$(python3 - "$NETWORK_CONFIG" "$CONTAINER" <<'PY'
+import json, os, re, stat, sys
+path, container = sys.argv[1], sys.argv[2]
+st = os.lstat(path)
+if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077 or st.st_size > 16384:
+    raise SystemExit("network config must be a root-owned mode-0600 regular file")
+with open(path, encoding="utf-8") as stream:
+    cfg = json.load(stream)
+name = cfg.get("network")
+if cfg.get("container") != container or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", name):
+    raise SystemExit("network config container/name does not match the capture target")
+print(name)
+PY
+) || { echo "ERROR: cannot read routed ingress network identity" >&2; exit 1; }
+NETWORK_ID=$(docker network inspect -f '{{.Id}}' "$NETWORK")
+[[ "$NETWORK_ID" =~ ^[0-9a-f]{64}$ ]] || { echo "ERROR: invalid routed Docker network identity" >&2; exit 1; }
 PID=$(docker inspect -f '{{.State.Pid}}' "$CONTAINER")
 [[ "$PID" =~ ^[1-9][0-9]*$ ]] && [[ -d "/proc/$PID/ns/net" ]] || { echo "ERROR: container is not running" >&2; exit 1; }
 
@@ -49,7 +67,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Starting read-only captures for $DURATION seconds."
-echo "Host interface: $LAN_IF; Agent container PID: $PID; DNS ingress port: 6055."
+echo "Host interface: $LAN_IF; Agent container PID: $PID; routed network: $NETWORK ($NETWORK_ID); DNS ingress port: 6055."
 echo "Run the physical client probe(s) now against the container's routed ingress IP."
 timeout --signal=INT --kill-after=5 "$DURATION" tcpdump -ni "$LAN_IF" -s 0 -U -w "$HOST_PCAP" "$FILTER" >/dev/null 2>&1 &
 HOST_PID=$!
@@ -64,8 +82,8 @@ cleanup
 HOST_PID=""
 CONTAINER_PID=""
 FINISHED_AT=$(date +%s)
-printf '{"version":1,"container":"%s","container_id":"%s","container_pid":%s,"host_interface":"%s","started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
-  "$CONTAINER" "$CONTAINER_ID" "$PID" "$LAN_IF" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
+printf '{"version":1,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"host_interface":"%s","started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
+  "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$LAN_IF" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
 chmod 0600 "$OUT_DIR/capture-manifest.json.tmp"
 mv "$OUT_DIR/capture-manifest.json.tmp" "$OUT_DIR/capture-manifest.json"
 tcpdump -nn -tttt -r "$HOST_PCAP" >"$HOST_LOG" 2>&1 || true
