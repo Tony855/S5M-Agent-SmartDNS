@@ -1213,23 +1213,23 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // sendAgentWSConfig returns only the configuration assigned to the authenticated machine.
 func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, clientHash, clientSmartDNSHash string) error {
-\tingressContract, readinessErr := a.smartDNSIngressContractForMachine(machineCode)
-\tusedProvisioningContract := false
-\tif readinessErr != nil {
-\t\t// config.request is also the recovery channel after an Agent restart.
-\t\t// Fall back only to the host-provisioning gate; the Agent's joint
-\t\t// transaction must still bind the exact SmartDNS sockets and pass DNS
-\t\t// probes before committing. Host source-IP/firewall/CIDR gates stay intact.
-\t\tprovisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
-\t\tif provisionErr != nil {
-\t\t\treturn fmt.Errorf("per-client runtime readiness failed (%v); host ingress provisioning gate also failed: %w", readinessErr, provisionErr)
-\t\t}
-\t\tif provisioning == nil {
-\t\t\treturn readinessErr
-\t\t}
-\t\tingressContract = provisioning
-\t\tusedProvisioningContract = true
-\t}
+	ingressContract, readinessErr := a.smartDNSIngressContractForMachine(machineCode)
+	usedProvisioningContract := false
+	if readinessErr != nil {
+		// config.request is also the recovery channel after an Agent restart.
+		// Fall back only to the host-provisioning gate; the Agent's joint
+		// transaction must still bind the exact SmartDNS sockets and pass DNS
+		// probes before committing. Host source-IP/firewall/CIDR gates stay intact.
+		provisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
+		if provisionErr != nil {
+			return fmt.Errorf("per-client runtime readiness failed (%v); host ingress provisioning gate also failed: %w", readinessErr, provisionErr)
+		}
+		if provisioning == nil {
+			return readinessErr
+		}
+		ingressContract = provisioning
+		usedProvisioningContract = true
+	}
 	if ingressContract != nil {
 		settings, settingsErr := a.store.GetSettings()
 		if settingsErr != nil { return settingsErr }
