@@ -162,6 +162,41 @@ class ControllerTests(unittest.TestCase):
         extra_object = expected.replace("  }\n}", "  set bypass { type ipv4_addr; elements = { 0.0.0.0 }; }\n  }\n}")
         self.assertFalse(mod.live_nft_table_matches(cfg, extra_object))
 
+    def test_live_firewall_verify_requires_exact_live_state_and_persistent_attestation(self):
+        import time
+        self.write(self.valid())
+        cfg = mod.load_config(self.path, require_root=False)
+        now = int(time.time())
+        attestation_path = pathlib.Path(self.tmp.name) / "ingress.json"
+        attestation = {
+            "version": 1, "updated_at": now, "interface": "eth1",
+            "ipv4_address": "172.31.10.2", "ipv6_address": "2001:db8:31::2",
+            "client_cidrs": ["192.168.50.0/24", "2001:db8:50::/64"],
+            "source_ip_preserved": False, "firewall_ready": True,
+            "firewall_persistent": True, "udp_ready": False, "tcp_ready": False,
+        }
+        attestation_path.write_text(json.dumps(attestation))
+        attestation_path.chmod(0o600)
+        interface = json.dumps([{
+            "ifname": "eth1", "flags": ["UP", "LOWER_UP"],
+            "addr_info": [
+                {"family": "inet", "local": "192.168.1.2", "scope": "global"},
+                {"family": "inet6", "local": "2001:db8:1::2", "scope": "global"},
+            ],
+        }])
+        live = mod.render_nft(cfg)
+        mod.verify_live_firewall(cfg, interface, live, True, True, attestation_path, now=now, require_root=False)
+        with self.assertRaises(mod.ConfigError):
+            mod.verify_live_firewall(cfg, interface, live, True, False, attestation_path, now=now, require_root=False)
+        with self.assertRaises(mod.ConfigError):
+            mod.verify_live_firewall(cfg, interface, live + "    tcp dport 6055 accept\\n", True, True, attestation_path, now=now, require_root=False)
+        stale = dict(attestation)
+        stale["updated_at"] = now - 91
+        attestation_path.write_text(json.dumps(stale))
+        attestation_path.chmod(0o600)
+        with self.assertRaises(mod.ConfigError):
+            mod.verify_live_firewall(cfg, interface, live, True, True, attestation_path, now=now, require_root=False)
+
     def test_interface_attestation_requires_up_nic_and_global_addresses_for_all_client_families(self):
         self.write(self.valid())
         cfg = mod.load_config(self.path, require_root=False)

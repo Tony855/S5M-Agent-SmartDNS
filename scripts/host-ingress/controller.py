@@ -13,7 +13,7 @@ CONFIG = Path(os.environ.get("S5M_INGRESS_CONFIG", "/etc/s5m-agent-ingress/confi
 ATTEST = Path(os.environ.get("S5M_INGRESS_ATTESTATION", "/run/s5m-agent-ingress/ingress.json"))
 EVIDENCE = Path(os.environ.get("S5M_INGRESS_EVIDENCE", "/etc/s5m-agent-ingress/physical-evidence.json"))
 EVIDENCE_KEY = Path(os.environ.get("S5M_INGRESS_EVIDENCE_KEY", "/etc/s5m-agent-ingress/evidence.key"))
-LOCK = Path("/run/s5m-agent-ingress/controller.lock")
+LOCK = Path(os.environ.get("S5M_INGRESS_LOCK", "/run/s5m-agent-ingress/controller.lock"))
 TABLE = "s5m_agent_ingress"
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 
@@ -314,6 +314,67 @@ def live_nft_table_matches(cfg: dict, output: str) -> bool:
     )
 
 
+def validate_firewall_attestation(cfg: dict, path: Path = ATTEST, now: int | None = None, require_root: bool = True) -> dict:
+    """Require a fresh controller-written attestation for this exact firewall config."""
+    try:
+        raw = _secure_regular(path, max_bytes=8192, require_root=require_root)
+        attestation = json.loads(raw)
+    except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ConfigError(f"fresh firewall attestation is unavailable: {e}") from e
+    required = {
+        "version", "updated_at", "interface", "ipv4_address", "ipv6_address",
+        "client_cidrs", "source_ip_preserved", "firewall_ready", "firewall_persistent",
+        "udp_ready", "tcp_ready",
+    }
+    if not isinstance(attestation, dict) or set(attestation) != required:
+        raise ConfigError("firewall attestation schema mismatch")
+    if type(attestation["version"]) is not int or attestation["version"] != 1:
+        raise ConfigError("unsupported firewall attestation version")
+    if type(attestation["updated_at"]) is not int:
+        raise ConfigError("firewall attestation timestamp is invalid")
+    current = int(time.time()) if now is None else now
+    age = current - attestation["updated_at"]
+    if age < -30 or age > 90:
+        raise ConfigError("firewall attestation is stale")
+    expected_v4 = next((str(ip) for ip in cfg["addresses"] if ip.version == 4), None)
+    expected_v6 = next((str(ip) for ip in cfg["addresses"] if ip.version == 6), None)
+    expected_cidrs = sorted(str(network) for network in cfg["networks"])
+    if (
+        attestation["interface"] != cfg["interface"]
+        or attestation["ipv4_address"] != expected_v4
+        or attestation["ipv6_address"] != expected_v6
+        or not isinstance(attestation["client_cidrs"], list)
+        or any(not isinstance(value, str) for value in attestation["client_cidrs"])
+        or sorted(attestation["client_cidrs"]) != expected_cidrs
+    ):
+        raise ConfigError("firewall attestation does not match the exact ingress interface/address/CIDR contract")
+    for key in ("source_ip_preserved", "firewall_ready", "firewall_persistent", "udp_ready", "tcp_ready"):
+        if type(attestation[key]) is not bool:
+            raise ConfigError(f"firewall attestation field {key} is not boolean")
+    if attestation["firewall_ready"] is not True or attestation["firewall_persistent"] is not True:
+        raise ConfigError("live source-CIDR firewall and persistent refresh timer are not ready")
+    return attestation
+
+
+def verify_live_firewall(
+    cfg: dict,
+    interface_output: str,
+    nft_output: str,
+    timer_enabled: bool,
+    timer_active: bool,
+    attestation_path: Path = ATTEST,
+    now: int | None = None,
+    require_root: bool = True,
+) -> None:
+    if not interface_state_matches(cfg, interface_output):
+        raise ConfigError("trusted ingress interface is down or lacks a global address for every configured family")
+    if not live_nft_table_matches(cfg, nft_output):
+        raise ConfigError("live nftables table does not exactly match the source-CIDR allowlist")
+    if timer_enabled is not True or timer_active is not True:
+        raise ConfigError("firewall refresh timer must be both enabled and active before routed ingress provisioning")
+    validate_firewall_attestation(cfg, attestation_path, now, require_root=require_root)
+
+
 def render_nft(cfg: dict) -> str:
     iface = cfg["interface"]
     lines = [f'table inet {TABLE} {{ comment "managed-by:s5m-agent-ingress-v1";', "  chain forward_guard {", "    type filter hook forward priority -5; policy accept;"]
@@ -390,7 +451,7 @@ def atomic_json(path: Path, payload: dict) -> None:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("check", "render", "apply", "remove"))
+    p.add_argument("command", choices=("check", "render", "verify", "apply", "remove"))
     p.add_argument("--config", type=Path, default=CONFIG)
     p.add_argument("--attestation", type=Path, default=ATTEST)
     p.add_argument("--evidence", type=Path, default=EVIDENCE)
@@ -417,6 +478,22 @@ def main(argv=None) -> int:
             return 0
         if a.command == "render":
             sys.stdout.write(render_nft(load_config(a.config)))
+            return 0
+        if a.command == "verify":
+            cfg = load_config(a.config)
+            iface = subprocess.run(["ip", "-j", "addr", "show", "dev", cfg["interface"]], text=True, capture_output=True)
+            nft = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
+            timer_enabled = subprocess.run(["systemctl", "is-enabled", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
+            timer_active = subprocess.run(["systemctl", "is-active", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
+            verify_live_firewall(
+                cfg,
+                iface.stdout if iface.returncode == 0 else "",
+                nft.stdout if nft.returncode == 0 else "",
+                timer_enabled,
+                timer_active,
+                a.attestation,
+            )
+            print("live ingress interface, exact nftables allowlist, persistent timer and fresh attestation verified")
             return 0
         with controller_lock():
             # Invalidate first on every reconcile. Missing interface, invalid

@@ -46,6 +46,45 @@ cat >"$TMP/firewall.json" <<'EOF'
 }
 EOF
 chmod 0600 "$TMP/network.json" "$TMP/firewall.json"
+# Verify the live firewall contract before attaching the routed network.
+# Only the read-only nftables/systemd probes are mocked; Docker and iproute2
+# lifecycle operations below still execute against the real CI host.
+mkdir -m 0700 "$TMP/mock-bin"
+python3 "$ROOT/scripts/host-ingress/controller.py" render --config "$TMP/firewall.json" >"$TMP/live-nft.txt"
+python3 - "$TMP/firewall.json" "$TMP/attestation.json" <<'PY'
+import json, sys, time
+with open(sys.argv[1], encoding="utf-8") as stream:
+    config = json.load(stream)
+attestation = {
+    "version": 1, "updated_at": int(time.time()), "interface": config["interface"],
+    "ipv4_address": config["ipv4_address"], "ipv6_address": config["ipv6_address"],
+    "client_cidrs": sorted(config["client_cidrs"]),
+    "source_ip_preserved": False, "firewall_ready": True,
+    "firewall_persistent": True, "udp_ready": False, "tcp_ready": False,
+}
+with open(sys.argv[2], "w", encoding="utf-8") as stream:
+    json.dump(attestation, stream)
+PY
+chmod 0600 "$TMP/attestation.json"
+cat >"$TMP/mock-bin/nft" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "$#" -eq 4 && "$1" == "list" && "$2" == "table" && "$3" == "inet" && "$4" == "s5m_agent_ingress" ]]; then
+  cat "$S5M_TEST_NFT_OUTPUT"
+  exit 0
+fi
+exit 1
+SH
+cat >"$TMP/mock-bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "$1" == "is-enabled" || "$1" == "is-active" ]]; then exit 0; fi
+exit 1
+SH
+chmod 0755 "$TMP/mock-bin/nft" "$TMP/mock-bin/systemctl"
+export S5M_TEST_NFT_OUTPUT="$TMP/live-nft.txt"
+export S5M_INGRESS_ATTESTATION="$TMP/attestation.json"
+export PATH="$TMP/mock-bin:$PATH"
 python3 "$ROOT/scripts/host-ingress/network-lifecycle.py" provision --config "$TMP/network.json" --firewall-config "$TMP/firewall.json"
 # Reconcile twice: the second run must not duplicate or re-address the endpoint.
 python3 "$ROOT/scripts/host-ingress/network-lifecycle.py" provision --config "$TMP/network.json" --firewall-config "$TMP/firewall.json"

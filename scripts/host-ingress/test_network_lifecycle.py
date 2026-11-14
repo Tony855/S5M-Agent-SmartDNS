@@ -1,4 +1,5 @@
 import importlib.util, json, os, tempfile, unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,6 +66,17 @@ class NetworkSafetyTests(unittest.TestCase):
         with patch.object(nl,"run") as command:
             with self.assertRaises(nl.LifecycleError): nl.provision(cfg)
             command.assert_not_called()
+
+    def test_provision_refuses_to_attach_before_live_firewall_verification(self):
+        cfg=self.write_config()
+        cfg["_networks"].pop(6)
+        with patch.object(nl,"host_ingress_lock",return_value=nullcontext()):
+            with patch.object(nl,"verify_live_firewall",side_effect=nl.LifecycleError("firewall not ready")) as verify:
+                with patch.object(nl,"run") as command:
+                    with self.assertRaises(nl.LifecycleError):
+                        nl.provision(cfg,Path("/tmp/firewall.json"))
+                    verify.assert_called_once_with(Path("/tmp/firewall.json"))
+                    command.assert_not_called()
 
     def test_dns_port_bindings_are_loopback_only(self):
         cfg=self.write_config()

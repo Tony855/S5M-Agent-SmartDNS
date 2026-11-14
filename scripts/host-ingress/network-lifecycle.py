@@ -5,8 +5,11 @@ Run only on the Docker host as root. This helper never runs in the Agent
 container, never changes host routes, and never publishes DNS ports.
 """
 from __future__ import annotations
-import argparse, ipaddress, json, os, re, stat, subprocess, sys
+import argparse, fcntl, ipaddress, json, os, re, stat, subprocess, sys
+from contextlib import contextmanager
 from pathlib import Path
+
+LOCK = Path(os.environ.get("S5M_INGRESS_LOCK", "/run/s5m-agent-ingress/controller.lock"))
 
 OWNER = "com.s5m.managed"
 VALUE = "s5m-agent-dns-ingress"
@@ -104,6 +107,35 @@ def run(args, *, check=True):
     p=subprocess.run(args,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     if check and p.returncode: raise LifecycleError(f"command failed ({p.returncode}): {' '.join(args)}: {p.stderr.strip()}")
     return p
+
+
+@contextmanager
+def host_ingress_lock():
+    LOCK.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    parent_st = LOCK.parent.lstat()
+    if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
+        raise LifecycleError("host ingress lock directory must be root-owned and not group/world writable")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(LOCK, flags, 0o600)
+    try:
+        lock_st = os.fstat(fd)
+        if not stat.S_ISREG(lock_st.st_mode) or lock_st.st_uid != 0 or lock_st.st_mode & 0o022:
+            raise LifecycleError("host ingress lock must be a root-owned regular file and not group/world writable")
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "r+") as lock:
+            fd = -1
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def verify_live_firewall(firewall_config_path: Path) -> None:
+    controller = Path(__file__).with_name("controller.py")
+    if not controller.is_file() or controller.is_symlink():
+        raise LifecycleError("restricted host firewall controller is missing; refusing routed Docker ingress")
+    run([sys.executable, str(controller), "verify", "--config", str(firewall_config_path)])
 
 def validate_firewall_contract(cfg: dict, path: Path, *, require_root: bool = True) -> None:
     raw=secure_read(path,16384,require_root=require_root)
@@ -225,9 +257,15 @@ def preserves_single_default_route(routes, gateway):
 def routeros_v7_route(subnet, next_hop):
     return f'/ip route add dst-address={subnet} gateway={next_hop} comment="S5M-Agent DNS ingress"'
 
-def provision(cfg):
+def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json")):
     if 6 in cfg["_networks"]:
         raise LifecycleError("IPv6 per-client ingress is disabled: Docker dual-network routed publication allocated a non-loopback IPv6 host port in validation; use IPv4-only ingress until a no-host-port IPv6 path is implemented")
+    with host_ingress_lock():
+        verify_live_firewall(firewall_config_path)
+        _provision_locked(cfg)
+
+
+def _provision_locked(cfg):
     if run(["ip","link","show","dev",cfg["interface"]],check=False).returncode:
         raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
     next_hops=host_next_hops(cfg)
@@ -304,6 +342,11 @@ def provision(cfg):
     print("Physical LAN source-IP acceptance remains a separate mandatory step.")
 
 def uninstall(cfg):
+    with host_ingress_lock():
+        _uninstall_locked(cfg)
+
+
+def _uninstall_locked(cfg):
     net=inspect_network(cfg["network"])
     if net is None:
         print("network already absent"); return
@@ -323,7 +366,7 @@ def main():
     cfg=read_config(a.config)
     if a.action=="provision":
         validate_firewall_contract(cfg,a.firewall_config)
-        provision(cfg)
+        provision(cfg,a.firewall_config)
     else:
         # Cleanup must remain possible after firewall settings change; network
         # ownership and exact Docker network shape are still independently checked.
