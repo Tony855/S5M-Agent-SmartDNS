@@ -76,3 +76,14 @@ func TestProcSocketTableExactListenerRejectsWildcard(t *testing.T) {
 		t.Fatal("exact UDP ingress bind should satisfy the address contract")
 	}
 }
+
+func TestProcSocketTableExactListenerRejectsNonListeningUDPState(t *testing.T) {
+	connectedUDP := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 0100007F:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	if procSocketTableHasExactListener(connectedUDP, false, 6055, "192.0.2.10", false) {
+		t.Fatal("connected UDP socket must not satisfy the exact UDP listener readiness contract")
+	}
+	listeningUDP := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12346\n")
+	if !procSocketTableHasExactListener(listeningUDP, false, 6055, "192.0.2.10", false) {
+		t.Fatal("UDP socket in listening state on the exact address should satisfy readiness")
+	}
+}
