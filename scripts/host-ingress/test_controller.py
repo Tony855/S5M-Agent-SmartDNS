@@ -21,7 +21,7 @@ class ControllerTests(unittest.TestCase):
         })
         transaction = mod.build_nft_transaction(True, rules)
         self.assertTrue(transaction.startswith("delete table inet s5m_agent_ingress\n"))
-        self.assertNotIn("\\n", transaction)
+        self.assertNotIn("\n", transaction)
 
     def test_valid_config_and_rules_are_scoped(self):
         self.write(self.valid()); cfg=mod.load_config(self.path, require_root=False); rules=mod.render_nft(cfg)
@@ -72,7 +72,7 @@ class ControllerTests(unittest.TestCase):
             "addresses": [ipaddress.ip_address("172.31.10.2")],
             "networks": [ipaddress.ip_network("192.168.50.0/24")],
         }
-        raw = b'{"version":1,"interface":"eth1"}\\n'
+        raw = b'{"version":1,"interface":"eth1"}\n'
         evidence = {
             "version": 1, "verified_at": 1000,
             "config_sha256": hashlib.sha256(raw).hexdigest(),
@@ -130,17 +130,17 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(mod.live_nft_table_matches(cfg, normalized_singleton))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("udp dport 6055 accept", "udp dport 53 accept", 1)))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("tcp dport 6055 accept", "", 1)))
-        self.assertFalse(mod.live_nft_table_matches(cfg, expected + '    ip daddr 172.31.10.2 tcp dport 80 accept\\n'))
+        self.assertFalse(mod.live_nft_table_matches(cfg, expected + '    ip daddr 172.31.10.2 tcp dport 80 accept\n'))
 
     def test_live_nft_table_rejects_unscoped_accept_and_extra_chains(self):
         self.write(self.valid())
         cfg = mod.load_config(self.path, require_root=False)
         expected = mod.render_nft(cfg)
-        unscoped = expected.replace("  }\\n}", "    tcp dport 6055 accept\\n  }\\n}")
+        unscoped = expected.replace("  }\n}", "    tcp dport 6055 accept\n  }\n}")
         self.assertFalse(mod.live_nft_table_matches(cfg, unscoped))
-        extra_chain = expected.replace("  }\\n}", '  }\\n  chain bypass {\\n    type filter hook forward priority 0; policy accept;\\n    tcp dport 6055 accept\\n  }\\n}')
+        extra_chain = expected.replace("  }\n}", '  }\n  chain bypass {\n    type filter hook forward priority 0; policy accept;\n    tcp dport 6055 accept\n  }\n}')
         self.assertFalse(mod.live_nft_table_matches(cfg, extra_chain))
-        extra_object = expected.replace("  }\\n}", "  set bypass { type ipv4_addr; elements = { 0.0.0.0 }; }\\n  }\\n}")
+        extra_object = expected.replace("  }\n}", "  set bypass { type ipv4_addr; elements = { 0.0.0.0 }; }\n  }\n}")
         self.assertFalse(mod.live_nft_table_matches(cfg, extra_object))
 
     def test_interface_attestation_requires_up_nic_and_global_addresses_for_all_client_families(self):
