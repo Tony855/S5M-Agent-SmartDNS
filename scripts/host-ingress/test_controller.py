@@ -126,6 +126,8 @@ class ControllerTests(unittest.TestCase):
         cfg = mod.load_config(self.path, require_root=False)
         expected = mod.render_nft(cfg)
         self.assertTrue(mod.live_nft_table_matches(cfg, expected))
+        normalized_singleton = expected.replace("{ 192.168.50.0/24 }", "192.168.50.0/24").replace("{ 2001:db8:50::/64 }", "2001:db8:50::/64")
+        self.assertTrue(mod.live_nft_table_matches(cfg, normalized_singleton))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("udp dport 6055 accept", "udp dport 53 accept", 1)))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("tcp dport 6055 accept", "", 1)))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected + '    ip daddr 172.31.10.2 tcp dport 80 accept\\n'))
