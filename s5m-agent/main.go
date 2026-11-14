@@ -1466,11 +1466,21 @@ func processAgentCommandWebSocket(cfg Config) error {
 			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
 		} else if cmd.Enabled == nil {
 			runErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
+		} else if hasPerClientSmartDNSDirectives([]byte(cmd.Config)) {
+			if !*cmd.Enabled {
+				runErr = applyAgentSmartDNSEnabled(false, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+			} else if cmd.IngressContract == nil {
+				runErr = fmt.Errorf("per-client SmartDNS 启用命令缺少 ingress contract，拒绝操作")
+			} else {
+				runErr = applyAgentSmartDNSEnabledWithIngress(true, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL, *cmd.IngressContract)
+			}
+		} else if cmd.IngressContract != nil {
+			runErr = fmt.Errorf("shared SmartDNS 启停命令不应携带 per-client ingress contract")
 		} else {
 			runErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
-			if runErr == nil {
-				if *cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
-			}
+		}
+		if runErr == nil {
+			if *cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
 		}
 	default:
 		runErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
