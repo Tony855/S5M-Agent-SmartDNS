@@ -2,6 +2,8 @@ package main
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -44,10 +46,10 @@ func TestProcSocketTableObservesOnlyIngressPortAndCorrectTCPState(t *testing.T) 
 	}
 }
 
-func TestProcSocketTableRejectsWildcardAndUnrelatedAddress(t *testing.T) {
+func TestProcSocketTableAcceptsWildcardBindButNotUnrelatedAddress(t *testing.T) {
 	wildcard := []byte("sl local_address rem_address st tx_queue\n 0: 00000000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
-	if procSocketTableHasListener(wildcard, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
-		t.Fatal("wildcard socket must not be attributed to an explicitly attested interface address")
+	if !procSocketTableHasListener(wildcard, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
+		t.Fatal("wildcard UDP bind should be visible on the interface")
 	}
 	other := []byte("sl local_address rem_address st tx_queue\n 0: 0B0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
 	if procSocketTableHasListener(other, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
@@ -65,10 +67,72 @@ func TestCollectSmartDNSIngressObservationFailsWhenNoNonLoopbackInterfaceExists(
 	}
 }
 
-func TestProcSocketTableRejectsConnectedUDPAndWrongState(t *testing.T) {
-	addresses := map[string]bool{"192.0.2.10": true}
-	connected := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 01010101:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12348\n")
-	if procSocketTableHasListener(connected, false, 6055, addresses, false) {
-		t.Fatal("connected UDP socket must not be reported as an unconnected DNS listener")
+
+func TestProcSocketTableExactListenerRejectsWildcard(t *testing.T) {
+	wildcard := []byte("sl local_address rem_address st tx_queue\n 0: 00000000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	if procSocketTableHasExactListener(wildcard, false, 6055, "192.0.2.10", false) {
+		t.Fatal("wildcard UDP bind must not satisfy an exact ingress address contract")
+	}
+	exact := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	if !procSocketTableHasExactListener(exact, false, 6055, "192.0.2.10", false) {
+		t.Fatal("exact UDP ingress bind should satisfy the address contract")
+	}
+}
+
+func TestProcSocketTableExactListenerRejectsNonListeningUDPState(t *testing.T) {
+	connectedUDP := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 0100007F:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	if procSocketTableHasExactListener(connectedUDP, false, 6055, "192.0.2.10", false) {
+		t.Fatal("connected UDP socket must not satisfy the exact UDP listener readiness contract")
+	}
+	listeningUDP := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12346\n")
+	if !procSocketTableHasExactListener(listeningUDP, false, 6055, "192.0.2.10", false) {
+		t.Fatal("UDP socket in listening state on the exact address should satisfy readiness")
+	}
+}
+
+
+func TestProcSocketTableExactListenerInodesAndSmartDNSProcessOwnership(t *testing.T) {
+	udp := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	tcp := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n")
+	udpInodes := procSocketTableExactListenerInodes(udp, false, 6055, "192.0.2.10", false)
+	tcpInodes := procSocketTableExactListenerInodes(tcp, false, 6055, "192.0.2.10", true)
+	if !udpInodes["12345"] || !tcpInodes["12346"] {
+		t.Fatalf("exact ingress socket inodes not extracted: UDP=%v TCP=%v", udpInodes, tcpInodes)
+	}
+
+	procRoot := t.TempDir()
+	fdDir := filepath.Join(procRoot, "1234", "fd")
+	if err := os.MkdirAll(fdDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := procProcessOwnsSocketInodes(procRoot, 1234, udpInodes, tcpInodes)
+	if err != nil || !owned {
+		t.Fatalf("SmartDNS process owning both exact sockets should be accepted: owned=%v err=%v", owned, err)
+	}
+
+	if err := os.Remove(filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	owned, err = procProcessOwnsSocketInodes(procRoot, 1234, udpInodes, tcpInodes)
+	if err != nil || owned {
+		t.Fatalf("process owning only UDP must not satisfy ingress readiness: owned=%v err=%v", owned, err)
+	}
+
+	otherFDDir := filepath.Join(procRoot, "5678", "fd")
+	if err := os.MkdirAll(otherFDDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	owned, err = procProcessOwnsSocketInodes(procRoot, 5678, udpInodes, tcpInodes)
+	if err != nil || owned {
+		t.Fatalf("a different process owning only TCP must not satisfy SmartDNS readiness: owned=%v err=%v", owned, err)
 	}
 }

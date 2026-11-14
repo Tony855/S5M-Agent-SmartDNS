@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -534,6 +535,11 @@ type smartDNSStatusDependencies struct {
 	probe      func() bool
 	restart    func() error
 	waitHealthy func(time.Duration) bool
+	ingressAttestation func() (smartDNSHostIngressAttestation, error)
+	ingressObservation func() (smartDNSIngressObservation, error)
+	ingressSocketBound func(string) (bool, error)
+	perClientProbe func([]byte, smartDNSHostIngressAttestation) bool
+	waitPerClientHealthy func([]byte, smartDNSHostIngressAttestation, time.Duration) bool
 }
 
 func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
@@ -550,6 +556,11 @@ func defaultSmartDNSStatusDependencies() smartDNSStatusDependencies {
 		probe: probeSmartDNSDNS,
 		restart: restartSmartDNSService,
 		waitHealthy: waitForSmartDNSHealthy,
+		ingressAttestation: readSmartDNSHostIngressAttestation,
+		ingressObservation: func() (smartDNSIngressObservation, error) { return collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies()) },
+		ingressSocketBound: smartDNSIngressAddressSocketsBound,
+		perClientProbe: smartDNSPerClientRuntimeHealthy,
+		waitPerClientHealthy: waitForSmartDNSPerClientHealthy,
 	}
 }
 
@@ -560,13 +571,14 @@ func collectSmartDNSStatus(status map[string]any) {
 // collectSmartDNSStatusWithDependencies keeps host interactions injectable so
 // every status and failure path can be tested without a live SmartDNS daemon.
 func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSStatusDependencies) {
-	// Per-client DNS ingress is deliberately unavailable until the Agent can
-	// provision and observe the complete routed dataplane. Publish an explicit
-	// fail-closed contract state rather than allowing stale/omitted fields to be
-	// mistaken for readiness by dashboards or future protocol consumers.
+	var hostIngressAttestation smartDNSHostIngressAttestation
+	hostIngressAttestationAvailable := false
+	// Never infer host firewall or source-IP preservation from the Agent
+	// namespace alone. Only a fresh, root-owned host-controller attestation can
+	// populate those fields; socket inspection independently confirms SmartDNS.
 	status["dns_ingress_contract_version"] = 0
 	status["dns_ingress_ready"] = false
-	status["dns_ingress_reason"] = "agent_ingress_lifecycle_not_implemented"
+	status["dns_ingress_reason"] = "host_ingress_attestation_unavailable"
 	status["dns_ingress_source_ip_preserved"] = false
 	status["dns_ingress_firewall_ready"] = false
 	status["dns_ingress_firewall_persistent"] = false
@@ -590,14 +602,59 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	status["dns_ingress_observed_ipv6_addresses"] = []string{}
 	status["dns_ingress_observed_udp_6055"] = false
 	status["dns_ingress_observed_tcp_6055"] = false
-	if observation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies()); err != nil {
-		status["dns_ingress_observation_error"] = safeSmartDNSDiagnostic(err.Error())
+	observationFn := deps.ingressObservation
+	if observationFn == nil { observationFn = func() (smartDNSIngressObservation, error) { return collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies()) } }
+	observation, observationErr := observationFn()
+	if observationErr != nil {
+		status["dns_ingress_observation_error"] = safeSmartDNSDiagnostic(observationErr.Error())
 	} else {
 		status["dns_ingress_observed_interfaces"] = observation.Interfaces
 		status["dns_ingress_observed_ipv4_addresses"] = observation.IPv4
 		status["dns_ingress_observed_ipv6_addresses"] = observation.IPv6
 		status["dns_ingress_observed_udp_6055"] = observation.UDP
 		status["dns_ingress_observed_tcp_6055"] = observation.TCP
+	}
+	if deps.ingressAttestation != nil {
+		attestation, attestationErr := deps.ingressAttestation()
+		if attestationErr != nil {
+			status["dns_ingress_reason"] = safeSmartDNSDiagnostic(attestationErr.Error())
+		} else {
+			hostIngressAttestation = attestation
+			hostIngressAttestationAvailable = true
+			status["dns_ingress_contract_version"] = attestation.Version
+			status["dns_ingress_interface"] = attestation.Interface
+			status["dns_ingress_ipv4_address"] = attestation.IPv4Address
+			status["dns_ingress_ipv6_address"] = attestation.IPv6Address
+			status["dns_ingress_client_cidrs"] = attestation.ClientCIDRs
+			status["dns_ingress_source_ip_preserved"] = attestation.SourceIPPreserved
+			status["dns_ingress_firewall_ready"] = attestation.FirewallReady
+			status["dns_ingress_firewall_persistent"] = attestation.FirewallPersistent
+			status["dns_ingress_udp_ready"] = attestation.UDPReady
+			status["dns_ingress_tcp_ready"] = attestation.TCPReady
+			ipv4Observed := attestation.IPv4Address == "" || observation.AddressInterfaces[attestation.IPv4Address] != ""
+			ipv6Observed := attestation.IPv6Address == "" || observation.AddressInterfaces[attestation.IPv6Address] != ""
+			interfaceObserved := ipv4Observed && ipv6Observed
+			ipv4Bound, ipv6Bound := false, false
+			socketBound := deps.ingressSocketBound
+			if socketBound == nil { socketBound = smartDNSIngressAddressSocketsBound }
+			if attestation.IPv4Address != "" { ipv4Bound, _ = socketBound(attestation.IPv4Address) }
+			if attestation.IPv6Address != "" { ipv6Bound, _ = socketBound(attestation.IPv6Address) }
+			status["dns_ingress_ipv4_ready"] = attestation.IPv4Address == "" || (interfaceObserved && ipv4Observed)
+			status["dns_ingress_ipv6_ready"] = attestation.IPv6Address == "" || (interfaceObserved && ipv6Observed)
+			status["dns_ingress_smartdns_ipv4_bound"] = ipv4Bound
+			status["dns_ingress_smartdns_ipv6_bound"] = ipv6Bound
+			if ipv4Bound { status["dns_ingress_smartdns_ipv4_bind_address"] = attestation.IPv4Address }
+			if ipv6Bound { status["dns_ingress_smartdns_ipv6_bind_address"] = attestation.IPv6Address }
+			listenerReady := (attestation.IPv4Address == "" || ipv4Bound) && (attestation.IPv6Address == "" || ipv6Bound)
+			status["dns_ingress_smartdns_listener_ready"] = listenerReady
+			runtimeReady := attestation.SourceIPPreserved && attestation.FirewallReady && attestation.FirewallPersistent &&
+				attestation.UDPReady && attestation.TCPReady && interfaceObserved &&
+				(attestation.IPv4Address == "" || ipv4Observed) && (attestation.IPv6Address == "" || ipv6Observed) && listenerReady
+			status["dns_ingress_ready"] = runtimeReady
+			if runtimeReady { status["dns_ingress_reason"] = "" } else { status["dns_ingress_reason"] = "host_or_smartdns_ingress_not_ready" }
+		}
+	} else {
+		status["dns_ingress_reason"] = "host_ingress_attestation_reader_unavailable"
 	}
 
 	status["smartdns_available"] = false
@@ -626,7 +683,10 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 	status["smartdns_enabled"] = enabled
 
 	configHealthy := false
+	perClientConfig := false
+	var smartDNSConfigData []byte
 	if data, err := deps.readConfig(smartDNSConfigPath); err == nil {
+		smartDNSConfigData = data
 		sum := sha256.Sum256(bytes.TrimSpace(data))
 		status["smartdns_config_sha256"] = hex.EncodeToString(sum[:])
 		domesticListener := smartDNSConfigHasDomesticListener(data)
@@ -634,8 +694,22 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		// The domestic policy listener is optional for legacy nodes. Report its
 		// capability separately; do not mark a previously healthy 6053-only
 		// SmartDNS deployment unhealthy or change its existing DNS behavior.
-		if configErr := validateSmartDNSConfig(data); configErr != nil {
-			appendSmartDNSStatusError(status, "SmartDNS 配置未通过加密上游策略校验: "+safeSmartDNSDiagnostic(configErr.Error()))
+		configErr := validateSmartDNSConfig(data)
+		if configErr != nil && hasPerClientSmartDNSDirectives(data) && hostIngressAttestationAvailable {
+			contract := smartDNSPerClientIngressContract{
+				Version: hostIngressAttestation.Version, Ready: true,
+				IPv4Address: hostIngressAttestation.IPv4Address, IPv6Address: hostIngressAttestation.IPv6Address,
+				ClientCIDRs: hostIngressAttestation.ClientCIDRs,
+			}
+			configErr = validateSmartDNSConfigWithIngress(data, contract)
+			perClientConfig = configErr == nil
+		}
+		if configErr != nil {
+			message := "SmartDNS 配置未通过加密上游策略校验: "
+			if hasPerClientSmartDNSDirectives(data) && hostIngressAttestationAvailable {
+				message = "SmartDNS 配置未通过当前运行模式校验: "
+			}
+			appendSmartDNSStatusError(status, message+safeSmartDNSDiagnostic(configErr.Error()))
 		} else {
 			configHealthy = true
 		}
@@ -675,7 +749,16 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		}
 		return
 	}
-	dnsHealthy := processHealthy && deps.probe != nil && deps.probe()
+	dnsHealthy := false
+	if processHealthy {
+		if perClientConfig {
+			perClientProbe := deps.perClientProbe
+			if perClientProbe == nil { perClientProbe = smartDNSPerClientRuntimeHealthy }
+			dnsHealthy = perClientProbe(smartDNSConfigData, hostIngressAttestation)
+		} else if deps.probe != nil {
+			dnsHealthy = deps.probe()
+		}
+	}
 	if dnsHealthy {
 		status["smartdns_dns_healthy"] = true
 		return
@@ -700,7 +783,15 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 		appendSmartDNSStatusError(status, "SmartDNS 异常，s6 重启失败: "+safeSmartDNSDiagnostic(err.Error()))
 		return
 	}
-	if deps.waitHealthy(5 * time.Second) {
+	healthyAfterRestart := false
+	if perClientConfig {
+		waitPerClient := deps.waitPerClientHealthy
+		if waitPerClient == nil { waitPerClient = waitForSmartDNSPerClientHealthy }
+		healthyAfterRestart = waitPerClient(smartDNSConfigData, hostIngressAttestation, 5*time.Second)
+	} else {
+		healthyAfterRestart = deps.waitHealthy(5 * time.Second)
+	}
+	if healthyAfterRestart {
 		status["smartdns_running"] = true
 		status["smartdns_dns_healthy"] = true
 		status["smartdns_recovery"] = "restarted"
@@ -750,7 +841,16 @@ func writeSmartDNSConfigLocked(data []byte) (string, error) {
 // rollback copy remains available until the joint Mihomo+SmartDNS health check
 // has succeeded. The legacy wrapper retains its original cleanup behavior.
 func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool) (string, error) {
-	if err := validateSmartDNSConfig(data); err != nil {
+	return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validateSmartDNSConfig)
+}
+
+// The validator is supplied by the caller while the existing file-apply,
+// parser preflight, restart, and rollback mechanics remain shared.
+func writeSmartDNSConfigLockedWithValidator(data []byte, cleanupBackup bool, validator func([]byte) error) (string, error) {
+	if validator == nil {
+		return "", fmt.Errorf("SmartDNS validator is unavailable")
+	}
+	if err := validator(data); err != nil {
 		return "", err
 	}
 	if !smartDNSBinaryAvailable() {
@@ -1079,6 +1179,68 @@ func syncSmartDNSDirectory(path string) error {
 	return dir.Sync()
 }
 
+func smartDNSLocalListenerSocketsBound(address string, port int) bool {
+	ip, err := netip.ParseAddr(address)
+	if err != nil || ip.Zone() != "" || ip.Is4In6() { return false }
+	udpPath, tcpPath := "/proc/net/udp", "/proc/net/tcp"
+	if ip.Is6() { udpPath, tcpPath = "/proc/net/udp6", "/proc/net/tcp6" }
+	udp, err := os.ReadFile(udpPath)
+	if err != nil { return false }
+	tcp, err := os.ReadFile(tcpPath)
+	if err != nil { return false }
+	return procSocketTableHasExactListener(udp, ip.Is6(), port, ip.String(), false) &&
+		procSocketTableHasExactListener(tcp, ip.Is6(), port, ip.String(), true)
+}
+
+// Per-client SmartDNS intentionally has no default upstream on 6053, so a
+// localhost DNS query there is expected to fail closed. Health instead checks
+// the dedicated domestic 6054 resolver plus every exact 6055 ingress socket.
+func smartDNSPerClientRuntimeHealthy(data []byte, attestation smartDNSHostIngressAttestation) bool {
+	contract := smartDNSPerClientIngressContract{
+		Version: attestation.Version, Ready: true,
+		IPv4Address: attestation.IPv4Address, IPv6Address: attestation.IPv6Address,
+		ClientCIDRs: attestation.ClientCIDRs,
+	}
+	if !hasPerClientSmartDNSDirectives(data) || validateSmartDNSConfigWithIngress(data, contract) != nil ||
+		!smartDNSConfigHasDomesticListener(data) {
+		return false
+	}
+	for _, address := range []string{"127.0.0.1", "::1"} {
+		if !smartDNSLocalListenerSocketsBound(address, 6053) { return false }
+	}
+	if !smartDNSLocalListenerSocketsBound("127.0.0.1", 6054) ||
+		!probeSmartDNSDNSAt("127.0.0.1:6054") || !probeSmartDNSDNSTCPAt("127.0.0.1:6054") {
+		return false
+	}
+	for _, address := range []string{attestation.IPv4Address, attestation.IPv6Address} {
+		if address != "" {
+			bound, err := smartDNSIngressAddressSocketsBound(address)
+			if err != nil || !bound { return false }
+		}
+	}
+	return true
+}
+
+func waitForSmartDNSPerClientHealthy(data []byte, attestation smartDNSHostIngressAttestation, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if exec.Command("pidof", "smartdns").Run() == nil && smartDNSPerClientRuntimeHealthy(data, attestation) {
+			return true
+		}
+		if !time.Now().Before(deadline) { return false }
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func waitForSmartDNSProcess(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if exec.Command("pidof", "smartdns").Run() == nil { return true }
+		if !time.Now().Before(deadline) { return false }
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func waitForSmartDNSHealthy(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -1177,7 +1339,7 @@ func probeSmartDNSDNSAtType(address string, qtype uint16) bool {
 		query = append(query, byte(len(label)))
 		query = append(query, label...)
 	}
-	query = append(query, 0, byte(qtype>>8), byte(qtype), 0, 1) // QNAME terminator, requested type, IN
+	query = append(query, 0, byte(qtype>>8), byte(qtype), 0, 1)
 	if _, err := conn.Write(query); err != nil {
 		return false
 	}
@@ -1186,12 +1348,8 @@ func probeSmartDNSDNSAtType(address string, qtype uint16) bool {
 	if err != nil || n < 12 {
 		return false
 	}
-	if binary.BigEndian.Uint16(response[0:2]) != binary.BigEndian.Uint16(query[0:2]) {
-		return false
-	}
 	return smartDNSResponseHasAnswer(response[:n], binary.BigEndian.Uint16(query[:2]), qtype)
 }
-
 
 // smartDNSResponseHasAnswer validates the DNS envelope and requires an actual
 // IN answer RR of the requested type. A CNAME-only response must not make an

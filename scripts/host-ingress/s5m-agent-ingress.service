@@ -1,0 +1,20 @@
+[Unit]
+Description=S5M Agent restricted DNS ingress firewall reconcile
+After=network-online.target nftables.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RuntimeDirectory=s5m-agent-ingress
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/libexec/s5m-agent-ingress/controller.py apply
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN

@@ -1368,6 +1368,7 @@ type agentCommand struct {
 	Config       string `json:"config"`
 	Enabled      *bool  `json:"enabled"`
 	MihomoConfig string `json:"mihomo_config"`
+	IngressContract *smartDNSPerClientIngressContract `json:"ingress_contract,omitempty"`
 }
 
 // processAgentCommandWebSocket polls and acknowledges commands through the authenticated WebSocket protocol.
@@ -1449,21 +1450,37 @@ func processAgentCommandWebSocket(cfg Config) error {
 	case "configure_smartdns":
 		if !smartDNSFeatureSupported() {
 			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
+		} else if hasPerClientSmartDNSDirectives([]byte(cmd.Config)) {
+			runErr = fmt.Errorf("per-client SmartDNS 必须通过带 ingress contract 的联合事务应用")
+		} else if cmd.IngressContract != nil {
+			runErr = fmt.Errorf("shared SmartDNS 命令不应携带 per-client ingress contract")
 		} else {
-			var configHash string
-			configHash, runErr = writeSmartDNSConfig([]byte(cmd.Config))
-			if runErr == nil { message = "SmartDNS 配置已校验并应用，SHA-256: " + configHash }
+			mihomoConfig, configErr := configHashSource()
+			if configErr != nil { runErr = configErr } else {
+				runErr = applyAgentConfigTransaction(mihomoConfig, []byte(cmd.Config), true, cfg.CentralURL)
+			}
+			if runErr == nil { message = "SmartDNS/Mihomo 联合配置已应用并通过健康检查" }
 		}
 	case "set_smartdns_enabled":
 		if !smartDNSFeatureSupported() {
 			runErr = fmt.Errorf("当前 Agent 镜像不包含 SmartDNS")
 		} else if cmd.Enabled == nil {
 			runErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
+		} else if hasPerClientSmartDNSDirectives([]byte(cmd.Config)) {
+			if !*cmd.Enabled {
+				runErr = applyAgentSmartDNSEnabled(false, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+			} else if cmd.IngressContract == nil {
+				runErr = fmt.Errorf("per-client SmartDNS 启用命令缺少 ingress contract，拒绝操作")
+			} else {
+				runErr = applyAgentSmartDNSEnabledWithIngress(true, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL, *cmd.IngressContract)
+			}
+		} else if cmd.IngressContract != nil {
+			runErr = fmt.Errorf("shared SmartDNS 启停命令不应携带 per-client ingress contract")
 		} else {
 			runErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
-			if runErr == nil {
-				if *cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
-			}
+		}
+		if runErr == nil {
+			if *cmd.Enabled { message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS" } else { message = "Mihomo 已切换并验证备用 DNS，SmartDNS 进程已停止" }
 		}
 	default:
 		runErr = fmt.Errorf("不支持的 Agent 命令类型: %s", cmd.Type)
@@ -2419,6 +2436,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			YAML           string `json:"yaml"`
 			SmartDNSSHA256 string `json:"smartdns_sha256"`
 			SmartDNSYAML   string `json:"smartdns_yaml"`
+			IngressContract *smartDNSPerClientIngressContract `json:"ingress_contract,omitempty"`
 			Message        string `json:"message"`
 		}
 		if err := readAgentWSJSON(conn, &configResponse, 90*time.Second); err != nil {
@@ -2456,9 +2474,19 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 				smartDNSConfig = []byte(configResponse.SmartDNSYAML)
 				updateSmartDNS = true
 			}
-			if applyErr := applyAgentConfigTransaction(
-				[]byte(configResponse.YAML), smartDNSConfig, updateSmartDNS, cfg.CentralURL,
-			); applyErr != nil {
+			var applyErr error
+			if hasPerClientSmartDNSDirectives(smartDNSConfig) {
+				if configResponse.IngressContract == nil {
+					applyErr = fmt.Errorf("per-client SmartDNS 配置缺少 ingress contract，拒绝联合应用")
+				} else {
+					applyErr = applyAgentConfigTransactionWithIngress([]byte(configResponse.YAML), smartDNSConfig, updateSmartDNS, cfg.CentralURL, *configResponse.IngressContract)
+				}
+			} else if configResponse.IngressContract != nil {
+				applyErr = fmt.Errorf("shared SmartDNS 配置不应携带 per-client ingress contract")
+			} else {
+				applyErr = applyAgentConfigTransaction([]byte(configResponse.YAML), smartDNSConfig, updateSmartDNS, cfg.CentralURL)
+			}
+			if applyErr != nil {
 				setAgentConfigSyncError("Mihomo/SmartDNS 联合配置事务失败: " + applyErr.Error())
 				fmt.Printf("WebSocket 联合配置应用失败: %s\n", safeMihomoValidationDiagnostic([]byte(applyErr.Error())))
 				break
@@ -2524,7 +2552,17 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 					var mihomoConfig []byte
 					mihomoConfig, commandErr = configHashSource()
 					if commandErr == nil {
-						commandErr = applyAgentConfigTransaction(mihomoConfig, []byte(cmd.Config), true, cfg.CentralURL)
+						if hasPerClientSmartDNSDirectives([]byte(cmd.Config)) {
+							if cmd.IngressContract == nil {
+								commandErr = fmt.Errorf("per-client SmartDNS 命令缺少 ingress contract，拒绝应用")
+							} else {
+								commandErr = applyAgentConfigTransactionWithIngress(mihomoConfig, []byte(cmd.Config), true, cfg.CentralURL, *cmd.IngressContract)
+							}
+						} else if cmd.IngressContract != nil {
+							commandErr = fmt.Errorf("shared SmartDNS 命令不应携带 per-client ingress contract")
+						} else {
+							commandErr = applyAgentConfigTransaction(mihomoConfig, []byte(cmd.Config), true, cfg.CentralURL)
+						}
 					}
 					if commandErr == nil {
 						sum := sha256.Sum256(bytes.TrimSpace([]byte(cmd.Config)))
@@ -2536,7 +2574,20 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 					} else if cmd.Enabled == nil {
 						commandErr = fmt.Errorf("SmartDNS 启停命令缺少明确的 enabled 布尔值")
 					} else {
-						commandErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+						if hasPerClientSmartDNSDirectives([]byte(cmd.Config)) {
+							if !*cmd.Enabled {
+								// Disabling must remain possible when ingress readiness is lost.
+								commandErr = applyAgentSmartDNSEnabled(false, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+							} else if cmd.IngressContract == nil {
+								commandErr = fmt.Errorf("per-client SmartDNS 启用命令缺少 ingress contract，拒绝操作")
+							} else {
+								commandErr = applyAgentSmartDNSEnabledWithIngress(true, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL, *cmd.IngressContract)
+							}
+						} else if cmd.IngressContract != nil {
+							commandErr = fmt.Errorf("shared SmartDNS 启停命令不应携带 per-client ingress contract")
+						} else {
+							commandErr = applyAgentSmartDNSEnabled(*cmd.Enabled, []byte(cmd.MihomoConfig), []byte(cmd.Config), cfg.CentralURL)
+						}
 						if commandErr == nil {
 							if *cmd.Enabled {
 								message = "SmartDNS 已启动，DNS 健康检查通过，Mihomo 已切换到 SmartDNS"
