@@ -41,6 +41,18 @@ type smartDNSPerClientGroup struct {
 }
 
 func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIngressContract) error {
+	return validateSmartDNSConfigWithIngressInternal(data, contract, false)
+}
+
+// validateSmartDNSConfigWithContractBoundIngress is required before any
+// per-client config transaction. Runtime status may use the host-only
+// attestation contract without mappings, but publication must bind every
+// CIDR to one exact SmartDNS and Mihomo listener/outbound pair.
+func validateSmartDNSConfigWithContractBoundIngress(data []byte, contract smartDNSPerClientIngressContract) error {
+	return validateSmartDNSConfigWithIngressInternal(data, contract, true)
+}
+
+func validateSmartDNSConfigWithIngressInternal(data []byte, contract smartDNSPerClientIngressContract, requireMappings bool) error {
 	if contract.Version != smartDNSPerClientIngressContractVersion || !contract.Ready {
 		return fmt.Errorf("per-client DNS ingress contract is missing, unsupported, or not ready")
 	}
@@ -89,8 +101,12 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 	if len(cidrs) == 0 {
 		return fmt.Errorf("per-client ingress contract has no client CIDRs")
 	}
-	if len(contract.Mappings) != len(cidrs) {
+	mappingRequired := requireMappings || len(contract.Mappings) > 0
+	if requireMappings && len(contract.Mappings) != len(cidrs) {
 		return fmt.Errorf("per-client ingress contract must bind exactly one proxy listener to every client CIDR")
+	}
+	if len(contract.Mappings) > 0 && len(contract.Mappings) != len(cidrs) {
+		return fmt.Errorf("per-client ingress contract contains an incomplete proxy listener mapping set")
 	}
 	mappingsByCIDR := make(map[string]smartDNSPerClientIngressMapping, len(contract.Mappings))
 	mappingsByListener := make(map[string]smartDNSPerClientIngressMapping, len(contract.Mappings))
@@ -198,9 +214,11 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			if name != expectedName || proxies[name] != 0 {
 				return fmt.Errorf("line %d: proxy name/port mismatch or duplicate", lineNo+1)
 			}
-			mapping, ok := mappingsByListener[name]
-			if !ok || mapping.ListenerPort != port {
-				return fmt.Errorf("line %d: SOCKS endpoint is not bound to the contract-assigned listener", lineNo+1)
+			if mappingRequired {
+				mapping, ok := mappingsByListener[name]
+				if !ok || mapping.ListenerPort != port {
+					return fmt.Errorf("line %d: SOCKS endpoint is not bound to the contract-assigned listener", lineNo+1)
+				}
 			}
 			proxies[name] = port
 		case "group-begin":
@@ -324,12 +342,14 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			return fmt.Errorf("multiple groups map to the same client CIDR")
 		}
 		seenCIDRs[entry.cidr] = true
-		mapping, ok := mappingsByCIDR[entry.cidr]
-		if !ok || group != fmt.Sprintf("s5m-smartdns-group-%d", mapping.ListenerPort) || serverProxyByGroup[group] != mapping.ListenerName {
-			return fmt.Errorf("group %s does not match its contract-bound client/proxy listener mapping", group)
-		}
-		if _, ok := proxies[mapping.ListenerName]; !ok {
-			return fmt.Errorf("group %s has no contract-assigned SOCKS listener", group)
+		if mappingRequired {
+			mapping, ok := mappingsByCIDR[entry.cidr]
+			if !ok || group != fmt.Sprintf("s5m-smartdns-group-%d", mapping.ListenerPort) || serverProxyByGroup[group] != mapping.ListenerName {
+				return fmt.Errorf("group %s does not match its contract-bound client/proxy listener mapping", group)
+			}
+			if _, ok := proxies[mapping.ListenerName]; !ok {
+				return fmt.Errorf("group %s has no contract-assigned SOCKS listener", group)
+			}
 		}
 	}
 	for cidr := range cidrs {
