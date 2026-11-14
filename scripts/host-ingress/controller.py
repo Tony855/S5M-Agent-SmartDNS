@@ -166,6 +166,38 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     return True
 
 
+def interface_state_matches(cfg: dict, output: str) -> bool:
+    try:
+        records = json.loads(output)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
+        return False
+    record = records[0]
+    if record.get("ifname") != cfg["interface"] or not isinstance(record.get("flags"), list) or "UP" not in record["flags"]:
+        return False
+    required_families = {network.version for network in cfg["networks"]}
+    observed_families = set()
+    addresses = record.get("addr_info")
+    if not isinstance(addresses, list):
+        return False
+    for item in addresses:
+        if not isinstance(item, dict) or item.get("scope") != "global":
+            continue
+        family = item.get("family")
+        local = item.get("local")
+        try:
+            address = ipaddress.ip_address(local)
+        except (TypeError, ValueError):
+            continue
+        if (family == "inet" and address.version != 4) or (family == "inet6" and address.version != 6):
+            continue
+        if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address, "ipv4_mapped", None):
+            continue
+        observed_families.add(address.version)
+    return required_families.issubset(observed_families)
+
+
 def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int | None = None) -> bool:
     try:
         st = path.lstat()
@@ -310,8 +342,9 @@ def main(argv=None) -> int:
             invalidate_attestation(a.attestation)
             cfg = load_config(a.config)
             rules = render_nft(cfg)
-            if subprocess.run(["ip", "link", "show", "dev", cfg["interface"]], text=True, capture_output=True).returncode:
-                raise ConfigError(f"ingress interface does not exist: {cfg['interface']}")
+            iface = subprocess.run(["ip", "-j", "addr", "show", "dev", cfg["interface"]], text=True, capture_output=True)
+            if iface.returncode or not interface_state_matches(cfg, iface.stdout):
+                raise ConfigError(f"ingress interface is down or lacks a global address for every configured client family: {cfg['interface']}")
             exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
             if exists.returncode == 0 and "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
                 raise ConfigError("refusing to replace an nftables table not owned by this controller")
