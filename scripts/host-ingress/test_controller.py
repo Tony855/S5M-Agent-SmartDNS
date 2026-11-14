@@ -130,4 +130,20 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("tcp dport 6055 accept", "", 1)))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected + '    ip daddr 172.31.10.2 tcp dport 80 accept\\n'))
 
+    def test_interface_attestation_requires_up_nic_and_global_addresses_for_all_client_families(self):
+        self.write(self.valid())
+        cfg = mod.load_config(self.path, require_root=False)
+        valid = json.dumps([{
+            "ifname": "eth1", "flags": ["BROADCAST", "MULTICAST", "UP", "LOWER_UP"],
+            "addr_info": [
+                {"family": "inet", "local": "192.168.1.2", "scope": "global"},
+                {"family": "inet6", "local": "2001:db8:1::2", "scope": "global"},
+                {"family": "inet6", "local": "fe80::2", "scope": "link"},
+            ],
+        }])
+        self.assertTrue(mod.interface_state_matches(cfg, valid))
+        self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"UP", ', "")))
+        self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"inet6", "local": "2001:db8:1::2", "scope": "global",', '"inet6", "local": "fe80::2", "scope": "link",')))
+        self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"ifname": "eth1"', '"ifname": "eth2"')))
+
 if __name__ == "__main__": unittest.main()
