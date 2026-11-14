@@ -5,13 +5,14 @@ This component manages only its own inet table. It never creates Docker
 networks, changes routes, or claims physical source-IP preservation.
 """
 from __future__ import annotations
-import argparse, fcntl, hashlib, ipaddress, json, os, re, stat, subprocess, sys, tempfile, time
+import argparse, fcntl, hashlib, hmac, ipaddress, json, os, re, stat, subprocess, sys, tempfile, time
 from contextlib import contextmanager
 from pathlib import Path
 
 CONFIG = Path(os.environ.get("S5M_INGRESS_CONFIG", "/etc/s5m-agent-ingress/config.json"))
 ATTEST = Path(os.environ.get("S5M_INGRESS_ATTESTATION", "/run/s5m-agent-ingress/ingress.json"))
 EVIDENCE = Path(os.environ.get("S5M_INGRESS_EVIDENCE", "/etc/s5m-agent-ingress/physical-evidence.json"))
+EVIDENCE_KEY = Path(os.environ.get("S5M_INGRESS_EVIDENCE_KEY", "/etc/s5m-agent-ingress/evidence.key"))
 LOCK = Path("/run/s5m-agent-ingress/controller.lock")
 TABLE = "s5m_agent_ingress"
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
@@ -90,14 +91,38 @@ def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
             raise ConfigError("an ingress address must not overlap a client source CIDR")
     return {"interface": iface, "addresses": addresses, "networks": networks}
 
-def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: dict, now: int | None = None) -> bool:
+def read_evidence_key(path: Path = EVIDENCE_KEY) -> bytes:
+    st = path.lstat()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
+        raise ConfigError("physical evidence HMAC key must be a root-owned regular file with mode 0600")
+    raw = _secure_regular(path, max_bytes=128)
+    if not re.fullmatch(rb"[0-9a-f]{64}\\n?", raw):
+        raise ConfigError("physical evidence HMAC key must contain exactly 32 bytes encoded as lowercase hex")
+    return bytes.fromhex(raw.strip().decode("ascii"))
+
+
+def physical_evidence_signature(evidence: dict, key: bytes) -> str:
+    unsigned = dict(evidence)
+    unsigned.pop("evidence_hmac_sha256", None)
+    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return hmac.new(key, canonical, hashlib.sha256).hexdigest()
+
+
+def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: dict, now: int | None = None, evidence_key: bytes | None = None) -> bool:
     required = {
         "version", "verified_at", "config_sha256", "client_cidrs", "ipv4_address",
         "ipv6_address", "coverage", "verified_client_sources", "source_ip_preserved",
         "udp_ready", "tcp_ready", "host_pcap_sha256", "container_pcap_sha256",
-        "probe_results_sha256", "capture_manifest_sha256",
+        "probe_results_sha256", "capture_manifest_sha256", "evidence_hmac_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
+        return False
+    if not isinstance(evidence_key, bytes) or len(evidence_key) != 32:
+        return False
+    signature = evidence.get("evidence_hmac_sha256")
+    if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-f]{64}", signature):
+        return False
+    if not hmac.compare_digest(signature, physical_evidence_signature(evidence, evidence_key)):
         return False
     if type(evidence["version"]) is not int or evidence["version"] != 1:
         return False
@@ -149,9 +174,10 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
         raw = _secure_regular(path, max_bytes=16384)
         evidence = json.loads(raw)
         config_raw = _secure_regular(config_path)
+        evidence_key = read_evidence_key()
     except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError):
         return False
-    return physical_evidence_payload_valid(evidence, config_raw, cfg, now)
+    return physical_evidence_payload_valid(evidence, config_raw, cfg, now, evidence_key=evidence_key)
 
 
 def build_nft_transaction(table_exists: bool, rules: str) -> str:
