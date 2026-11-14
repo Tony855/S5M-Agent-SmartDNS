@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const smartDNSPerClientIngressContractVersion = 1
@@ -17,12 +19,21 @@ const smartDNSPerClientIngressContractVersion = 1
 // ingress controller has provisioned and attested the routed dataplane.
 // This validator is intentionally separate from validateSmartDNSConfig:
 // shared-mode policy remains unchanged and never accepts non-loopback binds.
+type smartDNSPerClientIngressMapping struct {
+	ClientCIDR      string `json:"client_cidr"`
+	ProxyName       string `json:"proxy_name"`
+	ListenerName    string `json:"listener_name"`
+	ListenerAddress string `json:"listener_address"`
+	ListenerPort    int    `json:"listener_port"`
+}
+
 type smartDNSPerClientIngressContract struct {
 	Version      int      `json:"version"`
 	Ready        bool     `json:"ready"`
 	IPv4Address  string   `json:"ipv4_address"`
 	IPv6Address  string   `json:"ipv6_address"`
 	ClientCIDRs  []string `json:"client_cidrs"`
+	Mappings     []smartDNSPerClientIngressMapping `json:"mappings"`
 }
 
 type smartDNSPerClientGroup struct {
@@ -78,6 +89,29 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 	if len(cidrs) == 0 {
 		return fmt.Errorf("per-client ingress contract has no client CIDRs")
 	}
+	if len(contract.Mappings) != len(cidrs) {
+		return fmt.Errorf("per-client ingress contract must bind exactly one proxy listener to every client CIDR")
+	}
+	mappingsByCIDR := make(map[string]smartDNSPerClientIngressMapping, len(contract.Mappings))
+	mappingsByListener := make(map[string]smartDNSPerClientIngressMapping, len(contract.Mappings))
+	usedListenerPorts := make(map[int]bool, len(contract.Mappings))
+	for _, mapping := range contract.Mappings {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(mapping.ClientCIDR))
+		if err != nil || prefix.String() != mapping.ClientCIDR || prefix != prefix.Masked() || !cidrs[mapping.ClientCIDR] {
+			return fmt.Errorf("per-client ingress mapping contains an invalid or unattested CIDR")
+		}
+		if mapping.ProxyName == "" || mapping.ProxyName != strings.TrimSpace(mapping.ProxyName) ||
+			mapping.ListenerAddress != "127.0.0.1" || mapping.ListenerPort < 1024 || mapping.ListenerPort > 65535 ||
+			mapping.ListenerName != fmt.Sprintf("s5m-smartdns-%d", mapping.ListenerPort) {
+			return fmt.Errorf("per-client ingress mapping contains an invalid proxy or loopback listener assignment")
+		}
+		if mappingsByCIDR[mapping.ClientCIDR].ClientCIDR != "" || mappingsByListener[mapping.ListenerName].ListenerName != "" || usedListenerPorts[mapping.ListenerPort] {
+			return fmt.Errorf("per-client ingress contract contains duplicate CIDR, listener name, or listener port")
+		}
+		mappingsByCIDR[mapping.ClientCIDR] = mapping
+		mappingsByListener[mapping.ListenerName] = mapping
+		usedListenerPorts[mapping.ListenerPort] = true
+	}
 
 	ingressAddresses := make(map[string]bool, 2)
 	if hasIPv4CIDR {
@@ -111,6 +145,7 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 	groups := make(map[string]*smartDNSPerClientGroup)
 	var activeGroup string
 	serverGroups := make(map[string]bool)
+	serverProxyByGroup := make(map[string]string)
 	upstreamCounts := make(map[string]int)
 
 	for lineNo, raw := range lines {
@@ -162,6 +197,10 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			expectedName := fmt.Sprintf("s5m-smartdns-%d", port)
 			if name != expectedName || proxies[name] != 0 {
 				return fmt.Errorf("line %d: proxy name/port mismatch or duplicate", lineNo+1)
+			}
+			mapping, ok := mappingsByListener[name]
+			if !ok || mapping.ListenerPort != port {
+				return fmt.Errorf("line %d: SOCKS endpoint is not bound to the contract-assigned listener", lineNo+1)
 			}
 			proxies[name] = port
 		case "group-begin":
@@ -252,6 +291,10 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 				return fmt.Errorf("line %d: invalid encrypted upstream: %w", lineNo+1, endpointErr)
 			}
 			serverGroups[group] = true
+			if existingProxy, ok := serverProxyByGroup[group]; ok && existingProxy != proxy {
+				return fmt.Errorf("line %d: one client group references multiple proxy listeners", lineNo+1)
+			}
+			serverProxyByGroup[group] = proxy
 			upstreamCounts[group]++
 			sharedConfig.WriteString(line + "\n")
 		default:
@@ -281,9 +324,12 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 			return fmt.Errorf("multiple groups map to the same client CIDR")
 		}
 		seenCIDRs[entry.cidr] = true
-		expectedProxy := strings.Replace(group, "s5m-smartdns-group-", "s5m-smartdns-", 1)
-		if _, ok := proxies[expectedProxy]; !ok {
-			return fmt.Errorf("group %s has no dedicated proxy listener", group)
+		mapping, ok := mappingsByCIDR[entry.cidr]
+		if !ok || group != fmt.Sprintf("s5m-smartdns-group-%d", mapping.ListenerPort) || serverProxyByGroup[group] != mapping.ListenerName {
+			return fmt.Errorf("group %s does not match its contract-bound client/proxy listener mapping", group)
+		}
+		if _, ok := proxies[mapping.ListenerName]; !ok {
+			return fmt.Errorf("group %s has no contract-assigned SOCKS listener", group)
 		}
 	}
 	for cidr := range cidrs {
@@ -305,6 +351,79 @@ func validateSmartDNSConfigWithIngress(data []byte, contract smartDNSPerClientIn
 	}
 	if err := validateSmartDNSConfig([]byte(sharedConfig.String())); err != nil {
 		return fmt.Errorf("shared resolver policy validation failed: %w", err)
+	}
+	return nil
+}
+
+// validateSmartDNSPerClientMihomoBindings binds each SmartDNS SOCKS endpoint
+// to the exact loopback-only Mihomo listener and outbound named by the ingress
+// contract. Both documents are applied in one durable transaction.
+func validateSmartDNSPerClientMihomoBindings(mihomoYAML []byte, contract smartDNSPerClientIngressContract) error {
+	if len(mihomoYAML) == 0 || len(mihomoYAML) > 2<<20 {
+		return fmt.Errorf("per-client Mihomo YAML is empty or exceeds 2 MiB")
+	}
+	type listener struct {
+		Name   string `yaml:"name"`
+		Type   string `yaml:"type"`
+		Listen string `yaml:"listen"`
+		Port   int    `yaml:"port"`
+		UDP    bool   `yaml:"udp"`
+		Proxy  string `yaml:"proxy"`
+	}
+	var document struct {
+		Proxies []struct {
+			Name string `yaml:"name"`
+		} `yaml:"proxies"`
+		Listeners []listener `yaml:"listeners"`
+	}
+	if err := yaml.Unmarshal(mihomoYAML, &document); err != nil {
+		return fmt.Errorf("decode Mihomo listener contract: %w", err)
+	}
+	proxyNames := make(map[string]bool, len(document.Proxies))
+	for _, proxy := range document.Proxies {
+		if strings.TrimSpace(proxy.Name) != "" {
+			proxyNames[proxy.Name] = true
+		}
+	}
+	expected := make(map[string]smartDNSPerClientIngressMapping, len(contract.Mappings))
+	expectedPorts := make(map[int]string, len(contract.Mappings))
+	for _, mapping := range contract.Mappings {
+		if mapping.ListenerName == "" || mapping.ListenerPort < 1024 || mapping.ListenerPort > 65535 ||
+			mapping.ListenerName != fmt.Sprintf("s5m-smartdns-%d", mapping.ListenerPort) ||
+			mapping.ListenerAddress != "127.0.0.1" || mapping.ProxyName == "" || !proxyNames[mapping.ProxyName] {
+			return fmt.Errorf("ingress contract contains an invalid Mihomo outbound/listener mapping")
+		}
+		if _, duplicate := expected[mapping.ListenerName]; duplicate || expectedPorts[mapping.ListenerPort] != "" {
+			return fmt.Errorf("ingress contract contains duplicate Mihomo listener assignments")
+		}
+		expected[mapping.ListenerName] = mapping
+		expectedPorts[mapping.ListenerPort] = mapping.ListenerName
+	}
+	if len(expected) == 0 {
+		return fmt.Errorf("ingress contract has no per-client Mihomo listener mappings")
+	}
+	found := make(map[string]bool, len(expected))
+	for _, item := range document.Listeners {
+		if strings.HasPrefix(item.Name, "s5m-smartdns-") {
+			mapping, ok := expected[item.Name]
+			if !ok {
+				return fmt.Errorf("Mihomo contains an unmanaged reserved SmartDNS listener %q", item.Name)
+			}
+			if found[item.Name] {
+				return fmt.Errorf("Mihomo contains duplicate SmartDNS listener %q", item.Name)
+			}
+			if item.Type != "socks" || item.Listen != mapping.ListenerAddress ||
+				item.Port != mapping.ListenerPort || !item.UDP || item.Proxy != mapping.ProxyName {
+				return fmt.Errorf("Mihomo listener %q does not exactly match its ingress contract assignment", item.Name)
+			}
+			found[item.Name] = true
+		}
+		if expectedName := expectedPorts[item.Port]; expectedName != "" && item.Name != expectedName {
+			return fmt.Errorf("Mihomo listener port %d collides with contract listener %q", item.Port, expectedName)
+		}
+	}
+	if len(found) != len(expected) {
+		return fmt.Errorf("Mihomo is missing one or more contract-bound SmartDNS SOCKS listeners")
 	}
 	return nil
 }
