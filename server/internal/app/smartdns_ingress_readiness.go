@@ -204,12 +204,33 @@ func validateSmartDNSIngressState(settings map[string]string, machineCode string
 }
 
 
+type SmartDNSAgentIngressMapping struct {
+	ClientCIDR string `json:"client_cidr"`
+	ProxyName string `json:"proxy_name"`
+	ListenerName string `json:"listener_name"`
+	ListenerAddress string `json:"listener_address"`
+	ListenerPort int `json:"listener_port"`
+}
+
 type SmartDNSAgentIngressContract struct {
 	Version int `json:"version"`
 	Ready bool `json:"ready"`
 	IPv4Address string `json:"ipv4_address,omitempty"`
 	IPv6Address string `json:"ipv6_address,omitempty"`
 	ClientCIDRs []string `json:"client_cidrs"`
+	Mappings []SmartDNSAgentIngressMapping `json:"mappings"`
+}
+
+func smartDNSAgentIngressMappingsFromRuntime(mappings []SmartDNSClientRuntimeMapping) []SmartDNSAgentIngressMapping {
+	result := make([]SmartDNSAgentIngressMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		result = append(result, SmartDNSAgentIngressMapping{
+			ClientCIDR: mapping.ClientCIDR, ProxyName: mapping.ProxyName,
+			ListenerName: mapping.ListenerName, ListenerAddress: mapping.ListenerAddress,
+			ListenerPort: mapping.ListenerPort,
+		})
+	}
+	return result
 }
 
 func buildSmartDNSAgentIngressContract(settings map[string]string, machineCode string, routing SmartDNSRoutingConfig, now time.Time) (SmartDNSAgentIngressContract, error) {
