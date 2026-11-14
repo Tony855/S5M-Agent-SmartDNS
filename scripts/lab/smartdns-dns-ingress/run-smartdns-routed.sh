@@ -2,7 +2,7 @@
 set -Eeuxo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 [[ "$EUID" -eq 0 ]] || { echo "run with sudo/root" >&2; exit 1; }
-for cmd in docker ip sysctl; do command -v "$cmd" >/dev/null || { echo "$cmd is required" >&2; exit 1; }; done
+for cmd in docker ip sysctl nft; do command -v "$cmd" >/dev/null || { echo "$cmd is required" >&2; exit 1; }; done
 [[ -x "$ROOT/.runtime/smartdns" ]] || { echo "missing $ROOT/.runtime/smartdns; build the pinned SmartDNS builder first" >&2; exit 1; }
 SERVER=s5m-smartdns-real-daemon-lab
 NET_IN=s5m-smartdns-real-ingress
@@ -17,9 +17,14 @@ LOG_DIR=""
 LIFECYCLE_DIR=""
 cleanup() {
   docker rm -f "$MIHOMO" "$PROXY_A" "$PROXY_B" "$SERVER" >/dev/null 2>&1 || true
+  docker network rm "$NET_IN" >/dev/null 2>&1 || true
+  if [[ -n "$LIFECYCLE_DIR" && -f "$LIFECYCLE_DIR/firewall.json" ]]; then
+    S5M_INGRESS_ATTESTATION="$LIFECYCLE_DIR/attestation.json" \
+    S5M_INGRESS_LOCK="$LIFECYCLE_DIR/controller.lock" \
+      python3 "$ROOT/../../host-ingress/controller.py" remove --attestation "$LIFECYCLE_DIR/attestation.json" >/dev/null 2>&1 || true
+  fi
   [[ -z "$LOG_DIR" ]] || rm -rf "$LOG_DIR"
   [[ -z "$LIFECYCLE_DIR" ]] || rm -rf "$LIFECYCLE_DIR"
-  docker network rm "$NET_IN" >/dev/null 2>&1 || true
   ip netns del "$NS_A" >/dev/null 2>&1 || true
   ip netns del "$NS_B" >/dev/null 2>&1 || true
   ip netns del "$NS_C" >/dev/null 2>&1 || true
@@ -80,6 +85,24 @@ cat >"$LIFECYCLE_DIR/firewall.json" <<EOF
 }
 EOF
 chmod 0600 "$LIFECYCLE_DIR/network.json" "$LIFECYCLE_DIR/firewall.json"
+# This same-host lab uses the real nftables table and live NIC state. Only the
+# systemd timer query is simulated because hosted runners do not run systemd;
+# no physical source-IP evidence is created or claimed.
+mkdir -m 0700 "$LIFECYCLE_DIR/mock-bin"
+cat >"$LIFECYCLE_DIR/mock-bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "$1" == "is-enabled" || "$1" == "is-active" ]]; then exit 0; fi
+exit 1
+SH
+chmod 0755 "$LIFECYCLE_DIR/mock-bin/systemctl"
+export PATH="$LIFECYCLE_DIR/mock-bin:$PATH"
+export S5M_INGRESS_CONFIG="$LIFECYCLE_DIR/firewall.json"
+export S5M_INGRESS_ATTESTATION="$LIFECYCLE_DIR/attestation.json"
+export S5M_INGRESS_EVIDENCE="$LIFECYCLE_DIR/physical-evidence.json"
+export S5M_INGRESS_EVIDENCE_KEY="$LIFECYCLE_DIR/evidence.key"
+export S5M_INGRESS_LOCK="$LIFECYCLE_DIR/controller.lock"
+python3 "$ROOT/../../host-ingress/controller.py" apply --config "$LIFECYCLE_DIR/firewall.json" --attestation "$LIFECYCLE_DIR/attestation.json"
 python3 "$ROOT/../../host-ingress/network-lifecycle.py" provision \
   --config "$LIFECYCLE_DIR/network.json" --firewall-config "$LIFECYCLE_DIR/firewall.json"
 docker exec -d "$SERVER" /bin/sh -c '/usr/sbin/smartdns -f -c /etc/smartdns/smartdns.conf >/tmp/smartdns.log 2>&1'
