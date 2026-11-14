@@ -84,13 +84,23 @@ class ControllerTests(unittest.TestCase):
             "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
             "probe_results_sha256": "c" * 64, "capture_manifest_sha256": "e" * 64,
         }
-        self.assertTrue(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001))
+        key = bytes.fromhex("ab" * 32)
+        evidence["evidence_hmac_sha256"] = mod.physical_evidence_signature(evidence, key)
+        self.assertTrue(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001, evidence_key=key))
         stale = dict(evidence); stale["verified_at"] = 0
-        self.assertFalse(mod.physical_evidence_payload_valid(stale, raw, cfg, now=1000 + 8 * 24 * 60 * 60))
+        stale["evidence_hmac_sha256"] = mod.physical_evidence_signature(stale, key)
+        self.assertFalse(mod.physical_evidence_payload_valid(stale, raw, cfg, now=1000 + 8 * 24 * 60 * 60, evidence_key=key))
         wrong = dict(evidence); wrong["config_sha256"] = "d" * 64
-        self.assertFalse(mod.physical_evidence_payload_valid(wrong, raw, cfg, now=1001))
+        wrong["evidence_hmac_sha256"] = mod.physical_evidence_signature(wrong, key)
+        self.assertFalse(mod.physical_evidence_payload_valid(wrong, raw, cfg, now=1001, evidence_key=key))
         incomplete = dict(evidence); incomplete["udp_ready"] = False
-        self.assertFalse(mod.physical_evidence_payload_valid(incomplete, raw, cfg, now=1001))
+        incomplete["evidence_hmac_sha256"] = mod.physical_evidence_signature(incomplete, key)
+        self.assertFalse(mod.physical_evidence_payload_valid(incomplete, raw, cfg, now=1001, evidence_key=key))
+        unsigned = dict(evidence); unsigned.pop("evidence_hmac_sha256")
+        self.assertFalse(mod.physical_evidence_payload_valid(unsigned, raw, cfg, now=1001, evidence_key=key))
+        tampered = dict(evidence); tampered["source_ip_preserved"] = False
+        self.assertFalse(mod.physical_evidence_payload_valid(tampered, raw, cfg, now=1001, evidence_key=key))
+        self.assertFalse(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001, evidence_key=bytes.fromhex("cd" * 32)))
     def test_systemd_preserves_attestation_directory_after_oneshot_exit(self):
         unit = pathlib.Path(__file__).with_name("s5m-agent-ingress.service").read_text()
         self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)
