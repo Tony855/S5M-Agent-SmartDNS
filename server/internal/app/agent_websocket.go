@@ -788,23 +788,9 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
 		return fmt.Errorf("机器码格式无效")
 	}
-	ingressContract, readinessErr := a.smartDNSIngressContractForMachine(machineCode)
-	usedProvisioningContract := false
-	if readinessErr != nil {
-		// A config.request is also the recovery channel after an Agent restart.
-		// If the full runtime gate fails, fall back only to the host-provisioning
-		// gate (fresh physical source-IP proof, exact firewall/CIDRs and observed
-		// ingress address). The Agent's joint transaction must then bind the exact
-		// SmartDNS sockets and pass real DNS probes before committing.
-		provisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
-		if provisionErr != nil {
-			return fmt.Errorf("per-client runtime readiness failed (%v); host ingress provisioning gate also failed: %w", readinessErr, provisionErr)
-		}
-		if provisioning == nil {
-			return readinessErr
-		}
-		ingressContract = provisioning
-		usedProvisioningContract = true
+	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
+	if err != nil {
+		return err
 	}
 	if ingressContract != nil {
 		return fmt.Errorf("per-client SmartDNS 配置必须通过主控生成的 Mihomo/SmartDNS 联合配置同步，不能单独排队")
@@ -1227,10 +1213,23 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // sendAgentWSConfig returns only the configuration assigned to the authenticated machine.
 func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, clientHash, clientSmartDNSHash string) error {
-	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
-	if err != nil {
-		return err
-	}
+\tingressContract, readinessErr := a.smartDNSIngressContractForMachine(machineCode)
+\tusedProvisioningContract := false
+\tif readinessErr != nil {
+\t\t// config.request is also the recovery channel after an Agent restart.
+\t\t// Fall back only to the host-provisioning gate; the Agent's joint
+\t\t// transaction must still bind the exact SmartDNS sockets and pass DNS
+\t\t// probes before committing. Host source-IP/firewall/CIDR gates stay intact.
+\t\tprovisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
+\t\tif provisionErr != nil {
+\t\t\treturn fmt.Errorf("per-client runtime readiness failed (%v); host ingress provisioning gate also failed: %w", readinessErr, provisionErr)
+\t\t}
+\t\tif provisioning == nil {
+\t\t\treturn readinessErr
+\t\t}
+\t\tingressContract = provisioning
+\t\tusedProvisioningContract = true
+\t}
 	if ingressContract != nil {
 		settings, settingsErr := a.store.GetSettings()
 		if settingsErr != nil { return settingsErr }
@@ -1327,8 +1326,9 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	}
 
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
-	// Per-client publication is stricter: the same fresh attestation that authorizes
-	// non-loopback listeners must also report a healthy SmartDNS runtime.
+	// Healthy runtimes use the full listener-ready contract. If the runtime is
+	// unhealthy, the host-only provisioning contract above lets this transaction
+	// repair it without relaxing the physical ingress readiness gate.
 	domesticListener, domesticReported := a.agentSmartDNSDomesticListenerStatus(machineCode)
 	smartDNSHealthy := a.agentHasHealthySmartDNS(machineCode)
 	if ingressContract != nil && !smartDNSHealthy && !usedProvisioningContract {
