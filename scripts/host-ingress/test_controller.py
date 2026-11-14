@@ -132,6 +132,17 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("tcp dport 6055 accept", "", 1)))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected + '    ip daddr 172.31.10.2 tcp dport 80 accept\\n'))
 
+    def test_live_nft_table_rejects_unscoped_accept_and_extra_chains(self):
+        self.write(self.valid())
+        cfg = mod.load_config(self.path, require_root=False)
+        expected = mod.render_nft(cfg)
+        unscoped = expected.replace("  }\\n}", "    tcp dport 6055 accept\\n  }\\n}")
+        self.assertFalse(mod.live_nft_table_matches(cfg, unscoped))
+        extra_chain = expected.replace("  }\\n}", '  }\\n  chain bypass {\\n    type filter hook forward priority 0; policy accept;\\n    tcp dport 6055 accept\\n  }\\n}')
+        self.assertFalse(mod.live_nft_table_matches(cfg, extra_chain))
+        extra_object = expected.replace("  }\\n}", "  set bypass { type ipv4_addr; elements = { 0.0.0.0 }; }\\n  }\\n}")
+        self.assertFalse(mod.live_nft_table_matches(cfg, extra_object))
+
     def test_interface_attestation_requires_up_nic_and_global_addresses_for_all_client_families(self):
         self.write(self.valid())
         cfg = mod.load_config(self.path, require_root=False)
