@@ -756,6 +756,7 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 		if len(mappings) != len(ingressContract.ClientCIDRs) {
 			return fmt.Errorf("per-client 代理映射与 ingress CIDR 数量不一致")
 		}
+		ingressContract.Mappings = smartDNSAgentIngressMappingsFromRuntime(mappings)
 	}
 	yml, err = applyAgentRuntimeDNS(yml, enabled, enabled)
 	if err != nil { return fmt.Errorf("生成 SmartDNS 切换 DNS 配置失败: %w", err) }
@@ -792,11 +793,7 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 		return err
 	}
 	if ingressContract != nil {
-		settings, settingsErr := a.store.GetSettings()
-		if settingsErr != nil { return settingsErr }
-		if strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false") {
-			return fmt.Errorf("该 Agent 已显式禁用 SmartDNS，不能直接应用 per-client 配置")
-		}
+		return fmt.Errorf("per-client SmartDNS 配置必须通过主控生成的 Mihomo/SmartDNS 联合配置同步，不能单独排队")
 	}
 	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
 		return fmt.Errorf("SmartDNS 配置不能为空且不能超过 8 KiB（Agent 安全限制）")
@@ -1312,6 +1309,7 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		if len(mappings) != len(ingressContract.ClientCIDRs) {
 			return fmt.Errorf("per-client 路由映射与已验收 ingress CIDR 数量不一致")
 		}
+		ingressContract.Mappings = smartDNSAgentIngressMappingsFromRuntime(mappings)
 	}
 
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
