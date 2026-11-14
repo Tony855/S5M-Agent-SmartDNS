@@ -187,6 +187,9 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 	if err := validator(smartDNSConfig); err != nil {
 		return fmt.Errorf("per-client SmartDNS ingress contract validation failed: %w", err)
 	}
+	if err := validateSmartDNSPerClientMihomoBindings(mihomoYAML, contract); err != nil {
+		return fmt.Errorf("per-client Mihomo listener contract validation failed: %w", err)
+	}
 	apply := func(data []byte, cleanupBackup bool) (string, error) {
 		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
 	}
