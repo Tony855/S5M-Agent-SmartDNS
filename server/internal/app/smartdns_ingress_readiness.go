@@ -278,9 +278,10 @@ func (a *App) smartDNSIngressContractForMachine(machineCode string) (*SmartDNSAg
 	return a.smartDNSIngressContractForMachineMode(machineCode, true)
 }
 
-// smartDNSIngressProvisioningContractForMachine is used only by the explicit
-// enable transition. It attests host routing/firewall readiness before Agent
-// applies the SmartDNS listeners; the Agent transaction must bind/probe 6055.
+// smartDNSIngressProvisioningContractForMachine is used by explicit enable
+// and config-sync recovery. It attests host routing/firewall readiness before
+// Agent applies or repairs SmartDNS listeners; the Agent transaction must
+// bind/probe 6055 before it commits.
 func (a *App) smartDNSIngressProvisioningContractForMachine(machineCode string) (*SmartDNSAgentIngressContract, error) {
 	return a.smartDNSIngressContractForMachineMode(machineCode, false)
 }

@@ -788,9 +788,23 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
 		return fmt.Errorf("机器码格式无效")
 	}
-	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
-	if err != nil {
-		return err
+	ingressContract, readinessErr := a.smartDNSIngressContractForMachine(machineCode)
+	usedProvisioningContract := false
+	if readinessErr != nil {
+		// A config.request is also the recovery channel after an Agent restart.
+		// If the full runtime gate fails, fall back only to the host-provisioning
+		// gate (fresh physical source-IP proof, exact firewall/CIDRs and observed
+		// ingress address). The Agent's joint transaction must then bind the exact
+		// SmartDNS sockets and pass real DNS probes before committing.
+		provisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
+		if provisionErr != nil {
+			return fmt.Errorf("per-client runtime readiness failed (%v); host ingress provisioning gate also failed: %w", readinessErr, provisionErr)
+		}
+		if provisioning == nil {
+			return readinessErr
+		}
+		ingressContract = provisioning
+		usedProvisioningContract = true
 	}
 	if ingressContract != nil {
 		return fmt.Errorf("per-client SmartDNS 配置必须通过主控生成的 Mihomo/SmartDNS 联合配置同步，不能单独排队")
@@ -1317,8 +1331,20 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	// non-loopback listeners must also report a healthy SmartDNS runtime.
 	domesticListener, domesticReported := a.agentSmartDNSDomesticListenerStatus(machineCode)
 	smartDNSHealthy := a.agentHasHealthySmartDNS(machineCode)
-	if ingressContract != nil && !smartDNSHealthy {
-		return fmt.Errorf("per-client ingress 已验收，但 Agent SmartDNS 健康状态未确认，拒绝发布")
+	if ingressContract != nil && !smartDNSHealthy && !usedProvisioningContract {
+		// A fresh host attestation is still mandatory, but an unhealthy local
+		// resolver must be repairable through this same WebSocket config path.
+		// Do not use the full listener-ready contract until the Agent reports
+		// healthy again; its transaction verifies the candidate before commit.
+		provisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
+		if provisionErr != nil {
+			return fmt.Errorf("per-client SmartDNS runtime is unhealthy and host ingress provisioning is not ready: %w", provisionErr)
+		}
+		if provisioning == nil {
+			return fmt.Errorf("per-client SmartDNS mode changed while preparing runtime recovery; retry config sync")
+		}
+		ingressContract = provisioning
+		usedProvisioningContract = true
 	}
 	if ingressContract != nil {
 		yml, err = applyAgentRuntimeDNS(yml, true, true)
