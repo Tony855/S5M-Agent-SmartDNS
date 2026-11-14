@@ -144,3 +144,13 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_evidence_signature_covers_all_attestation_claims(self):
+        key = bytes.fromhex("12" * 32)
+        evidence = {"version": 1, "source_ip_preserved": True, "udp_ready": True, "tcp_ready": True}
+        signature = VERIFY.physical_evidence_signature(evidence, key)
+        evidence["evidence_hmac_sha256"] = signature
+        self.assertEqual(VERIFY.physical_evidence_signature(evidence, key), signature)
+        evidence["source_ip_preserved"] = False
+        self.assertNotEqual(VERIFY.physical_evidence_signature(evidence, key), signature)
+
