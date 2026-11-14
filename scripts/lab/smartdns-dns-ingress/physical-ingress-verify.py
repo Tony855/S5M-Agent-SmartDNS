@@ -2,6 +2,7 @@
 """Verify real LAN source-IP preservation from paired host/container pcaps."""
 import argparse
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "host-ingress"))
-from controller import load_config, _secure_regular
+from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature
 
 
 def secure_read(path, require_root=True, max_bytes=2 * 1024 * 1024 * 1024):
@@ -268,6 +269,7 @@ def main():
     parser.add_argument("--container-pcap", type=Path, required=True)
     parser.add_argument("--probe-results", type=Path, required=True, help="JSONL copied from all physical clients")
     parser.add_argument("--output", type=Path, default=Path("/etc/s5m-agent-ingress/physical-evidence.json"))
+    parser.add_argument("--key", type=Path, default=EVIDENCE_KEY, help="root-only per-host evidence HMAC key")
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise ValueError("run verifier as root on the Docker host")
@@ -368,11 +370,13 @@ def main():
         "probe_results_sha256": hashlib.sha256(probe_results_raw).hexdigest(),
         "capture_manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
     }
+    evidence_key = read_evidence_key(args.key)
+    evidence["evidence_hmac_sha256"] = physical_evidence_signature(evidence, evidence_key)
     append_result(args.output, evidence)
     print("PHYSICAL_INGRESS_VERIFIED")
     print(f"evidence={args.output}")
     print(f"client_cidrs={len(cfg['networks'])} transports=udp,tcp")
-    print("source_ip_preserved=true (identical source tuple observed in host and Agent namespace captures)")
+    print("source_ip_preserved=true (identical source tuple observed in host and Agent namespace captures; evidence HMAC verified by host controller)")
     print("This verifies ingress packet delivery only; SmartDNS listener and proxy egress are separate checks.")
     return 0
 
