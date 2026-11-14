@@ -132,6 +132,25 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.live_nft_table_matches(cfg, expected.replace("tcp dport 6055 accept", "", 1)))
         self.assertFalse(mod.live_nft_table_matches(cfg, expected + '    ip daddr 172.31.10.2 tcp dport 80 accept\n'))
 
+    def test_live_nft_table_matches_nft_list_output_format(self):
+        self.write(self.valid())
+        cfg = mod.load_config(self.path, require_root=False)
+        rules = [
+            line.strip().replace("{ 192.168.50.0/24 }", "192.168.50.0/24").replace("{ 2001:db8:50::/64 }", "2001:db8:50::/64")
+            for line in mod.render_nft(cfg).splitlines()
+            if line.strip().startswith(("iifname ", "ip daddr ", "ip6 daddr "))
+        ]
+        live_output = "\\n".join([
+            f"table inet {mod.TABLE} {{",
+            '    comment "managed-by:s5m-agent-ingress-v1"',
+            "    chain forward_guard {",
+            "        type filter hook forward priority filter -5; policy accept;",
+            *[f"        {rule}" for rule in rules],
+            "    }",
+            "}",
+        ])
+        self.assertTrue(mod.live_nft_table_matches(cfg, live_output))
+
     def test_live_nft_table_rejects_unscoped_accept_and_extra_chains(self):
         self.write(self.valid())
         cfg = mod.load_config(self.path, require_root=False)
