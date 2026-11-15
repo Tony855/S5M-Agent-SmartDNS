@@ -434,6 +434,56 @@ func validateSmartDNSHostIngressObservation(attestation smartDNSHostIngressAttes
 	return nil
 }
 
+// validateSmartDNSIngressBeforeServiceStartWithState is the s6 SmartDNS
+// service guard. A persisted per-client config is not permission to bind after
+// reboot: the current root-owned host proof and current Agent interface state
+// must still match before SmartDNS is allowed to open the ingress sockets.
+func validateSmartDNSIngressBeforeServiceStartWithState(data []byte, attestation smartDNSHostIngressAttestation, observation smartDNSIngressObservation) error {
+	if !hasPerClientSmartDNSDirectives(data) {
+		return nil
+	}
+	contract := smartDNSPerClientIngressContract{
+		Version: smartDNSPerClientIngressContractVersion, Ready: true,
+		IPv4Address: attestation.IPv4Address, IPv6Address: attestation.IPv6Address,
+		ClientCIDRs: append([]string(nil), attestation.ClientCIDRs...),
+	}
+	if err := validateSmartDNSHostIngressContract(contract, attestation); err != nil {
+		return fmt.Errorf("persisted per-client SmartDNS config has no current host ingress proof: %w", err)
+	}
+	if err := validateSmartDNSConfigWithContractBoundIngress(data, contract); err != nil {
+		return fmt.Errorf("persisted per-client SmartDNS config no longer matches the attested ingress: %w", err)
+	}
+	if err := validateSmartDNSHostIngressObservation(attestation, observation); err != nil {
+		return fmt.Errorf("persisted per-client SmartDNS ingress address is not present on an active Agent interface: %w", err)
+	}
+	return nil
+}
+
+// validateSmartDNSIngressBeforeServiceStart is called by the supervised
+// SmartDNS run script on start and periodically while the daemon is running.
+// Shared-mode configs remain independent of the per-client host attestation.
+func validateSmartDNSIngressBeforeServiceStart() error {
+	if !smartDNSFeatureSupported() {
+		return fmt.Errorf("SmartDNS runtime is not included in this Agent image")
+	}
+	data, err := readSmartDNSConfig()
+	if err != nil {
+		return fmt.Errorf("read persisted SmartDNS config before service start: %w", err)
+	}
+	if !hasPerClientSmartDNSDirectives(data) {
+		return nil
+	}
+	attestation, err := readSmartDNSHostIngressAttestation()
+	if err != nil {
+		return fmt.Errorf("read current host ingress attestation before SmartDNS start: %w", err)
+	}
+	observation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+	if err != nil {
+		return fmt.Errorf("observe current Agent ingress interfaces before SmartDNS start: %w", err)
+	}
+	return validateSmartDNSIngressBeforeServiceStartWithState(data, attestation, observation)
+}
+
 // validateSmartDNSPerClientMihomoBindings binds each SmartDNS SOCKS endpoint
 // to the exact loopback-only Mihomo listener and outbound named by the ingress
 // contract. Both documents are applied in one durable transaction.
