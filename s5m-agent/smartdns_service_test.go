@@ -23,10 +23,10 @@ func TestSmartDNSServiceRunWaitsForIngressProofAndStopsWhenProofIsLost(t *testin
 	stopped := filepath.Join(dir, "smartdns.stopped")
 	mockAgent := filepath.Join(dir, "agent")
 	mockSmartDNS := filepath.Join(dir, "smartdns")
-	if err := os.WriteFile(mockAgent, []byte("#!/bin/sh\\n[ -f \\"$READY_FILE\\" ]\\n"), 0700); err != nil {
+	if err := os.WriteFile(mockAgent, []byte("#!/bin/sh\n[ -f \\"$READY_FILE\\" ]\n"), 0700); err != nil {
 		t.Fatalf("write mock Agent guard: %v", err)
 	}
-	mock := "#!/bin/sh\\ntrap 'printf stopped > \\"$STOPPED_FILE\\"; exit 0' TERM INT\\nprintf started > \\"$STARTED_FILE\\"\\nwhile :; do sleep 1; done\\n"
+	mock := "#!/bin/sh\ntrap 'printf stopped > \\"$STOPPED_FILE\\"; exit 0' TERM INT\nprintf started > \\"$STARTED_FILE\\"\nwhile :; do sleep 1; done\n"
 	if err := os.WriteFile(mockSmartDNS, []byte(mock), 0700); err != nil {
 		t.Fatalf("write mock SmartDNS: %v", err)
 	}
