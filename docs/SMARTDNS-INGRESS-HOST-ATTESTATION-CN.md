@@ -1,61 +1,85 @@
 # SmartDNS per-client：宿主机 ingress attestation 合同
 
-本文定义 Agent 容器只读挂载的宿主机证明文件。它是后续受限 host controller 的接口合同，不代表 host controller 已安装，也不代表 per-client 已可用。
+## 当前实现状态（2026-11-15，PR #242）
+
+仓库已包含 Agent 对 host attestation 的安全读取、root-only nftables controller、独立 routed Docker network lifecycle helper、物理抓包证据 verifier，以及 Master/Agent 的 readiness 和事务校验。PR #242 仍为 Draft；本文件描述的是代码合同，不表示目标生产主机或真实 LAN 已验收。
+
+**当前生产代码只允许 IPv4 per-client ingress。** 两个部署入口和 network lifecycle helper 都拒绝 IPv6 per-client provisioning。不要设置 ENABLE_PER_CLIENT_INGRESS_IPV6=1，也不要把 IPv6 CI/namespace 试验当成可用能力。IPv6 必须先完成安全的 Docker routed publication 设计、回归测试和真实 LAN 验收。
 
 ## 文件位置与权限
 
-宿主机路径：`/run/s5m-agent-ingress/ingress.json`
+宿主机路径：/run/s5m-agent-ingress/ingress.json。Agent 以只读 bind mount 读取同一路径。
 
-Agent 容器只读挂载到相同路径。文件必须满足：
+文件必须满足：
 
 - root 所有者、普通文件、不可为符号链接；
-- group/world 不可写，建议 mode `0600`；
-- JSON 大小不超过 8 KiB；
-- `updated_at` 是 Unix 秒，必须在 90 秒内刷新（允许最多 30 秒时钟偏差）；
-- 写入必须通过同目录临时文件 + fsync + rename 原子替换。
+- group/world 不可写，生产 writer 使用 mode 0600；
+- JSON 不超过 8 KiB；
+- updated_at 为 Unix 秒，Agent 要求 attestation 在 90 秒内刷新，并容忍有限时钟偏差；
+- host controller 通过同目录临时文件、fsync 和 rename 原子写入；
+- controller 每次 reconcile 前先使旧 attestation 失效，失败时不得残留 ready=true。
 
-## JSON schema 示例
+示例字段（当前 IPv4-only 配置）：
 
-```json
-{
-  "version": 1,
-  "updated_at": 1794560000,
-  "interface": "eth1",
-  "ipv4_address": "172.31.0.10",
-  "ipv6_address": null,
-  "client_cidrs": ["192.168.50.0/24"],
-  "source_ip_preserved": false,
-  "firewall_ready": true,
-  "firewall_persistent": true,
-  "udp_ready": true,
-  "tcp_ready": true
-}
-```
+- version：合同版本 1；
+- updated_at：最近一次 host controller reconcile 时间；
+- interface：实际接收 LAN 流量的宿主机物理接口；
+- ipv4_address：Agent routed ingress endpoint 的固定 IPv4；
+- ipv6_address：当前必须为 null；
+- client_cidrs：精确、规范化且互不重叠的可信客户端 IPv4 CIDR 集合；
+- source_ip_preserved、firewall_ready、firewall_persistent、udp_ready、tcp_ready：只能由 host controller 根据实际状态和已验证证据生成，不能由部署配置或人工布尔值代替。
 
-CIDR 必须规范化、不可重复或重叠；拒绝默认路由、loopback、link-local、multicast、unspecified 和 IPv4-mapped IPv6。**当前生产部署仅允许 IPv4 per-client ingress**：Docker 双网络 routed 模式的 IPv6 publish 实测仍分配非 loopback 宿主机端口，因此 Agent 部署脚本和 host network helper 对 IPv6 fail-closed。不要配置 IPv6 ingress CIDR，直到独立的无宿主机端口 IPv6 方案完成。
+## 证明来源
 
-## 证明含义
+host controller 的职责是：
 
-- `firewall_ready`：宿主机 nftables 规则只允许配置 CIDR 到该 Agent ingress IP 的 UDP/TCP 6055。
-- `firewall_persistent`：重启后由 systemd 持久恢复，且规则集已成功应用。
-- `udp_ready` / `tcp_ready`：routed Docker ingress 的对应协议链路已配置；这不是 SmartDNS 进程监听证明。
-- `source_ip_preserved`：必须由真实 LAN 客户端发起 UDP 与 TCP 探测，并在 Agent 容器侧观测到完全相同的客户端源 IP 后才能设为 true。仅 Docker 同机模拟、宿主机本地探测、socket 存在或防火墙规则存在都不能设为 true。
+1. 校验 root-owned 配置、接口状态、地址族和精确 CIDR 集合；
+2. 只管理专属 inet s5m_agent_ingress nftables table；
+3. 对每个配置的 client CIDR，仅允许从指定物理接口进入、目标为精确 ingress IP、协议为 UDP/TCP、目标端口为 6055 的流量；对同一 ingress IP 的其他来源/接口/端口流量执行 drop；
+4. read-back 比较完整 owned table，拒绝额外 chain、set、object 或任何未识别规则；
+5. 仅当 systemd timer 的 is-enabled 输出精确为 enabled 且 timer active 时，才报告持久化 firewall readiness；
+6. 读取 host 专属 root-only HMAC key 和物理验收 evidence，核对 evidence 签名、配置 SHA256、CIDR 覆盖、capture 时间窗、当前 Agent immutable container ID 和 routed Docker network ID；
+7. 每 30 秒刷新 attestation；物理 evidence 最长有效 7 天，配置、容器、网络或 endpoint 身份变化会使旧 evidence 失效。
 
-Agent 会独立枚举容器网络接口并读取 `/proc/net/udp{,6}` 与 `/proc/net/tcp{,6}`，确认 SmartDNS 6055 已绑定到合同中的精确地址。Master 还会验证新鲜心跳、精确 CIDR 集合、地址族和 SmartDNS bind 地址。
+firewall_ready 表示 live nftables allowlist 已精确应用；firewall_persistent 表示 systemd timer 会持久刷新。source_ip_preserved、udp_ready 和 tcp_ready 只有在真实 LAN 客户端的 UDP 与 TCP 数据包同时出现在宿主机物理接口和 Agent network namespace，且两侧源/目的地址与端口完全一致后才可为 true。单机 Docker namespace lab、宿主机本地探测、期望配置、socket 存在或手工设置布尔值都不能生成物理证明。
 
-## 安全状态机
+物理 evidence 由 scripts/lab/smartdns-dns-ingress/physical-ingress-verify.py 根据双端 pcap、capture manifest 和实际客户端 probe JSONL 生成，并使用该主机安装时创建的 evidence.key 签名。不得跨主机复制 key/evidence，不得手工编辑 evidence JSON。
 
-1. 管理员/独立部署流程先创建并附加 routed Docker network、分配稳定双栈地址并配置外部路由器静态路由；当前 host controller **不负责** Docker network 生命周期或路由器配置。随后 host controller 只安装/刷新专属 nftables allowlist，并写入 provisioning attestation；`source_ip_preserved=false` 时 Master 仍拒绝 provisioning。
-2. 完成真实 LAN UDP/TCP 源地址验证后，host controller 才能写入 `source_ip_preserved=true`。
-3. Master 下发包含合同的 Mihomo + SmartDNS 联合事务；Agent 严格验证配置，应用后确认 6055 UDP/TCP socket 精确绑定，再提交事务。
-4. Agent 新心跳报告 listener ready 后，Master 才允许常规 per-client 配置发布。
-5. 任何 attestation 过期、CIDR 变化、接口/地址变化、firewall 失效或监听丢失均必须 fail closed。
+## Routed Docker ingress 生命周期
 
-**注意：当前仓库已实现 Agent 对该文件的安全读取和状态合并，并新增受限 nftables host controller。物理证据必须由 verifier 根据真实 LAN 双端抓包生成，并使用安装器创建的宿主机专属 root-only HMAC key 签名；controller 同时验证签名、当前配置 SHA256、CIDR 覆盖和 7 天有效期。升级后旧版未签名证据会失效，必须重新执行 verifier。缺少签名或手工修改任一布尔值都会 fail closed。routed Docker lifecycle 和外部路由器静态路由仍未完成；没有真实 LAN 抓包证据时 per-client 必须保持禁用。**
+network-lifecycle.py 是独立的 root-only helper，与 nftables controller 共用 flock：
 
+- 创建/复用带所有权标签且配置完全匹配的专用 IPv4 routed bridge；
+- 设置固定 ingress IPv4、trusted_host_interfaces 和较低 gateway priority；
+- attach 前调用 controller 的只读 verify，要求 live nft table、接口、attestation、timer 均满足 provisioning 条件；
+- attach 后验证 Agent 仍只有普通 Docker bridge 作为默认 IPv4 egress route；
+- 重复 provision 幂等；attach/route 验证失败时回滚本次新增 endpoint/network；
+- uninstall 只移除确认为本项目所有、且没有意外容器连接的 routed endpoint/network；
+- 输出上游路由器静态路由命令，但不登录或修改路由器。
 
-## 受限宿主机防火墙控制器（新增）
+部署脚本的 per-client 开关默认关闭。启用 IPv4 后，6055/TCP 和 UDP 的宿主机随机端口映射仅绑定 127.0.0.1；routed endpoint 对应的 Docker HostPort 必须为空。远端 LAN 客户端通过路由器到 Docker ingress subnet 的静态路由直达容器 ingress IP，不经过 published-port NAT。6053 仍为容器内部共享 SmartDNS loopback 端口，DNS_PORT 保持 0；不得发布公网 DNS 端口。Agent 不挂载 Docker socket。
 
-仓库中的 `scripts/host-ingress/` 提供独立 systemd timer/service 和 nftables allowlist reconcile。它只管理专属 `inet s5m_agent_ingress` 表，不创建/附加 Docker network、不分配容器地址、不改宿主机路由或默认 bridge egress，也不接触 Docker socket。独立 network lifecycle helper 负责 IPv4 routed Docker network、稳定 ingress 地址和默认 bridge egress 保留，并输出上游路由器静态路由命令；IPv6 当前明确禁用。安装前必须由管理员按该目录 README 创建 root-owned `0600` 配置。
+路由器静态路由必须由管理员按 helper 输出手动配置。示例目标是 Docker ingress subnet，下一跳是 Docker host 在可信 LAN interface 上的地址；不能把 client CIDR 错当成目标路由网段。
 
-该组件只管理专属 nftables allowlist。`firewall_persistent` 取决于 systemd timer enabled/active；`udp_ready`、`tcp_ready`、`source_ip_preserved` 由七天有效期的物理验收证据驱动。它不会创建 routed Docker network 或配置外部路由器静态路由；这两项仍是独立阻断项。
+## Agent 与 Master 的二次验证
+
+Agent 不把 Master 合同中的 Ready=true 当成证据。每次 per-client 联合配置事务在任何文件/服务 mutation 前，重新读取 root-owned 新鲜 host attestation，要求 source-IP、firewall、持久化、UDP/TCP 物理证明为真，并将 ingress IP、CIDR 集合与 Master contract 精确比较；随后独立枚举 Agent namespace 的活动非 loopback 接口。候选配置启动后、写入事务 committed marker 前再次读取 attestation 和 interface state；若期间 proof 过期或地址消失，事务必须回滚。
+
+Agent 还会检查 SmartDNS 6055 UDP/TCP socket inode 确实由同一个 SmartDNS PID 持有，并只允许绑定合同中的精确 ingress IP，不允许 wildcard。s6 service 在启动前验证持久化 per-client 配置，并运行期间定期复查；attestation 过期或地址丢失时停止 SmartDNS child process。shared-mode 使用原有 validator/runtime，不因 per-client 功能放宽全局校验。
+
+Master 保留现有 ingress readiness gate：普通 per-client 发布必须有新鲜 Agent 心跳、source-IP proof、精确防火墙 CIDR、持久化状态、地址族和 SmartDNS exact bind。WebSocket 的 provisioning recovery 只允许在完整 host proof 存在时下发合同；直接 SmartDNS command path 仍走完整 readiness gate。Master 通用设置 API 目前仍拒绝用户保存 per_client；在现场验收和发布批准前不得移除此拒绝。PR #217/#218 保持 Draft。
+
+## 必须完成的现场验收
+
+以下项目不能由 GitHub Actions 或同机 namespace 模拟替代：
+
+1. 在目标 Docker 主机安装 controller，检查 nftables 规则、systemd timer、provision/uninstall 和主机重启后的恢复；
+2. 在实际上游 LAN 路由器添加 helper 输出的静态路由；
+3. 从每个真实 IPv4 client CIDR 至少一台设备发起 UDP 与 TCP probe，确认 host LAN pcap 和 Agent namespace pcap 的源 IP/端口完全一致；
+4. 在 SmartDNS 启用后，从每个真实客户端验证 A/AAAA、UDP/TCP、预期 CIDR group 和未映射客户端 fail-closed；
+5. 对真实 Mihomo listener 执行代理 CONNECT，验证真实 DoT 上游路径和外部出口 IP 与预期代理逐一对应；
+6. 完成 TUN on/off、SmartDNS enable/disable、Agent 断线重连、Master/Agent 重启、重复命令、配置事务中断和 rollback 矩阵。
+
+**IPv6 目前不具备可部署路径。** 在独立的无公网 host-port routed IPv6 方案完成前，不配置 IPv6 client CIDR、不发布 IPv6 6055、不宣称 IPv6 source preservation。未来启用前必须重复完成 IPv6 UDP/TCP 双端抓包和真实路由器现场验收。
+
+CI 的 Server tests/race/vet、Agent tests/race/vet、AMD64/ARM64 build/runtime smoke、installer validation、host lifecycle lab 和 real SmartDNS daemon lab 只证明代码与隔离 runner 行为。它们不证明物理 LAN 路由、真实代理 CONNECT/DoT 或公网出口 IP。
