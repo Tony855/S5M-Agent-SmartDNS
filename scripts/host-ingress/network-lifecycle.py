@@ -2,7 +2,8 @@
 """Provision the dedicated routed Docker bridge for S5M Agent DNS ingress.
 
 Run only on the Docker host as root. This helper never runs in the Agent
-container, never changes host routes, and never publishes DNS ports.
+container and never changes host routes. Host-published 6055 ports are
+ephemeral and loopback-only; remote clients use direct routed ingress.
 """
 from __future__ import annotations
 import argparse, fcntl, ipaddress, json, os, re, stat, subprocess, sys
@@ -228,17 +229,22 @@ def validate_dns_port_bindings(container: dict, cfg: dict) -> None:
         ipv4_loopback=[x for x in entries if x.get("HostIp")=="127.0.0.1" and str(x.get("HostPort","")).isdigit() and 1<=int(x["HostPort"])<=65535]
         if len(ipv4_loopback)!=1:
             raise LifecycleError(f"DNS 6055/{proto} must have exactly one IPv4 host mapping bound to 127.0.0.1 with an allocated ephemeral port; found {entries!r}")
-        routed_v4=[x for x in entries if x.get("HostIp")=="0.0.0.0" and x.get("HostPort","") in ("",None)]
-        routed_v6=[x for x in entries if x.get("HostIp")=="::" and x.get("HostPort","") in ("",None)]
         allowed=[*ipv4_loopback]
+        if 6 in cfg["_networks"]:
+            ipv6_loopback=[x for x in entries if x.get("HostIp")=="::1" and str(x.get("HostPort","")).isdigit() and 1<=int(x["HostPort"])<=65535]
+            if len(ipv6_loopback)!=1:
+                raise LifecycleError(f"DNS 6055/{proto} must have exactly one IPv6 host mapping bound to ::1 with an allocated ephemeral port; found {entries!r}")
+            allowed.extend(ipv6_loopback)
         if routed_attached:
+            routed_v4=[x for x in entries if x.get("HostIp")=="0.0.0.0" and x.get("HostPort","") in ("",None)]
             if len(routed_v4)!=1:
                 raise LifecycleError(f"routed IPv4 DNS 6055/{proto} mapping must have an empty host port; found {entries!r}")
             allowed.extend(routed_v4)
-        if 6 in cfg["_networks"]:
-            if len(routed_v6)!=1:
-                raise LifecycleError(f"routed IPv6 DNS 6055/{proto} mapping must have an empty host port; refuse public IPv6 exposure")
-            allowed.extend(routed_v6)
+            if 6 in cfg["_networks"]:
+                routed_v6=[x for x in entries if x.get("HostIp")=="::" and x.get("HostPort","") in ("",None)]
+                if len(routed_v6)!=1:
+                    raise LifecycleError(f"routed IPv6 DNS 6055/{proto} mapping must have an empty host port; refuse public IPv6 exposure")
+                allowed.extend(routed_v6)
         if len(entries)!=len(allowed):
             raise LifecycleError(f"DNS 6055/{proto} contains an unexpected or public host binding: {entries!r}")
 
@@ -255,11 +261,11 @@ def preserves_single_default_route(routes, gateway):
     return len(entries)==1 and f"via {gateway}" in entries[0]
 
 def routeros_v7_route(subnet, next_hop):
-    return f'/ip route add dst-address={subnet} gateway={next_hop} comment="S5M-Agent DNS ingress"'
+    family = 6 if ":" in str(subnet) or ":" in str(next_hop) else 4
+    command = "/ipv6 route add" if family == 6 else "/ip route add"
+    return f'{command} dst-address={subnet} gateway={next_hop} comment="S5M-Agent DNS ingress"'
 
 def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json")):
-    if 6 in cfg["_networks"]:
-        raise LifecycleError("IPv6 per-client ingress is disabled: Docker dual-network routed publication allocated a non-loopback IPv6 host port in validation; use IPv4-only ingress until a no-host-port IPv6 path is implemented")
     with host_ingress_lock():
         verify_live_firewall(firewall_config_path)
         _provision_locked(cfg)
@@ -336,8 +342,7 @@ def _provision_locked(cfg):
     print(f"ROUTED_INGRESS_READY network={cfg['network']} container={cfg['container']} default_bridge_egress=preserved")
     for family,(subnet,_,_) in cfg["_networks"].items():
         print(f"UPSTREAM_ROUTER_STATIC_ROUTE IPv{family}: route {subnet} via {next_hops[family]} on {cfg['interface']}")
-        if family == 4:
-            print(f"ROUTEROS_V7_COMMAND: {routeros_v7_route(subnet,next_hops[family])}")
+        print(f"ROUTEROS_V7_COMMAND: {routeros_v7_route(subnet,next_hops[family])}")
     print("Apply the displayed static routes on the upstream router; this helper does not change router or host routes.")
     print("Physical LAN source-IP acceptance remains a separate mandatory step.")
 
