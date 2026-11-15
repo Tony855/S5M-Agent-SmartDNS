@@ -260,7 +260,7 @@ func TestSmartDNSServiceStartupGuardRequiresFreshProofForPerClientConfig(t *test
 		t.Fatal("per-client SmartDNS service start accepted without the attested ingress IP on an active interface")
 	}
 
-	sharedConfig := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\\n")
+	sharedConfig := []byte("bind 127.0.0.1:6053\nbind-tcp 127.0.0.1:6053\n")
 	if err := validateSmartDNSIngressBeforeServiceStartWithState(sharedConfig, smartDNSHostIngressAttestation{}, smartDNSIngressObservation{}); err != nil {
 		t.Fatalf("shared-mode SmartDNS should not depend on per-client host ingress proof: %v", err)
 	}
