@@ -54,3 +54,5 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Probe routed IPv6 with loopback-only host publication
         run: sudo bash scripts/lab/smartdns-dns-ingress/probe-ipv6-routed-loopback.sh
+      - name: Run dual-stack routed network lifecycle integration
+        run: sudo env S5M_TEST_IPV6=1 bash scripts/lab/smartdns-dns-ingress/test-network-lifecycle-docker.sh
