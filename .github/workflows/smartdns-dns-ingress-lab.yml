@@ -23,6 +23,7 @@ jobs:
           bash -n scripts/lab/smartdns-dns-ingress/physical-proxy-egress-verify.sh
           bash scripts/lab/smartdns-dns-ingress/physical-proxy-egress-verify.sh --help >/dev/null
           bash -n scripts/lab/smartdns-dns-ingress/test-network-lifecycle-docker.sh
+          bash -n scripts/lab/smartdns-dns-ingress/probe-ipv6-routed-loopback.sh
           bash -n scripts/deploy-agent.sh
           bash -n scripts/deploy-s5m-agent.sh
           bash -n scripts/host-ingress/install-host-controller.sh
@@ -45,3 +46,11 @@ jobs:
           bash scripts/lab/smartdns-dns-ingress/run.sh
           sudo bash scripts/lab/smartdns-dns-ingress/run-routed.sh
           sudo bash scripts/lab/smartdns-dns-ingress/test-network-lifecycle-docker.sh
+
+  ipv6-loopback-publication-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Probe routed IPv6 with loopback-only host publication
+        run: sudo bash scripts/lab/smartdns-dns-ingress/probe-ipv6-routed-loopback.sh
