@@ -24,7 +24,16 @@ def _valid_ephemeral_port(value):
 
 def _single_default_route(raw, gateway):
     routes = [line.strip() for line in str(raw).splitlines() if line.strip()]
-    return len(routes) == 1 and f"via {gateway}" in routes[0]
+    if len(routes) != 1:
+        return False
+    fields = routes[0].split()
+    if not fields or fields[0] != "default":
+        return False
+    try:
+        via_index = fields.index("via")
+    except ValueError:
+        return False
+    return via_index + 1 < len(fields) and fields[via_index + 1] == gateway
 
 
 def evaluate_routed_ipv6_publication(inspect_json, routes4, routes6):

@@ -89,6 +89,14 @@ class RoutedIPv6PublicationTests(unittest.TestCase):
         )
         self.assertTrue(any("IPv4 default route" in item for item in errors))
 
+    def test_gateway_prefix_collision_fails(self):
+        errors, _, _, _ = evaluate_routed_ipv6_publication(
+            safe_inspect(),
+            "default via 172.17.0.10 dev eth0\n",
+            "default via fd00:172:17::1 dev eth0\n",
+        )
+        self.assertTrue(any("IPv4 default route" in item for item in errors))
+
     def test_missing_ipv6_default_route_fails(self):
         errors, _, _, _ = evaluate_routed_ipv6_publication(
             safe_inspect(),
