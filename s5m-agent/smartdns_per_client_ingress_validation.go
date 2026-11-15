@@ -450,7 +450,7 @@ func validateSmartDNSIngressBeforeServiceStartWithState(data []byte, attestation
 	if err := validateSmartDNSHostIngressContract(contract, attestation); err != nil {
 		return fmt.Errorf("persisted per-client SmartDNS config has no current host ingress proof: %w", err)
 	}
-	if err := validateSmartDNSConfigWithContractBoundIngress(data, contract); err != nil {
+	if err := validateSmartDNSConfigWithIngress(data, contract); err != nil {
 		return fmt.Errorf("persisted per-client SmartDNS config no longer matches the attested ingress: %w", err)
 	}
 	if err := validateSmartDNSHostIngressObservation(attestation, observation); err != nil {
