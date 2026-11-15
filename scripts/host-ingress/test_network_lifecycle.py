@@ -61,11 +61,15 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg))
 
 class NetworkSafetyTests(unittest.TestCase):
-    def test_ipv6_provisioning_fails_closed_before_host_mutation(self):
+    def test_dual_stack_provision_still_requires_live_firewall_before_mutation(self):
         cfg=self.write_config()
-        with patch.object(nl,"run") as command:
-            with self.assertRaises(nl.LifecycleError): nl.provision(cfg)
-            command.assert_not_called()
+        firewall=Path("/tmp/firewall.json")
+        with patch.object(nl,"host_ingress_lock",return_value=nullcontext()):
+            with patch.object(nl,"verify_live_firewall") as verify:
+                with patch.object(nl,"_provision_locked") as provision:
+                    nl.provision(cfg,firewall)
+                    verify.assert_called_once_with(firewall)
+                    provision.assert_called_once_with(cfg)
 
     def test_provision_refuses_to_attach_before_live_firewall_verification(self):
         cfg=self.write_config()
@@ -97,18 +101,29 @@ class NetworkSafetyTests(unittest.TestCase):
         container["NetworkSettings"]["Ports"]["6055/udp"][1]["HostPort"]="32770"
         with self.assertRaises(nl.LifecycleError): nl.validate_dns_port_bindings(container,cfg)
 
-    def test_dual_stack_dns_port_mapping_has_no_public_ipv6_host_port(self):
+    def test_dual_stack_loopback_mappings_are_required_before_attach(self):
         cfg=self.write_config()
-        container={"NetworkSettings":{"Networks":{},
-            "Ports":{}}}
+        container={"NetworkSettings":{"Networks":{},"Ports":{}}}
         for proto in ("udp","tcp"):
             container["NetworkSettings"]["Ports"][f"6055/{proto}"]=[
                 {"HostIp":"127.0.0.1","HostPort":"32768"},
+                {"HostIp":"::1","HostPort":"32768"}]
+        nl.validate_dns_port_bindings(container,cfg)
+        container["NetworkSettings"]["Ports"]["6055/tcp"][1]={"HostIp":"::","HostPort":"32770"}
+        with self.assertRaises(nl.LifecycleError): nl.validate_dns_port_bindings(container,cfg)
+
+    def test_dual_stack_routed_mappings_have_no_public_host_port_after_attach(self):
+        cfg=self.write_config()
+        container={"NetworkSettings":{"Networks":{},"Ports":{}}}
+        for proto in ("udp","tcp"):
+            container["NetworkSettings"]["Ports"][f"6055/{proto}"]=[
+                {"HostIp":"127.0.0.1","HostPort":"32768"},
+                {"HostIp":"::1","HostPort":"32768"},
                 {"HostIp":"0.0.0.0","HostPort":""},
                 {"HostIp":"::","HostPort":""}]
         container["NetworkSettings"]["Networks"][cfg["network"]]={"IPAddress":"172.31.10.2","GlobalIPv6Address":"2001:db8:31::2"}
         nl.validate_dns_port_bindings(container,cfg)
-        container["NetworkSettings"]["Ports"]["6055/tcp"][1]["HostPort"]="32770"
+        container["NetworkSettings"]["Ports"]["6055/tcp"][3]["HostPort"]="32770"
         with self.assertRaises(nl.LifecycleError): nl.validate_dns_port_bindings(container,cfg)
 
     def test_host_next_hop_requires_global_address_for_each_family(self):
@@ -127,6 +142,8 @@ class NetworkSafetyTests(unittest.TestCase):
     def test_routeros_static_route_command_targets_docker_ingress_subnet(self):
         self.assertEqual(nl.routeros_v7_route("172.31.10.0/24","192.168.1.2"),
             '/ip route add dst-address=172.31.10.0/24 gateway=192.168.1.2 comment="S5M-Agent DNS ingress"')
+        self.assertEqual(nl.routeros_v7_route("fd00:172:31::/64","fd00:192:168::2"),
+            '/ipv6 route add dst-address=fd00:172:31::/64 gateway=fd00:192:168::2 comment="S5M-Agent DNS ingress"')
 
     def test_single_default_route_must_use_bridge_gateway(self):
         self.assertTrue(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0"],"172.17.0.1"))
