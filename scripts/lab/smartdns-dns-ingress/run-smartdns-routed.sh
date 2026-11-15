@@ -92,7 +92,8 @@ mkdir -m 0700 "$LIFECYCLE_DIR/mock-bin"
 cat >"$LIFECYCLE_DIR/mock-bin/systemctl" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-if [[ "$1" == "is-enabled" || "$1" == "is-active" ]]; then exit 0; fi
+if [[ "$1" == "is-enabled" ]]; then printf 'enabled\\n'; exit 0; fi
+if [[ "$1" == "is-active" ]]; then exit 0; fi
 exit 1
 SH
 chmod 0755 "$LIFECYCLE_DIR/mock-bin/systemctl"
