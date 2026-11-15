@@ -277,7 +277,10 @@ save_config() {
 validate_ingress_options() {
   [[ "$ENABLE_PER_CLIENT_INGRESS" == "0" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS 必须是 0 或 1"; return 1; }
   [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS_IPV6 必须是 0 或 1"; return 1; }
-  [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" ]] || { err "IPv6 per-client ingress 当前被安全策略禁用：Docker routed 双网络会分配 IPv6 宿主机端口，存在公网暴露风险"; return 1; }
+  if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" && "$ENABLE_PER_CLIENT_INGRESS" != "1" ]]; then
+    err "ENABLE_PER_CLIENT_INGRESS_IPV6=1 需要同时启用 ENABLE_PER_CLIENT_INGRESS"
+    return 1
+  fi
   if [[ "$IMAGE" == "$NO_SMARTDNS_IMAGE" && "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
     err "当前选择的是无 SmartDNS 镜像，不能启用 per-client DNS ingress"
     return 1
@@ -295,8 +298,32 @@ validate_ingress_options() {
     ingress_help="$(docker network connect --help 2>&1)" || true
     [[ "$ingress_help" == *"--gw-priority"* ]] || { err "当前 Docker CLI 不支持 network connect --gw-priority"; return 1; }
   fi
-  # IPv6 DNS publication remains disabled until a no-host-port routed
-  # mapping is proven across Docker bridge gateway modes.
+  if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
+    python3 - /etc/s5m-agent-ingress/network.json <<'PY'
+import ipaddress, json, os, stat, subprocess, sys
+path = sys.argv[1]
+try:
+    st = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
+        raise ValueError("network.json must be root-owned mode 0600 or stricter")
+    with open(path, encoding="utf-8") as stream:
+        cfg = json.load(stream)
+    if not all(cfg.get(key) for key in ("ipv6_subnet", "ipv6_gateway", "ipv6_address")):
+        raise ValueError("network.json must define the IPv6 subnet, gateway and ingress address")
+    if not any(ipaddress.ip_network(item, strict=True).version == 6 for item in cfg.get("client_cidrs", [])):
+        raise ValueError("network.json must include at least one IPv6 client CIDR")
+    bridge = json.loads(subprocess.check_output(["docker", "network", "inspect", "bridge"], text=True))[0]
+    if not any(":" in item.get("Subnet", "") and item.get("Gateway") for item in bridge.get("IPAM", {}).get("Config", [])):
+        raise ValueError("Docker default bridge must have an IPv6 gateway to preserve IPv6 egress")
+    addresses = json.loads(subprocess.check_output(["ip", "-j", "addr", "show", "dev", cfg["interface"]], text=True))
+    if not any(item.get("family") == "inet6" and item.get("scope") == "global" for dev in addresses for item in dev.get("addr_info", [])):
+        raise ValueError("trusted host interface must have a global IPv6 address")
+except Exception as exc:
+    print(f"IPv6 ingress preflight failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+    [[ "$?" == "0" ]] || { err "IPv6 routed ingress prerequisites are not satisfied"; return 1; }
+  fi
 }
 
 validate_ingress_port_publication() {
@@ -311,14 +338,14 @@ try:
         entries = ports.get(f"6055/{proto}") or []
         expected = 2 if ipv6 else 1
         if len(entries) != expected:
-            raise ValueError(f"6055/{proto}: expected {expected} safe mapping(s), got {entries}")
-        v4 = [x for x in entries if x.get("HostIp") == "127.0.0.1" and str(x.get("HostPort", "")).isdigit()]
+            raise ValueError(f"6055/{proto}: expected {expected} loopback-only mapping(s) before routed attach, got {entries}")
+        v4 = [x for x in entries if x.get("HostIp") == "127.0.0.1" and str(x.get("HostPort", "")).isdigit() and 1 <= int(x["HostPort"]) <= 65535]
         if len(v4) != 1:
             raise ValueError(f"6055/{proto}: IPv4 mapping must bind only to 127.0.0.1 with ephemeral host port")
         if ipv6:
-            v6 = [x for x in entries if x.get("HostIp") == "::" and x.get("HostPort", "") in ("", None)]
+            v6 = [x for x in entries if x.get("HostIp") == "::1" and str(x.get("HostPort", "")).isdigit() and 1 <= int(x["HostPort"]) <= 65535]
             if len(v6) != 1:
-                raise ValueError(f"6055/{proto}: IPv6 routed mapping must not allocate a host port")
+                raise ValueError(f"6055/{proto}: IPv6 mapping must bind only to ::1 with ephemeral host port")
 except Exception as exc:
     print(f"unsafe per-client DNS port publication: {exc}", file=sys.stderr)
     sys.exit(1)
@@ -568,8 +595,9 @@ do_recreate() {
   local -a effective_port_map=("${PORT_MAP[@]}")
   if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
     effective_port_map+=("-p" "127.0.0.1::6055/udp" "-p" "127.0.0.1::6055/tcp")
-    # IPv6 publication is intentionally omitted until a safe routed-only
-    # mapping can be proven without allocating a public host port.
+    if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
+      effective_port_map+=("-p" "[::1]::6055/udp" "-p" "[::1]::6055/tcp")
+    fi
   fi
 
   log "启动新容器 ${CONTAINER_NAME}"
@@ -788,8 +816,12 @@ toggle_per_client_ingress() {
   read -rp "启用 per-client routed DNS ingress？[y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
     ENABLE_PER_CLIENT_INGRESS="1"
-    ENABLE_PER_CLIENT_INGRESS_IPV6="0"
-    warn "IPv6 per-client ingress 当前不可安全发布；本次仅启用 IPv4 ingress"
+    read -rp "同时启用 IPv6 ingress？（要求 Docker default bridge 与可信接口均已启用 IPv6）[y/N]: " ipv6_ans
+    if [[ "$ipv6_ans" =~ ^[Yy]$ ]]; then
+      ENABLE_PER_CLIENT_INGRESS_IPV6="1"
+    else
+      ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+    fi
     if ! validate_ingress_options; then
       ENABLE_PER_CLIENT_INGRESS="0"
       ENABLE_PER_CLIENT_INGRESS_IPV6="0"
