@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validPerClientIngressFixture() ([]byte, smartDNSPerClientIngressContract) {
@@ -183,6 +184,60 @@ func TestApplyAgentConfigTransactionWithIngressRejectsUnreadyContractBeforeMutat
 	}
 }
 
+
+func validSmartDNSHostIngressAttestationFixture() smartDNSHostIngressAttestation {
+	return smartDNSHostIngressAttestation{
+		Version: 1, UpdatedAt: time.Now().Unix(), Interface: "eth1",
+		IPv4Address: "172.31.0.10", ClientCIDRs: []string{"192.168.50.10/32"},
+		SourceIPPreserved: true, FirewallReady: true, FirewallPersistent: true,
+		UDPReady: true, TCPReady: true,
+	}
+}
+
+func TestValidateSmartDNSHostIngressContractRequiresFreshLocalPhysicalProof(t *testing.T) {
+	_, contract := validPerClientIngressFixture()
+	attestation := validSmartDNSHostIngressAttestationFixture()
+	if err := validateSmartDNSHostIngressContract(contract, attestation); err != nil {
+		t.Fatalf("fresh matching host attestation rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		mutate func(*smartDNSHostIngressAttestation)
+	}{
+		{name: "source IP preservation missing", mutate: func(a *smartDNSHostIngressAttestation) { a.SourceIPPreserved = false }},
+		{name: "firewall missing", mutate: func(a *smartDNSHostIngressAttestation) { a.FirewallReady = false }},
+		{name: "firewall persistence missing", mutate: func(a *smartDNSHostIngressAttestation) { a.FirewallPersistent = false }},
+		{name: "UDP ingress missing", mutate: func(a *smartDNSHostIngressAttestation) { a.UDPReady = false }},
+		{name: "TCP ingress missing", mutate: func(a *smartDNSHostIngressAttestation) { a.TCPReady = false }},
+		{name: "stale host proof", mutate: func(a *smartDNSHostIngressAttestation) { a.UpdatedAt = time.Now().Add(-2 * time.Minute).Unix() }},
+		{name: "different ingress address", mutate: func(a *smartDNSHostIngressAttestation) { a.IPv4Address = "172.31.0.11" }},
+		{name: "different source CIDR", mutate: func(a *smartDNSHostIngressAttestation) { a.ClientCIDRs = []string{"192.168.51.10/32"} }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := validSmartDNSHostIngressAttestationFixture()
+			tt.mutate(&changed)
+			if err := validateSmartDNSHostIngressContract(contract, changed); err == nil {
+				t.Fatal("Master Ready contract bypassed missing, stale, or mismatched local host proof")
+			}
+		})
+	}
+}
+
+func TestValidateSmartDNSHostIngressObservationRequiresActualIngressAddress(t *testing.T) {
+	attestation := validSmartDNSHostIngressAttestationFixture()
+	observation := smartDNSIngressObservation{
+		AddressInterfaces: map[string]string{"172.31.0.10": "eth1"},
+	}
+	if err := validateSmartDNSHostIngressObservation(attestation, observation); err != nil {
+		t.Fatalf("observed ingress address rejected: %v", err)
+	}
+	observation.AddressInterfaces = map[string]string{"172.31.0.11": "eth1"}
+	if err := validateSmartDNSHostIngressObservation(attestation, observation); err == nil {
+		t.Fatal("contract accepted an ingress IP absent from active Agent interfaces")
+	}
+}
 
 func TestSmartDNSIngressContractJSONSchema(t *testing.T) {
 	want := smartDNSPerClientIngressContract{
