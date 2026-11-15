@@ -19,7 +19,7 @@ def safe_inspect():
             {"HostIp": "::", "HostPort": ""},
         ],
     }
-    return json.dumps({
+    return json.dumps([{
         "NetworkSettings": {
             "Ports": ports,
             "Networks": {
@@ -29,7 +29,7 @@ def safe_inspect():
                 }
             },
         }
-    })
+    }])
 
 
 class RoutedIPv6PublicationTests(unittest.TestCase):
@@ -64,6 +64,16 @@ class RoutedIPv6PublicationTests(unittest.TestCase):
     def test_missing_or_duplicate_host_binding_fails(self):
         inspect = json.loads(safe_inspect())
         inspect[0]["NetworkSettings"]["Ports"]["6055/tcp"].pop()
+        errors, _, _, _ = evaluate_routed_ipv6_publication(
+            json.dumps(inspect),
+            "default via 172.17.0.1 dev eth0\n",
+            "default via fd00:172:17::1 dev eth0\n",
+        )
+        self.assertTrue(any("unexpected 6055 host bindings" in item for item in errors))
+
+    def test_non_dictionary_binding_fails_closed(self):
+        inspect = json.loads(safe_inspect())
+        inspect[0]["NetworkSettings"]["Ports"]["6055/udp"].append("unexpected")
         errors, _, _, _ = evaluate_routed_ipv6_publication(
             json.dumps(inspect),
             "default via 172.17.0.1 dev eth0\n",

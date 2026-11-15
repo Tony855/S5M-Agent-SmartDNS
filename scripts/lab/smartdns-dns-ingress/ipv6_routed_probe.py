@@ -50,9 +50,12 @@ def evaluate_routed_ipv6_publication(inspect_json, routes4, routes6):
         if not isinstance(entries, list):
             errors.append(f"{proto}: Docker port bindings are not a list")
             continue
+        if len(entries) != 4 or any(not isinstance(item, dict) for item in entries):
+            errors.append(f"{proto}: unexpected 6055 host bindings: {entries!r}")
+            continue
         actual = [
             (_canonical_ip(item.get("HostIp", "")), item.get("HostPort", ""))
-            for item in entries if isinstance(item, dict)
+            for item in entries
         ]
         if len(actual) != 4 or {host for host, _ in actual} != expected_hosts:
             errors.append(f"{proto}: unexpected 6055 host bindings: {actual!r}")
