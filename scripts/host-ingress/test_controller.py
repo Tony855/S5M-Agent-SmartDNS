@@ -256,7 +256,7 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"ifname": "eth1"', '"ifname": "eth2"')))
 
     def test_firewall_persistence_requires_permanent_timer_enablement(self):
-        self.assertTrue(mod.systemd_unit_is_persistently_enabled("enabled\\n", 0))
+        self.assertTrue(mod.systemd_unit_is_persistently_enabled("enabled\n", 0))
         for state in ("enabled-runtime", "static", "indirect", "generated", "transient",
                       "linked", "linked-runtime", "disabled", "masked", ""):
             with self.subTest(state=state):
