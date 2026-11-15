@@ -190,14 +190,29 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 	if err := validateSmartDNSPerClientMihomoBindings(mihomoYAML, contract); err != nil {
 		return fmt.Errorf("per-client Mihomo listener contract validation failed: %w", err)
 	}
+
+	// Do not trust the Master contract's Ready bit as an attestation. Re-read
+	// the root-owned host proof at the point of mutation and bind it to the
+	// exact addresses/CIDRs carried by this transaction.
+	attestation, err := readSmartDNSHostIngressAttestation()
+	if err != nil {
+		return fmt.Errorf("per-client SmartDNS host ingress attestation is unavailable: %w", err)
+	}
+	if err := validateSmartDNSHostIngressContract(contract, attestation); err != nil {
+		return fmt.Errorf("per-client SmartDNS host ingress attestation rejected: %w", err)
+	}
+	observation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+	if err != nil {
+		return fmt.Errorf("observe Agent ingress interfaces and addresses: %w", err)
+	}
+	if err := validateSmartDNSHostIngressObservation(attestation, observation); err != nil {
+		return fmt.Errorf("per-client SmartDNS Agent ingress observation rejected: %w", err)
+	}
+
 	apply := func(data []byte, cleanupBackup bool) (string, error) {
 		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
 	}
 	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, true, apply, func() error {
-		attestation := smartDNSHostIngressAttestation{
-			Version: contract.Version, IPv4Address: contract.IPv4Address,
-			IPv6Address: contract.IPv6Address, ClientCIDRs: contract.ClientCIDRs,
-		}
 		if !waitForSmartDNSPerClientHealthy(smartDNSConfig, attestation, 5*time.Second) {
 			return fmt.Errorf("per-client SmartDNS domestic DNS probe or exact UDP/TCP ingress listeners are not healthy")
 		}
