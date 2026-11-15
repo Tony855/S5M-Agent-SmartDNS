@@ -213,7 +213,24 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
 	}
 	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, true, apply, func() error {
-		if !waitForSmartDNSPerClientHealthy(smartDNSConfig, attestation, 5*time.Second) {
+		// Re-read the host proof after the candidate services are live and before
+		// the transaction commit marker. A timer/firewall/interface change during
+		// apply must trigger rollback rather than commit against stale readiness.
+		currentAttestation, err := readSmartDNSHostIngressAttestation()
+		if err != nil {
+			return fmt.Errorf("per-client SmartDNS host ingress attestation expired during transaction: %w", err)
+		}
+		if err := validateSmartDNSHostIngressContract(contract, currentAttestation); err != nil {
+			return fmt.Errorf("per-client SmartDNS host ingress proof changed during transaction: %w", err)
+		}
+		currentObservation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+		if err != nil {
+			return fmt.Errorf("re-observe Agent ingress interfaces and addresses before commit: %w", err)
+		}
+		if err := validateSmartDNSHostIngressObservation(currentAttestation, currentObservation); err != nil {
+			return fmt.Errorf("Agent ingress address changed during transaction: %w", err)
+		}
+		if !waitForSmartDNSPerClientHealthy(smartDNSConfig, currentAttestation, 5*time.Second) {
 			return fmt.Errorf("per-client SmartDNS domestic DNS probe or exact UDP/TCP ingress listeners are not healthy")
 		}
 		return nil
