@@ -108,10 +108,11 @@ export PATH="$TMP/mock-bin:$PATH"
 python3 "$ROOT/scripts/host-ingress/network-lifecycle.py" provision --config "$TMP/network.json" --firewall-config "$TMP/firewall.json"
 # Reconcile twice: the second run must not duplicate or re-address the endpoint.
 python3 "$ROOT/scripts/host-ingress/network-lifecycle.py" provision --config "$TMP/network.json" --firewall-config "$TMP/firewall.json"
-docker inspect "$NAME" | python3 - "$IPV6" <<'PY'
+container_inspect="$(docker inspect "$NAME")"
+python3 - "$IPV6" "$container_inspect" <<'PY'
 import json, sys
 ipv6 = sys.argv[1] == "1"
-networks = json.load(sys.stdin)[0]["NetworkSettings"]["Networks"]
+networks = json.loads(sys.argv[2])[0]["NetworkSettings"]["Networks"]
 assert "bridge" in networks and "s5m-ingress-lifecycle-ci" in networks
 ingress = networks["s5m-ingress-lifecycle-ci"]
 assert ingress["IPAddress"] == "172.31.250.2"
