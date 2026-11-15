@@ -470,6 +470,16 @@ def validate_firewall_attestation(cfg: dict, path: Path = ATTEST, now: int | Non
     return attestation
 
 
+def systemd_unit_is_persistently_enabled(output: str, returncode: int) -> bool:
+    """Require a permanent enablement symlink, not a runtime/static success state.
+
+    systemctl is-enabled can return zero for enabled-runtime, static, indirect,
+    generated and transient units. Only the exact "enabled" state proves this
+    timer will be activated through the persistent system unit graph at boot.
+    """
+    return returncode == 0 and isinstance(output, str) and output.strip() == "enabled"
+
+
 def verify_live_firewall(
     cfg: dict,
     interface_output: str,
@@ -597,7 +607,8 @@ def main(argv=None) -> int:
             cfg = load_config(a.config)
             iface = subprocess.run(["ip", "-j", "addr", "show", "dev", cfg["interface"]], text=True, capture_output=True)
             nft = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
-            timer_enabled = subprocess.run(["systemctl", "is-enabled", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
+            timer_enabled_result = subprocess.run(["systemctl", "is-enabled", "s5m-agent-ingress.timer"], text=True, capture_output=True)
+            timer_enabled = systemd_unit_is_persistently_enabled(timer_enabled_result.stdout, timer_enabled_result.returncode)
             timer_active = subprocess.run(["systemctl", "is-active", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
             verify_live_firewall(
                 cfg,
@@ -631,7 +642,8 @@ def main(argv=None) -> int:
             if live.returncode or not live_nft_table_matches(cfg, live.stdout):
                 raise ConfigError("live nftables table does not exactly match the configured source-CIDR UDP/TCP allowlist")
             now = int(time.time())
-            timer_enabled = subprocess.run(["systemctl", "is-enabled", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
+            timer_enabled_result = subprocess.run(["systemctl", "is-enabled", "s5m-agent-ingress.timer"], text=True, capture_output=True)
+            timer_enabled = systemd_unit_is_persistently_enabled(timer_enabled_result.stdout, timer_enabled_result.returncode)
             timer_active = subprocess.run(["systemctl", "is-active", "--quiet", "s5m-agent-ingress.timer"]).returncode == 0
             physical_ok = physical_evidence_valid(a.evidence, a.config, cfg, now)
             payload = {"version": 1, "updated_at": now, "interface": cfg["interface"],
