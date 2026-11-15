@@ -376,6 +376,64 @@ func validateSmartDNSConfigWithIngressInternal(data []byte, contract smartDNSPer
 	return nil
 }
 
+// validateSmartDNSHostIngressContract binds the Master-supplied runtime plan to
+// the fresh, root-owned host-controller attestation mounted read-only into this
+// Agent. The contract's Ready bit is never treated as proof by itself.
+func validateSmartDNSHostIngressContract(contract smartDNSPerClientIngressContract, attestation smartDNSHostIngressAttestation) error {
+	if contract.Version != smartDNSPerClientIngressContractVersion || !contract.Ready {
+		return fmt.Errorf("per-client ingress contract is missing, unsupported, or not ready")
+	}
+	if err := validateSmartDNSHostIngressAttestation(attestation); err != nil {
+		return fmt.Errorf("fresh local host ingress attestation is invalid: %w", err)
+	}
+	if !attestation.SourceIPPreserved || !attestation.FirewallReady || !attestation.FirewallPersistent || !attestation.UDPReady || !attestation.TCPReady {
+		return fmt.Errorf("local host ingress attestation does not prove source-IP preservation, persistent firewall, and UDP/TCP readiness")
+	}
+	if contract.IPv4Address != attestation.IPv4Address || contract.IPv6Address != attestation.IPv6Address {
+		return fmt.Errorf("Master ingress addresses do not match the fresh local host attestation")
+	}
+	contractCIDRs := make(map[string]struct{}, len(contract.ClientCIDRs))
+	for _, raw := range contract.ClientCIDRs {
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil || prefix.String() != raw || prefix != prefix.Masked() {
+			return fmt.Errorf("Master ingress contract contains a non-canonical client CIDR")
+		}
+		if _, duplicate := contractCIDRs[prefix.String()]; duplicate {
+			return fmt.Errorf("Master ingress contract contains a duplicate client CIDR")
+		}
+		contractCIDRs[prefix.String()] = struct{}{}
+	}
+	attestedCIDRs := make(map[string]struct{}, len(attestation.ClientCIDRs))
+	for _, raw := range attestation.ClientCIDRs {
+		attestedCIDRs[raw] = struct{}{}
+	}
+	if len(contractCIDRs) == 0 || len(contractCIDRs) != len(attestedCIDRs) {
+		return fmt.Errorf("Master ingress CIDR set does not exactly match the local host attestation")
+	}
+	for cidr := range contractCIDRs {
+		if _, ok := attestedCIDRs[cidr]; !ok {
+			return fmt.Errorf("Master ingress CIDR %s is not present in the local host attestation", cidr)
+		}
+	}
+	return nil
+}
+
+// validateSmartDNSHostIngressObservation requires each attested ingress IP to
+// exist on an active, non-loopback interface in the Agent network namespace.
+// Host-interface names are intentionally not compared: the host's physical
+// NIC and the container's routed veth have different namespace-local names.
+func validateSmartDNSHostIngressObservation(attestation smartDNSHostIngressAttestation, observation smartDNSIngressObservation) error {
+	for _, address := range []string{attestation.IPv4Address, attestation.IPv6Address} {
+		if address == "" {
+			continue
+		}
+		if strings.TrimSpace(observation.AddressInterfaces[address]) == "" {
+			return fmt.Errorf("attested ingress address %s is absent from active Agent interfaces", address)
+		}
+	}
+	return nil
+}
+
 // validateSmartDNSPerClientMihomoBindings binds each SmartDNS SOCKS endpoint
 // to the exact loopback-only Mihomo listener and outbound named by the ingress
 // contract. Both documents are applied in one durable transaction.
