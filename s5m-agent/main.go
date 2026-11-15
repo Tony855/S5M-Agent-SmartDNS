@@ -2852,6 +2852,13 @@ func serveAgentRegistrationPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--validate-smartdns-ingress-before-service" {
+		if err := validateSmartDNSIngressBeforeServiceStart(); err != nil {
+			fmt.Fprintf(os.Stderr, "SmartDNS ingress service guard rejected startup: %v\\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--recover-config-transaction-before-services" {
 		if err := os.MkdirAll(mihomoHome(), 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "创建 Agent 数据目录失败: %v\n", err)
