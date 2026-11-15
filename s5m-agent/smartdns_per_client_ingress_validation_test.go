@@ -239,6 +239,33 @@ func TestValidateSmartDNSHostIngressObservationRequiresActualIngressAddress(t *t
 	}
 }
 
+func TestSmartDNSServiceStartupGuardRequiresFreshProofForPerClientConfig(t *testing.T) {
+	config, _ := validPerClientIngressFixture()
+	attestation := validSmartDNSHostIngressAttestationFixture()
+	observation := smartDNSIngressObservation{
+		AddressInterfaces: map[string]string{"172.31.0.10": "eth1"},
+	}
+	if err := validateSmartDNSIngressBeforeServiceStartWithState(config, attestation, observation); err != nil {
+		t.Fatalf("fresh attested per-client config rejected before service start: %v", err)
+	}
+
+	stale := attestation
+	stale.FirewallPersistent = false
+	if err := validateSmartDNSIngressBeforeServiceStartWithState(config, stale, observation); err == nil {
+		t.Fatal("per-client SmartDNS service start accepted without persistent host firewall proof")
+	}
+
+	missingAddress := smartDNSIngressObservation{AddressInterfaces: map[string]string{"172.31.0.11": "eth1"}}
+	if err := validateSmartDNSIngressBeforeServiceStartWithState(config, attestation, missingAddress); err == nil {
+		t.Fatal("per-client SmartDNS service start accepted without the attested ingress IP on an active interface")
+	}
+
+	sharedConfig := []byte("bind 127.0.0.1:6053\\nbind-tcp 127.0.0.1:6053\\n")
+	if err := validateSmartDNSIngressBeforeServiceStartWithState(sharedConfig, smartDNSHostIngressAttestation{}, smartDNSIngressObservation{}); err != nil {
+		t.Fatalf("shared-mode SmartDNS should not depend on per-client host ingress proof: %v", err)
+	}
+}
+
 func TestSmartDNSIngressContractJSONSchema(t *testing.T) {
 	want := smartDNSPerClientIngressContract{
 		Version: 1, Ready: true, IPv4Address: "172.31.0.10",
