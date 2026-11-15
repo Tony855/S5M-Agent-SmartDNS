@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # CI-only diagnostic: test whether Docker can publish a routed IPv6 container
 # port while allocating any host-side ephemeral port on ::1 only. This script
@@ -105,60 +106,8 @@ fi
 inspect="$(docker inspect "$NAME")"
 routes4="$(docker exec "$NAME" ip -4 route show default 2>/dev/null || true)"
 routes6="$(docker exec "$NAME" ip -6 route show default 2>/dev/null || true)"
-if python3 - "$inspect" "$routes4" "$routes6" <<'PY'
-import ipaddress, json, sys
-
-container = json.loads(sys.argv[1])[0]
-ports = container.get("NetworkSettings", {}).get("Ports") or {}
-networks = container.get("NetworkSettings", {}).get("Networks") or {}
-bridge = networks.get("bridge") or {}
-gateway4 = bridge.get("Gateway", "")
-gateway6 = bridge.get("IPv6Gateway", "")
-routes4 = [line.strip() for line in sys.argv[2].splitlines() if line.strip()]
-routes6 = [line.strip() for line in sys.argv[3].splitlines() if line.strip()]
-
-def canonical(value):
-    try:
-        return ipaddress.ip_address(value).compressed
-    except Exception:
-        return value
-
-safe = True
-for proto in ("udp", "tcp"):
-    entries = ports.get(f"6055/{proto}") or []
-    actual = [(canonical(item.get("HostIp", "")), item.get("HostPort", "")) for item in entries]
-    expected_hosts = {"127.0.0.1", "::1", "0.0.0.0", "::"}
-    if len(actual) != 4 or {host for host, _ in actual} != expected_hosts:
-        print(f"{proto}: unexpected published mappings: {actual}")
-        safe = False
-        continue
-    for host, port in actual:
-        if host in ("127.0.0.1", "::1"):
-            if not port.isdigit() or not (1 <= int(port) <= 65535):
-                print(f"{proto}: loopback mapping has no valid ephemeral host port: {(host, port)}")
-                safe = False
-        elif port != "":
-            print(f"{proto}: non-loopback host binding is allocated: {(host, port)}")
-            safe = False
-
-if not gateway4 or len(routes4) != 1 or f"via {gateway4}" not in routes4[0]:
-    print(f"IPv4 default route changed or ambiguous: gateway={gateway4!r}, routes={routes4}")
-    safe = False
-if not gateway6 or len(routes6) != 1 or f"via {gateway6}" not in routes6[0]:
-    print(f"IPv6 default route changed or ambiguous: gateway={gateway6!r}, routes={routes6}")
-    safe = False
-
-print("6055 port mappings:", json.dumps(ports, sort_keys=True))
-print("default bridge IPv4 gateway:", gateway4, "routes:", routes4)
-print("default bridge IPv6 gateway:", gateway6, "routes:", routes6)
-if not safe:
-    print("PROBE_RESULT=UNSAFE")
-    raise SystemExit(0)
-print("PROBE_RESULT=SAFE_LOOPBACK_ONLY")
-PY
-then
-  echo "IPv6 routed publication probe completed"
-else
-  echo "IPv6 routed publication probe parser failed"
+if ! python3 "$ROOT/ipv6_routed_probe.py" "$inspect" "$routes4" "$routes6"; then
+  echo "UNSAFE: Docker allocated a non-loopback host port or changed default egress; IPv6 per-client ingress must remain disabled." >&2
   exit 1
 fi
+echo "IPv6 routed publication probe completed"

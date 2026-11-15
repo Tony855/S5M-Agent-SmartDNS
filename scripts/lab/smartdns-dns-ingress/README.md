@@ -5,20 +5,31 @@ procedure below is separate from the Docker namespace experiments.
 
 ## Current supported family
 
-PR #242 currently provisions IPv4 per-client ingress only. Both deployers and
-the host network lifecycle helper reject IPv6 per-client provisioning. Do not
-add IPv6 client CIDRs to production host config, do not set
-ENABLE_PER_CLIENT_INGRESS_IPV6=1, and do not treat an IPv6 namespace test as
-production acceptance. The IPv6 packet parser/probe tooling is not an IPv6
-deployment guarantee.
+IPv4 routed ingress is the default per-client deployment path. IPv6 routed
+ingress is an explicit opt-in (\`ENABLE_PER_CLIENT_INGRESS_IPV6=1\`) and remains
+**experimental / not production-accepted** until physical LAN/router IPv6
+UDP/TCP source preservation is recorded. Do not leave IPv6 enabled in
+production based only on CI.
 
-A CI-only diagnostic, probe-ipv6-routed-loopback.sh, tests whether a disposable
-GitHub Actions Docker daemon can use an IPv6 loopback-only ephemeral host
-mapping while retaining the default bridge IPv6 egress route. Even a
-PROBE_RESULT=SAFE_LOOPBACK_ONLY result would prove only that runner's Docker
-publication mechanics; it would not enable production IPv6. The deployer,
-network lifecycle, firewall, Agent, Server and real-LAN IPv6 acceptance gates
-must all be implemented and rerun first.
+The IPv6 deployer preflight requires an IPv6-enabled Docker default bridge,
+a global IPv6 address on the trusted host interface, and exact loopback-only
+host mappings. After routed attach, the lifecycle helper requires the
+non-loopback \`::\` mapping to have an empty HostPort and verifies that the
+container retains its default IPv6 egress route. Any allocated non-loopback
+host port is rejected. The CI-only \`probe-ipv6-routed-loopback.sh\` now fails
+the workflow if Docker reports an unsafe mapping or a changed default route;
+unsupported Docker prerequisites are reported as a skip. The latest observed
+GitHub-hosted Docker run reported \`PROBE_RESULT=SAFE_LOOPBACK_ONLY\` and the
+dual-stack lifecycle integration passed. This proves only that runner's Docker
+publication/lifecycle behavior, not a physical router, LAN packet path,
+SmartDNS group selection, proxy CONNECT, DoT, or public egress.
+
+Use IPv6 opt-in only for a controlled field-acceptance run. Before production
+enablement, capture real IPv6 client packets on the trusted LAN interface and
+inside the Agent namespace, verify exact source-address preservation for both
+UDP and TCP in every configured IPv6 CIDR, and complete the SmartDNS/proxy
+acceptance steps below. If the Docker probe or runtime mapping validation
+fails, keep IPv6 ingress disabled.
 
 ## Physical LAN source-IP acceptance
 
