@@ -185,3 +185,19 @@ PR #223 的同主机 Linux 网络命名空间实验已通过：
 - 尚未验证生产 Agent 部署脚本的双网络生命周期、持久化来源 CIDR 防火墙、真实路由器静态路由、IPv6、Agent 运行时配置校验/状态上报，以及真实公网出口 IP 的端到端相关性。
 
 因此，routed bridge + SmartDNS group-match + 真实 Mihomo Listener/outbound 选择已具有同主机 IPv4 自动化证据；但生产 per-client 功能仍不批准启用。Server API 继续拒绝保存 per_client 模式，Agent validator 继续拒绝未经 ingress provisioning 的配置，PR #217/#218 继续 Draft。
+
+
+## 2026-11-15 production implementation status（PR #242）
+
+本 ADR 第 9.5 节及其后原有结论记录的是当时尚未完成生产部署代码的历史状态。当前 Draft PR #242 已在 main 83d5a7bb 基础上补齐以下代码路径：
+
+- Agent routed Docker ingress 生命周期：独立 root-only network-lifecycle helper 创建/复用专用 IPv4 routed bridge、固定地址、低 gateway priority，验证普通 bridge 仍是唯一默认 IPv4 egress，并对失败 attach 做回滚；卸载仅删除精确归属且无意外容器连接的网络。
+- 持久 source-CIDR firewall：独立 nftables controller 只管理专属 table，逐条 read-back 比较完整规则集；systemd timer 必须 enabled 且 active；attestation 原子刷新并 fail-closed。
+- 真实状态 attestation：host controller 结合当前网卡、Docker container/network immutable identity、live nftables 和 HMAC 签名的物理双端抓包 evidence；Agent 再独立观察实际接口地址及 SmartDNS UDP/TCP socket owner。
+- contract-bound Agent validation：Master contract 的 Ready 位不能替代本机 proof；Agent 在 mutation 前和 commit marker 前分别重新核对本机 attestation、CIDR、ingress IP 和接口状态。
+- WebSocket 与事务恢复：配置 hash/contract refresh、provisioning recovery、重复命令 journal、重连/重启恢复和联合 Mihomo/SmartDNS rollback 均有自动化回归覆盖；s6 service 在启动及运行期间持续 fail-closed 检查。
+- Master 原 ingress readiness gate 未移除，shared-mode 全局 validator 未放宽；通用设置 API 仍拒绝用户保存 per_client，PR #217/#218 继续 Draft。
+
+当前实现只允许 IPv4 per-client ingress。IPv6 因 Docker routed IPv6 published-port 安全设计尚未证明而继续 fail-closed；不得将其描述为已支持。PR #242 最新代码 head 9167ee4504aa871838d23f7e6c7ccc105fa5a567 的 Server tests/race/vet、Agent tests/race/vet、AMD64/ARM64 builds/runtime smoke、installer validation、host ingress lab、real SmartDNS daemon routed group-match 和 routing validation 均通过。
+
+仍然必须在真实目标环境完成：路由器静态路由、真实 LAN IPv4 UDP/TCP 源地址双端抓包、SmartDNS 实际客户端 group 选择、真实代理 CONNECT/DoT 与公网出口 IP 关联、TUN on/off、主机重启/断线重连/配置回滚。IPv6 另需先有安全实现，再做真实 LAN IPv6 UDP/TCP 验收。上述现场项目未完成前，per-client 不开放，PR #242 保持 Draft，不合并。
