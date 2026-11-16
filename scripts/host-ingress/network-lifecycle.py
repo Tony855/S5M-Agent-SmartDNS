@@ -257,8 +257,26 @@ def default_routes(container):
     return v4,v6
 
 def preserves_single_default_route(routes, gateway):
-    entries=[line.strip() for line in routes if line.strip()]
-    return len(entries)==1 and f"via {gateway}" in entries[0]
+    """Require one default route whose parsed next-hop IP exactly matches Docker.
+
+    Substring matching is unsafe here: an expected gateway of 172.17.0.1
+    must not accept an observed next hop of 172.17.0.10.
+    """
+    entries = [line.strip() for line in routes if line.strip()]
+    if len(entries) != 1 or not isinstance(gateway, str):
+        return False
+    fields = entries[0].split()
+    if not fields or fields[0] != "default" or fields.count("via") != 1:
+        return False
+    try:
+        expected = ipaddress.ip_address(gateway)
+        via_index = fields.index("via")
+        if via_index + 1 >= len(fields):
+            return False
+        observed = ipaddress.ip_address(fields[via_index + 1])
+    except (TypeError, ValueError):
+        return False
+    return observed == expected
 
 def routeros_v7_route(subnet, next_hop):
     family = 6 if ":" in str(subnet) or ":" in str(next_hop) else 4

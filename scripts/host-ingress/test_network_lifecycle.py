@@ -145,10 +145,16 @@ class NetworkSafetyTests(unittest.TestCase):
         self.assertEqual(nl.routeros_v7_route("fd00:172:31::/64","fd00:192:168::2"),
             '/ipv6 route add dst-address=fd00:172:31::/64 gateway=fd00:192:168::2 comment="S5M-Agent DNS ingress"')
 
-    def test_single_default_route_must_use_bridge_gateway(self):
+    def test_single_default_route_must_use_bridge_gateway_exactly(self):
         self.assertTrue(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0"],"172.17.0.1"))
+        self.assertTrue(nl.preserves_single_default_route(["default via 2001:db8:17::1 dev eth0"],"2001:db8:17::1"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.10 dev eth0"],"172.17.0.1"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 2001:db8:17::10 dev eth0"],"2001:db8:17::1"))
         self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0","default via 172.31.10.1 dev eth1"],"172.17.0.1"))
         self.assertFalse(nl.preserves_single_default_route(["default via 172.31.10.1 dev eth1"],"172.17.0.1"))
+        self.assertFalse(nl.preserves_single_default_route(["default dev eth0"],"172.17.0.1"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 via 172.17.0.2 dev eth0"],"172.17.0.1"))
+        self.assertFalse(nl.preserves_single_default_route(["unicast default via 172.17.0.1 dev eth0"],"172.17.0.1"))
 
     def write_config(self):
         td=tempfile.TemporaryDirectory()
