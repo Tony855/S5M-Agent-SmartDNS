@@ -27,13 +27,17 @@ def _single_default_route(raw, gateway):
     if len(routes) != 1:
         return False
     fields = routes[0].split()
-    if not fields or fields[0] != "default":
+    if not fields or fields[0] != "default" or fields.count("via") != 1:
         return False
     try:
+        expected = ipaddress.ip_address(gateway)
         via_index = fields.index("via")
-    except ValueError:
+        if via_index + 1 >= len(fields):
+            return False
+        observed = ipaddress.ip_address(fields[via_index + 1])
+    except (TypeError, ValueError):
         return False
-    return via_index + 1 < len(fields) and fields[via_index + 1] == gateway
+    return observed == expected
 
 
 def evaluate_routed_ipv6_publication(inspect_json, routes4, routes6):
