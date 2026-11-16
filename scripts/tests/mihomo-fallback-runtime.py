@@ -369,14 +369,14 @@ def ipv6_socks_atyp_main():
                 stage = "read SOCKS destination port"
                 port = int.from_bytes(read_exact(conn, 2), "big")
                 probe_payload = b"S5M-IPv6-ATYP-PROBE"
-                observed.update(atyp=atyp, address=address, port=port)
                 # Return a successful CONNECT and require one payload byte sequence.
                 # Mihomo may defer opening the upstream socket until client data is
                 # available; the payload makes the observer prove the actual
                 # IPv4-SOCKS -> IPv6-target data path, not only a local SOCKS reply.
                 conn.sendall(b"\x05\x00\x00\x04" + socket.inet_pton(socket.AF_INET6, "::1") + b"\x00\x00")
                 stage = "read CONNECT payload"
-                observed["payload"] = read_exact(conn, len(probe_payload))
+                payload = read_exact(conn, len(probe_payload))
+                observed.update(atyp=atyp, address=address, port=port, payload=payload)
         except Exception as exc:
             observed.update(error=str(exc), stage=stage)
 
