@@ -161,7 +161,7 @@ class NetworkSafetyTests(unittest.TestCase):
             "bridge": {"Gateway": "172.17.0.1", "IPv6Gateway": "2001:db8:17::1"},
             cfg["network"]: {"IPAddress": str(cfg["_networks"][4][2]), "GlobalIPv6Address": str(cfg["_networks"][6][2])},
         }
-        return {"State": {"Running": running}, "NetworkSettings": {"Networks": networks, "Ports": {}}}
+        return {"Id": "old-id", "State": {"Running": running}, "NetworkSettings": {"Networks": networks, "Ports": {}}}
 
     def test_handoff_accepts_only_stopped_previous_endpoint(self):
         cfg = self.write_config()
@@ -169,7 +169,7 @@ class NetworkSafetyTests(unittest.TestCase):
         net = {"Containers": {"old-id": {"Name": previous_name}}}
         with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg)), \
              patch.object(nl, "validate_dns_port_bindings") as validate_ports:
-            self.assertTrue(nl.validate_network_endpoint_state(net, cfg, False, previous_name))
+            self.assertTrue(nl.validate_network_endpoint_state(net, cfg, {"Id": "new-id"}, False, previous_name))
             validate_ports.assert_called_once()
 
     def test_handoff_refuses_running_previous_container(self):
@@ -179,7 +179,7 @@ class NetworkSafetyTests(unittest.TestCase):
         with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg, running=True)), \
              patch.object(nl, "validate_dns_port_bindings"):
             with self.assertRaises(nl.LifecycleError):
-                nl.validate_network_endpoint_state(net, cfg, False, previous_name)
+                nl.validate_network_endpoint_state(net, cfg, {"Id": "new-id"}, False, previous_name)
 
     def test_handoff_refuses_unexpected_or_duplicate_endpoints(self):
         cfg = self.write_config()
@@ -189,10 +189,10 @@ class NetworkSafetyTests(unittest.TestCase):
              patch.object(nl, "validate_dns_port_bindings"):
             unexpected = {"Containers": {"old-id": {"Name": previous_name}, "other-id": {"Name": "other-agent"}}}
             with self.assertRaises(nl.LifecycleError):
-                nl.validate_network_endpoint_state(unexpected, cfg, False, previous_name)
+                nl.validate_network_endpoint_state(unexpected, cfg, {"Id": "new-id"}, False, previous_name)
             duplicate = {"Containers": {"old-id": {"Name": previous_name}, "new-id": {"Name": cfg["container"]}}}
             with self.assertRaises(nl.LifecycleError):
-                nl.validate_network_endpoint_state(duplicate, cfg, True, previous_name)
+                nl.validate_network_endpoint_state(duplicate, cfg, {"Id": "new-id"}, True, previous_name)
 
     def test_handoff_refuses_address_drift_and_snapshot_mismatch(self):
         cfg = self.write_config()
@@ -203,9 +203,9 @@ class NetworkSafetyTests(unittest.TestCase):
         with patch.object(nl, "inspect_container", return_value=previous), \
              patch.object(nl, "validate_dns_port_bindings"):
             with self.assertRaises(nl.LifecycleError):
-                nl.validate_network_endpoint_state(net, cfg, False, previous_name)
+                nl.validate_network_endpoint_state(net, cfg, {"Id": "new-id"}, False, previous_name)
             with self.assertRaises(nl.LifecycleError):
-                nl.validate_network_endpoint_state({"Containers": {}}, cfg, False, previous_name)
+                nl.validate_network_endpoint_state({"Containers": {}}, cfg, {"Id": "new-id"}, False, previous_name)
 
     def test_restore_previous_endpoint_uses_low_gateway_priority_and_is_idempotent(self):
         cfg = self.write_config()
@@ -245,6 +245,7 @@ class NetworkSafetyTests(unittest.TestCase):
 
         def inspect_container(name):
             return {
+                "Id": "old-id" if name == previous_name else "new-id",
                 "State": {"Running": False if name == previous_name else True},
                 "NetworkSettings": {"Networks": networks(name), "Ports": {}},
             }
