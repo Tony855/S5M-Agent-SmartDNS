@@ -3,7 +3,8 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 DEPLOY="$ROOT/scripts/deploy-agent.sh"
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+ingress_tmp="$(mktemp -d)"
+trap 'rm -f "$tmp"; rm -rf "$ingress_tmp"' EXIT
 awk '
   /^stop_existing_container_checked\(\)/ { copy=1 }
   /^if docker container inspect "\$CONTAINER_NAME"/ { copy=0 }
@@ -58,6 +59,35 @@ bash -n "$DEPLOY"
 test_successful_restore
 test_failed_new_container_removal_preserves_backup
 
+test_per_client_ingress_provisioning_is_fail_closed() (
+  ENABLE_PER_CLIENT_INGRESS=0
+  provision_per_client_ingress "$ingress_tmp/missing-helper" "$ingress_tmp/missing-network" "$ingress_tmp/missing-firewall"
+
+  ENABLE_PER_CLIENT_INGRESS=1
+  if provision_per_client_ingress "$ingress_tmp/missing-helper" "$ingress_tmp/missing-network" "$ingress_tmp/missing-firewall"; then
+    echo "enabled per-client ingress unexpectedly accepted missing host controller/config" >&2
+    exit 1
+  fi
+
+  cat >"$ingress_tmp/helper" <<'HELPER'
+#!/usr/bin/env bash
+printf '%s\\n' "$*" >"$INGRESS_HELPER_LOG"
+exit "${INGRESS_HELPER_EXIT:-0}"
+HELPER
+  chmod +x "$ingress_tmp/helper"
+  : >"$ingress_tmp/network.json"
+  : >"$ingress_tmp/firewall.json"
+  export INGRESS_HELPER_LOG="$ingress_tmp/helper.log"
+  export INGRESS_HELPER_EXIT=0
+  provision_per_client_ingress "$ingress_tmp/helper" "$ingress_tmp/network.json" "$ingress_tmp/firewall.json"
+  grep -Fxq "provision --config $ingress_tmp/network.json --firewall-config $ingress_tmp/firewall.json" "$INGRESS_HELPER_LOG"
+  export INGRESS_HELPER_EXIT=1
+  if provision_per_client_ingress "$ingress_tmp/helper" "$ingress_tmp/network.json" "$ingress_tmp/firewall.json"; then
+    echo "enabled per-client ingress unexpectedly accepted a failed routed network provision" >&2
+    exit 1
+  fi
+)
+
 test_stop_failure_keeps_old_service_available() (
   MOCK_STATE=running
   start_calls=0
@@ -105,6 +135,26 @@ bash -n "$DEPLOY"
 test_stop_failure_keeps_old_service_available
 test_stop_error_with_confirmed_exit_is_safe
 test_successful_stop_is_verified
+test_per_client_ingress_provisioning_is_fail_closed
+
+# The explicit ingress lifecycle must finish before the old rollback container
+# is deleted or the deployment is marked successful.
+provision_call_line="$(grep -n '^if ! provision_per_client_ingress; then' "$DEPLOY" | cut -d: -f1)"
+deploy_ok_line="$(grep -n '^DEPLOY_OK=1
+# binds container loopback. Reject the misleading mapping until a dedicated
+# source-preserving LAN ingress has passed network acceptance.
+grep -Fq 'if (( DNS_PORT > 0 )); then' "$DEPLOY"
+grep -Fq 'DNS_PORT 暂不可用：当前 SmartDNS 仅监听容器回环地址' "$DEPLOY"
+
+echo "Agent deployment stop/rollback and DNS ingress guard tests passed"
+ "$DEPLOY" | cut -d: -f1)"
+backup_delete_line="$(grep -n 'if docker rm "$BACKUP_NAME"' "$DEPLOY" | cut -d: -f1)"
+[[ -n "$provision_call_line" && -n "$deploy_ok_line" && -n "$backup_delete_line" ]]
+(( provision_call_line < deploy_ok_line && provision_call_line < backup_delete_line )) || {
+  echo "per-client ingress provisioning must precede deploy commit and old-container deletion" >&2
+  exit 1
+}
+
 # DNS_PORT used to publish host:port -> container:6053, but SmartDNS only
 # binds container loopback. Reject the misleading mapping until a dedicated
 # source-preserving LAN ingress has passed network acceptance.
