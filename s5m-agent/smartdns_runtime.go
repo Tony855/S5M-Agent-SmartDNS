@@ -1180,16 +1180,8 @@ func syncSmartDNSDirectory(path string) error {
 }
 
 func smartDNSLocalListenerSocketsBound(address string, port int) bool {
-	ip, err := netip.ParseAddr(address)
-	if err != nil || ip.Zone() != "" || ip.Is4In6() { return false }
-	udpPath, tcpPath := "/proc/net/udp", "/proc/net/tcp"
-	if ip.Is6() { udpPath, tcpPath = "/proc/net/udp6", "/proc/net/tcp6" }
-	udp, err := os.ReadFile(udpPath)
-	if err != nil { return false }
-	tcp, err := os.ReadFile(tcpPath)
-	if err != nil { return false }
-	return procSocketTableHasExactListener(udp, ip.Is6(), port, ip.String(), false) &&
-		procSocketTableHasExactListener(tcp, ip.Is6(), port, ip.String(), true)
+	bound, err := smartDNSAddressSocketsBound(address, port, true)
+	return err == nil && bound
 }
 
 // Per-client SmartDNS intentionally has no default upstream on 6053, so a
