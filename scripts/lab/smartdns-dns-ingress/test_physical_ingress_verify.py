@@ -103,6 +103,31 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         syn=dict(packet); syn["payload"]=b""; syn["flags"]=0x02
         VERIFY.correlate_probe_packets([syn],[dict(syn)],key,"tcp",b"S5M-INGRESS-PROBE:nonce","connection-refused",9,11)
 
+    def test_each_cidr_requires_one_same_source_for_udp_and_tcp(self):
+        complete = {
+            "192.168.50.0/24": {
+                "192.168.50.10": {"udp", "tcp"},
+                "192.168.50.11": {"udp"},
+            },
+            "2001:db8:50::/64": {
+                "2001:db8:50::10": {"udp", "tcp"},
+            },
+        }
+        self.assertEqual(VERIFY.complete_sources_by_cidr(complete), {
+            "192.168.50.0/24": ["192.168.50.10"],
+            "2001:db8:50::/64": ["2001:db8:50::10"],
+        })
+
+        split_sources = {
+            "192.168.50.0/24": {
+                "192.168.50.10": {"udp"},
+                "192.168.50.11": {"tcp"},
+            },
+        }
+        self.assertEqual(VERIFY.complete_sources_by_cidr(split_sources), {
+            "192.168.50.0/24": [],
+        })
+
     def test_capture_must_match_current_container_id_pid_and_ingress_ip(self):
         manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123}
         cfg={"interface":"eth1","addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
