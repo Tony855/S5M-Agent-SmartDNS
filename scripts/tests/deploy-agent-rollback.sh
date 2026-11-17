@@ -140,14 +140,7 @@ test_per_client_ingress_provisioning_is_fail_closed
 # The explicit ingress lifecycle must finish before the old rollback container
 # is deleted or the deployment is marked successful.
 provision_call_line="$(grep -n '^if ! provision_per_client_ingress "" "" "" "$previous_container"; then' "$DEPLOY" | cut -d: -f1)"
-deploy_ok_line="$(grep -n '^DEPLOY_OK=1
-# binds container loopback. Reject the misleading mapping until a dedicated
-# source-preserving LAN ingress has passed network acceptance.
-grep -Fq 'if (( DNS_PORT > 0 )); then' "$DEPLOY"
-grep -Fq 'DNS_PORT 暂不可用：当前 SmartDNS 仅监听容器回环地址' "$DEPLOY"
-
-echo "Agent deployment stop/rollback and DNS ingress guard tests passed"
- "$DEPLOY" | cut -d: -f1)"
+deploy_ok_line="$(grep -n '^DEPLOY_OK=1$' "$DEPLOY" | cut -d: -f1)"
 backup_delete_line="$(grep -n 'if docker rm "$BACKUP_NAME"' "$DEPLOY" | cut -d: -f1)"
 [[ -n "$provision_call_line" && -n "$deploy_ok_line" && -n "$backup_delete_line" ]]
 (( provision_call_line < deploy_ok_line && provision_call_line < backup_delete_line )) || {
