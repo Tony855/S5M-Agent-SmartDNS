@@ -370,20 +370,10 @@ def invalidate_host_attestation():
     module.invalidate_attestation(module.ATTEST)
 
 
-def refresh_host_attestation():
-    controller_path = Path(__file__).with_name("controller.py")
-    if not controller_path.is_file():
-        raise LifecycleError("host ingress controller is missing; cannot refresh readiness after Docker endpoint change")
-    run([sys.executable, str(controller_path), "apply"])
-
-
 def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json"), previous_container=None):
     with host_ingress_lock():
         verify_live_firewall(firewall_config_path)
         _provision_locked(cfg, previous_container)
-    # controller.py uses the same flock. Refresh only after releasing this
-    # process's lock so it can re-read live Docker/NIC/nftables state.
-    refresh_host_attestation()
 
 
 def _provision_locked(cfg, previous_container=None):
@@ -509,7 +499,7 @@ def _provision_locked(cfg, previous_container=None):
             raise LifecycleError(f"{error}; routed ingress rollback incomplete: {'; '.join(cleanup_errors)}") from error
         raise
 
-    print(f"ROUTED_INGRESS_READY network={cfg['network']} container={cfg['container']} default_bridge_egress=preserved")
+    print(f"ROUTED_INGRESS_NETWORK_ATTACHED network={cfg['network']} container={cfg['container']} default_bridge_egress=preserved")
     for family, (subnet, _, _) in cfg["_networks"].items():
         print(f"UPSTREAM_ROUTER_STATIC_ROUTE IPv{family}: route {subnet} via {next_hops[family]} on {cfg['interface']}")
         print(f"ROUTEROS_V7_COMMAND: {routeros_v7_route(subnet, next_hops[family])}")
