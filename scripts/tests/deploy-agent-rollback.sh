@@ -15,6 +15,7 @@ CONTAINER_NAME=s5m-agent
 log() { :; }
 source "$tmp"
 trap - EXIT
+trap 'rm -f "$tmp"; rm -rf "$ingress_tmp"' EXIT
 assert_eq() {
   [[ "$1" == "$2" ]] || { printf 'expected %s, got %s: %s\n' "$2" "$1" "$3" >&2; exit 1; }
 }
