@@ -325,16 +325,19 @@ def validate_network_endpoint_state(net, cfg, target_attached, previous_containe
 
 
 def restore_previous_endpoint(previous_container, cfg):
-    args = [
-        "docker", "network", "connect", "--gw-priority", "-1",
-        "--ip", str(cfg["_networks"][4][2]),
-    ]
-    if 6 in cfg["_networks"]:
-        args += ["--ip6", str(cfg["_networks"][6][2])]
-    args += [cfg["network"], previous_container]
-    run(args)
     restored = inspect_container(previous_container)
     networks = restored.get("NetworkSettings", {}).get("Networks") or {}
+    if cfg["network"] not in networks:
+        args = [
+            "docker", "network", "connect", "--gw-priority", "-1",
+            "--ip", str(cfg["_networks"][4][2]),
+        ]
+        if 6 in cfg["_networks"]:
+            args += ["--ip6", str(cfg["_networks"][6][2])]
+        args += [cfg["network"], previous_container]
+        run(args)
+        restored = inspect_container(previous_container)
+        networks = restored.get("NetworkSettings", {}).get("Networks") or {}
     if cfg["network"] not in networks or "bridge" not in networks:
         raise LifecycleError("previous Agent endpoint was not restored to routed and default bridge networks")
     endpoint = networks[cfg["network"]]
@@ -392,14 +395,17 @@ def _provision_locked(cfg, previous_container=None):
     connected = False
     try:
         if previous_attached:
+            # Arm endpoint restoration before the daemon call: Docker can return
+            # a client-side error after it has already completed the detach.
+            previous_detached = True
             try:
                 run(["docker", "network", "disconnect", cfg["network"], previous_container])
             except Exception:
-                # Docker may report a client error after completing the detach.
                 if cfg["network"] in container_networks(previous_container):
+                    previous_detached = False
                     raise
-            previous_detached = cfg["network"] not in container_networks(previous_container)
-            if not previous_detached:
+            if cfg["network"] in container_networks(previous_container):
+                previous_detached = False
                 raise LifecycleError("previous Agent routed endpoint could not be detached")
 
         if not target_attached:
@@ -442,9 +448,17 @@ def _provision_locked(cfg, previous_container=None):
                 raise LifecycleError(f"default IPv6 egress changed; expected exactly one default route via bridge gateway {gw6}, got {routes[1]}")
     except Exception as error:
         cleanup_errors = []
-        if connected or (not target_attached and cfg["network"] in container_networks(cfg["container"])):
+        target_is_attached = connected
+        if not target_is_attached and not target_attached:
+            try:
+                target_is_attached = cfg["network"] in container_networks(cfg["container"])
+            except Exception as inspect_error:
+                cleanup_errors.append(f"new endpoint state inspection failed: {inspect_error}")
+        if target_is_attached:
             try:
                 run(["docker", "network", "disconnect", cfg["network"], cfg["container"]], check=False)
+                if cfg["network"] in container_networks(cfg["container"]):
+                    raise LifecycleError("new endpoint remains attached after rollback disconnect")
             except Exception as cleanup_error:
                 cleanup_errors.append(f"new endpoint detach failed: {cleanup_error}")
         if previous_detached:
