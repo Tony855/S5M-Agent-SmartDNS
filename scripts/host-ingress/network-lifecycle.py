@@ -336,6 +336,8 @@ def validate_network_endpoint_state(net, cfg, target, target_attached, previous_
 
 def restore_previous_endpoint(previous_container, cfg):
     restored = inspect_container(previous_container)
+    if (restored.get("State") or {}).get("Running") is not False:
+        raise LifecycleError("previous Agent container must remain stopped while its routed endpoint is restored")
     networks = restored.get("NetworkSettings", {}).get("Networks") or {}
     if cfg["network"] not in networks:
         args = [
