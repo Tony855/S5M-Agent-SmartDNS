@@ -148,7 +148,9 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     if evidence["client_cidrs"] != expected_cidrs or evidence["ipv4_address"] != expected_v4 or evidence["ipv6_address"] != expected_v6:
         return False
     host_addresses = evidence["host_interface_addresses"]
-    if not isinstance(host_addresses, list) or not host_addresses or host_addresses != sorted(set(host_addresses)):
+    if not isinstance(host_addresses, list) or not host_addresses or any(not isinstance(value, str) for value in host_addresses):
+        return False
+    if host_addresses != sorted(set(host_addresses)):
         return False
     try:
         parsed_host_addresses = [ipaddress.ip_address(value) for value in host_addresses if isinstance(value, str)]
@@ -214,7 +216,7 @@ def interface_state_matches(cfg: dict, output: str, expected_addresses: list[str
             continue
         if (family == "inet" and address.version != 4) or (family == "inet6" and address.version != 6):
             continue
-        flags = set(item.get("flags", [])) if isinstance(item.get("flags", []), list) else set()
+        flags = {flag for flag in item.get("flags", []) if isinstance(flag, str)} if isinstance(item.get("flags", []), list) else set()
         if item.get("temporary") is True or flags.intersection({"temporary", "tentative", "dadfailed", "deprecated"}):
             continue
         if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address, "ipv4_mapped", None):
