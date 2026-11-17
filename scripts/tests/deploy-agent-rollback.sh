@@ -79,8 +79,8 @@ HELPER
   : >"$ingress_tmp/firewall.json"
   export INGRESS_HELPER_LOG="$ingress_tmp/helper.log"
   export INGRESS_HELPER_EXIT=0
-  provision_per_client_ingress "$ingress_tmp/helper" "$ingress_tmp/network.json" "$ingress_tmp/firewall.json"
-  grep -Fxq "provision --config $ingress_tmp/network.json --firewall-config $ingress_tmp/firewall.json" "$INGRESS_HELPER_LOG"
+  provision_per_client_ingress "$ingress_tmp/helper" "$ingress_tmp/network.json" "$ingress_tmp/firewall.json" "s5m-agent.rollback.test"
+  grep -Fxq "provision --config $ingress_tmp/network.json --firewall-config $ingress_tmp/firewall.json --previous-container s5m-agent.rollback.test" "$INGRESS_HELPER_LOG"
   export INGRESS_HELPER_EXIT=1
   if provision_per_client_ingress "$ingress_tmp/helper" "$ingress_tmp/network.json" "$ingress_tmp/firewall.json"; then
     echo "enabled per-client ingress unexpectedly accepted a failed routed network provision" >&2
@@ -139,7 +139,7 @@ test_per_client_ingress_provisioning_is_fail_closed
 
 # The explicit ingress lifecycle must finish before the old rollback container
 # is deleted or the deployment is marked successful.
-provision_call_line="$(grep -n '^if ! provision_per_client_ingress; then' "$DEPLOY" | cut -d: -f1)"
+provision_call_line="$(grep -n '^if ! provision_per_client_ingress "" "" "" "$previous_container"; then' "$DEPLOY" | cut -d: -f1)"
 deploy_ok_line="$(grep -n '^DEPLOY_OK=1
 # binds container loopback. Reject the misleading mapping until a dedicated
 # source-preserving LAN ingress has passed network acceptance.
