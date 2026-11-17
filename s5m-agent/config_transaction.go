@@ -192,6 +192,39 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, controllerPayload, skipSmartDNSHealth, transactionApplySmartDNS, nil)
 }
 
+// smartDNSPerClientReplayProbe verifies an already-written per-client
+// document with fresh local host evidence, current Agent interface state and
+// the per-client DNS/listener probe. It deliberately never falls back to the
+// shared 127.0.0.1:6053 health check.
+func smartDNSPerClientReplayProbe(
+	data []byte,
+	contract smartDNSPerClientIngressContract,
+	readAttestation func() (smartDNSHostIngressAttestation, error),
+	observe func() (smartDNSIngressObservation, error),
+	probe func([]byte, smartDNSHostIngressAttestation) bool,
+) func() bool {
+	return func() bool {
+		if readAttestation == nil || observe == nil {
+			return false
+		}
+		if err := validateSmartDNSConfigWithContractBoundIngress(data, contract); err != nil {
+			return false
+		}
+		attestation, err := readAttestation()
+		if err != nil || validateSmartDNSHostIngressContract(contract, attestation) != nil {
+			return false
+		}
+		observation, err := observe()
+		if err != nil || validateSmartDNSHostIngressObservation(attestation, observation) != nil {
+			return false
+		}
+		if probe == nil {
+			probe = smartDNSPerClientRuntimeHealthy
+		}
+		return probe(data, attestation)
+	}
+}
+
 // applyAgentConfigTransactionWithIngress validates per-client configuration
 // against the explicit Master-provided ingress contract, then uses the same
 // durable Mihomo+SmartDNS transaction and rollback journal as shared mode.
@@ -226,7 +259,16 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 	}
 
 	apply := func(data []byte, cleanupBackup bool) (string, error) {
-		return writeSmartDNSConfigLockedWithValidator(data, cleanupBackup, validator)
+		replayProbe := smartDNSPerClientReplayProbe(
+			data,
+			contract,
+			readSmartDNSHostIngressAttestation,
+			func() (smartDNSIngressObservation, error) {
+				return collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+			},
+			smartDNSPerClientRuntimeHealthy,
+		)
+		return writeSmartDNSConfigLockedWithValidatorAndReplayProbe(data, cleanupBackup, validator, replayProbe())
 	}
 	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, true, apply, func() error {
 		// Re-read the host proof after the candidate services are live and before
