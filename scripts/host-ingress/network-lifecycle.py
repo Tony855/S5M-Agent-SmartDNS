@@ -283,45 +283,55 @@ def routeros_v7_route(subnet, next_hop):
     command = "/ipv6 route add" if family == 6 else "/ip route add"
     return f'{command} dst-address={subnet} gateway={next_hop} comment="S5M-Agent DNS ingress"'
 
-def validate_network_endpoint_state(net, cfg, target_attached, previous_container=None):
-    endpoint_names = {
-        value.get("Name")
-        for value in (net.get("Containers") or {}).values()
-        if isinstance(value, dict) and value.get("Name")
-    }
-    allowed_names = {cfg["container"]}
+def validate_network_endpoint_state(net, cfg, target, target_attached, previous_container=None):
+    endpoints = net.get("Containers") or {}
+    if not isinstance(endpoints, dict):
+        raise LifecycleError("Docker ingress network endpoint state is malformed")
+    target_id = target.get("Id")
+    if not isinstance(target_id, str) or not target_id:
+        raise LifecycleError("target Agent container ID is unavailable for routed endpoint verification")
+    if target_attached != (target_id in endpoints):
+        raise LifecycleError("Docker network and target container endpoint snapshots disagree")
+
+    allowed_ids = {target_id}
+    previous_attached = False
     if previous_container:
         if previous_container == cfg["container"] or not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$", previous_container):
             raise LifecycleError("previous container name is invalid")
-        allowed_names.add(previous_container)
-    unexpected = endpoint_names - allowed_names
-    if unexpected:
-        raise LifecycleError(f"managed ingress network has unexpected attached containers: {sorted(unexpected)}")
-    if target_attached != (cfg["container"] in endpoint_names):
-        raise LifecycleError("Docker network and target container endpoint snapshots disagree")
+        previous = inspect_container(previous_container)
+        previous_id = previous.get("Id")
+        if not isinstance(previous_id, str) or not previous_id:
+            raise LifecycleError("previous Agent container ID is unavailable for routed endpoint handoff")
+        if previous_id == target_id:
+            raise LifecycleError("old and new Agent container IDs must be distinct during endpoint handoff")
+        allowed_ids.add(previous_id)
+        previous_networks = previous.get("NetworkSettings", {}).get("Networks") or {}
+        previous_attached = cfg["network"] in previous_networks
+        if previous_attached != (previous_id in endpoints):
+            raise LifecycleError("previous container and Docker network endpoint snapshots disagree")
+        if previous_attached:
+            if target_attached:
+                raise LifecycleError("both old and new Agent containers are attached to the same routed ingress network")
+            if (previous.get("State") or {}).get("Running") is not False:
+                raise LifecycleError("previous Agent container must be stopped before routed endpoint handoff")
+            endpoint = previous_networks[cfg["network"]]
+            for family, (_, _, address) in cfg["_networks"].items():
+                field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+                if endpoint.get(field) != str(address):
+                    raise LifecycleError(f"previous container has an unexpected IPv{family} ingress address")
+            if "bridge" not in previous_networks:
+                raise LifecycleError("previous Agent container must retain the default bridge before ingress handoff")
+            validate_dns_port_bindings(previous, cfg)
 
-    if not previous_container:
-        return False
-    previous = inspect_container(previous_container)
-    previous_networks = previous.get("NetworkSettings", {}).get("Networks") or {}
-    previous_attached = cfg["network"] in previous_networks
-    if previous_attached != (previous_container in endpoint_names):
-        raise LifecycleError("previous container and Docker network endpoint snapshots disagree")
-    if not previous_attached:
-        return False
-    if target_attached:
-        raise LifecycleError("both old and new Agent containers are attached to the same routed ingress network")
-    if (previous.get("State") or {}).get("Running") is not False:
-        raise LifecycleError("previous Agent container must be stopped before routed endpoint handoff")
-    endpoint = previous_networks[cfg["network"]]
-    for family, (_, _, address) in cfg["_networks"].items():
-        field = "IPAddress" if family == 4 else "GlobalIPv6Address"
-        if endpoint.get(field) != str(address):
-            raise LifecycleError(f"previous container has an unexpected IPv{family} ingress address")
-    if "bridge" not in previous_networks:
-        raise LifecycleError("previous Agent container must retain the default bridge before ingress handoff")
-    validate_dns_port_bindings(previous, cfg)
-    return True
+    unexpected_ids = set(endpoints) - allowed_ids
+    if unexpected_ids:
+        names = sorted(
+            value.get("Name", "<unknown>")
+            for endpoint_id, value in endpoints.items()
+            if endpoint_id in unexpected_ids and isinstance(value, dict)
+        )
+        raise LifecycleError(f"managed ingress network has unexpected attached containers: {names}")
+    return previous_attached
 
 
 def restore_previous_endpoint(previous_container, cfg):
@@ -378,7 +388,7 @@ def _provision_locked(cfg, previous_container=None):
         validate_dns_port_bindings(container, cfg)
         attached = container.get("NetworkSettings", {}).get("Networks") or {}
         target_attached = cfg["network"] in attached
-        previous_attached = validate_network_endpoint_state(net, cfg, target_attached, previous_container)
+        previous_attached = validate_network_endpoint_state(net, cfg, container, target_attached, previous_container)
     except Exception:
         if created:
             run(["docker", "network", "rm", cfg["network"]], check=False)
