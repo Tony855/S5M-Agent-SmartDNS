@@ -41,6 +41,30 @@ NETWORK_ID=$(docker network inspect -f '{{.Id}}' "$NETWORK")
 [[ "$NETWORK_ID" =~ ^[0-9a-f]{64}$ ]] || { echo "ERROR: invalid routed Docker network identity" >&2; exit 1; }
 PID=$(docker inspect -f '{{.State.Pid}}' "$CONTAINER")
 [[ "$PID" =~ ^[1-9][0-9]*$ ]] && [[ -d "/proc/$PID/ns/net" ]] || { echo "ERROR: container is not running" >&2; exit 1; }
+capture_stable_host_addresses() {
+  ip -j addr show dev "$LAN_IF" | python3 -c '
+import ipaddress, json, sys
+records = json.load(sys.stdin)
+if not isinstance(records, list) or len(records) != 1:
+    raise SystemExit("cannot uniquely inspect the trusted host interface")
+addresses = set()
+for item in records[0].get("addr_info", []):
+    if not isinstance(item, dict) or item.get("scope") != "global":
+        continue
+    flags = set(item.get("flags", [])) if isinstance(item.get("flags", []), list) else set()
+    if item.get("temporary') is True or flags.intersection({"temporary", "tentative", "dadfailed", "deprecated"}):
+        continue
+    try:
+        address = ipaddress.ip_address(item.get("local", ""))
+    except ValueError:
+        continue
+    if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address, "ipv4_mapped", None):
+        continue
+    addresses.add(str(address))
+print(json.dumps(sorted(addresses), separators=(",", ":")))
+'
+}
+HOST_INTERFACE_ADDRESSES=$(capture_stable_host_addresses) || { echo "ERROR: cannot snapshot stable global addresses on $LAN_IF" >&2; exit 1; }
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR=$(mktemp -d -m 0700 "/var/tmp/s5m-dns-ingress-$(date +%Y%m%d-%H%M%S)-XXXXXX")
@@ -82,8 +106,10 @@ cleanup
 HOST_PID=""
 CONTAINER_PID=""
 FINISHED_AT=$(date +%s)
-printf '{"version":1,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"host_interface":"%s","started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
-  "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$LAN_IF" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
+HOST_INTERFACE_ADDRESSES_END=$(capture_stable_host_addresses) || { echo "ERROR: cannot recheck stable global addresses on $LAN_IF" >&2; exit 1; }
+[[ "$HOST_INTERFACE_ADDRESSES" == "$HOST_INTERFACE_ADDRESSES_END" ]] || { echo "ERROR: trusted host interface addresses changed during capture; discard evidence and recapture" >&2; exit 1; }
+printf '{"version":1,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"host_interface":"%s","host_interface_addresses":%s,"started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
+  "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$LAN_IF" "$HOST_INTERFACE_ADDRESSES" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
 chmod 0600 "$OUT_DIR/capture-manifest.json.tmp"
 mv "$OUT_DIR/capture-manifest.json.tmp" "$OUT_DIR/capture-manifest.json"
 tcpdump -nn -tttt -r "$HOST_PCAP" >"$HOST_LOG" 2>&1 || true
