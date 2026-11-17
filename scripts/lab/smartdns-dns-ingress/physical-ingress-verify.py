@@ -250,8 +250,10 @@ def correlate_probe_packets(host_packets, container_packets, key, transport, mar
 
 def validate_capture_host_interface(manifest: dict, cfg: dict) -> None:
     addresses = manifest.get("host_interface_addresses")
-    if not isinstance(addresses, list) or not addresses or addresses != sorted(set(addresses)):
+    if not isinstance(addresses, list) or not addresses or any(not isinstance(value, str) for value in addresses):
         raise ValueError("capture manifest stable host-interface address snapshot is invalid")
+    if addresses != sorted(set(addresses)):
+        raise ValueError("capture manifest stable host-interface address snapshot is not canonical")
     try:
         result = subprocess.run(["ip", "-j", "addr", "show", "dev", cfg["interface"]], check=True, capture_output=True, text=True)
     except (OSError, subprocess.CalledProcessError) as exc:
