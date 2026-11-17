@@ -140,14 +140,31 @@ var (
 	transactionReloadMihomo = reloadMihomo
 	transactionApplySmartDNS = writeSmartDNSConfigLockedWithBackupCleanup
 	transactionWaitSmartDNSHealthy = waitForSmartDNSHealthy
+	transactionWaitSmartDNSPerClientHealthy = waitForSmartDNSPerClientHealthy
+	transactionReadSmartDNSHostIngressAttestation = readSmartDNSHostIngressAttestation
 	transactionRestartSmartDNS = func() error {
 		return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
 	}
+	transactionStopSmartDNS = smartDNSServiceStop
+	transactionWaitSmartDNSStopped = waitForSmartDNSProcessStopped
 	transactionWriteControllerConfig = writeControllerConfig
 	transactionRemoveBackup = removeTransactionBackup
 	transactionSnapshotFile = snapshotFileForTransaction
 	transactionProbeMihomoDNS = probeMihomoDNSFallback
 )
+
+func waitForSmartDNSProcessStopped(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if exec.Command("pidof", "smartdns").Run() != nil {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 // applyAgentConfigTransaction serializes the complete Mihomo+SmartDNS update.
 // Lock order is always SmartDNS then Mihomo. The caller must not hold either
@@ -333,11 +350,39 @@ func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []b
 		restored, restoreErr := restoreSmartDNSConfigVerified(smartPath, oldSmartDNS, hadSmartDNS)
 		if !restored {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", restoreErr))
-		} else if !skipSmartDNSHealth && smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
-			if err := transactionRestartSmartDNS(); err != nil {
-				rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
-			} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
-				rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
+		} else if smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
+			if skipSmartDNSHealth && updateSmartDNS {
+				// Per-client transactions skip the shared-mode candidate health
+				// probe because their post-apply check is contract-specific. That
+				// must not skip rollback recovery: the old file has been restored,
+				// so the daemon must be restarted onto those exact bytes.
+				if !hadSmartDNS {
+					if err := transactionStopSmartDNS(); err != nil {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("停止无旧配置的 SmartDNS 候选进程失败: %w", err))
+					} else if !transactionWaitSmartDNSStopped(5 * time.Second) {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后 SmartDNS 候选进程在 5 秒内仍未退出"))
+					}
+				} else if err := transactionRestartSmartDNS(); err != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
+				} else if hasPerClientSmartDNSDirectives(oldSmartDNS) {
+					attestation, attestationErr := transactionReadSmartDNSHostIngressAttestation()
+					if attestationErr != nil {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("读取回滚后的 per-client ingress 证明失败: %w", attestationErr))
+					} else if !transactionWaitSmartDNSPerClientHealthy(oldSmartDNS, attestation, 5*time.Second) {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 per-client SmartDNS 未通过 CIDR/UDP/TCP 健康检查"))
+					}
+				} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的共享 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
+				}
+			} else if !skipSmartDNSHealth {
+				// Preserve the existing shared-mode rollback behavior. A
+				// fallback-only transaction (updateSmartDNS=false) does not
+				// restart or probe the resolver it intentionally leaves running.
+				if err := transactionRestartSmartDNS(); err != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
+				} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
+				}
 			}
 		}
 		if err := transactionReloadMihomo(); err != nil {
