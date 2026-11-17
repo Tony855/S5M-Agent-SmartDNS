@@ -268,7 +268,7 @@ func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, u
 			},
 			smartDNSPerClientRuntimeHealthy,
 		)
-		return writeSmartDNSConfigLockedWithValidatorAndReplayProbe(data, cleanupBackup, validator, replayProbe())
+		return writeSmartDNSConfigLockedWithValidatorAndReplayProbe(data, cleanupBackup, validator, replayProbe)
 	}
 	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, true, apply, func() error {
 		// Re-read the host proof after the candidate services are live and before
