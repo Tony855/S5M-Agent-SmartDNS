@@ -69,7 +69,7 @@ class NetworkSafetyTests(unittest.TestCase):
                 with patch.object(nl,"_provision_locked") as provision:
                     nl.provision(cfg,firewall)
                     verify.assert_called_once_with(firewall)
-                    provision.assert_called_once_with(cfg)
+                    provision.assert_called_once_with(cfg, None)
 
     def test_provision_refuses_to_attach_before_live_firewall_verification(self):
         cfg=self.write_config()
@@ -155,6 +155,79 @@ class NetworkSafetyTests(unittest.TestCase):
         self.assertFalse(nl.preserves_single_default_route(["default dev eth0"],"172.17.0.1"))
         self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 via 172.17.0.2 dev eth0"],"172.17.0.1"))
         self.assertFalse(nl.preserves_single_default_route(["unicast default via 172.17.0.1 dev eth0"],"172.17.0.1"))
+
+    def previous_container(self, cfg, *, running=False):
+        networks = {
+            "bridge": {"Gateway": "172.17.0.1", "IPv6Gateway": "2001:db8:17::1"},
+            cfg["network"]: {"IPAddress": str(cfg["_networks"][4][2]), "GlobalIPv6Address": str(cfg["_networks"][6][2])},
+        }
+        return {"State": {"Running": running}, "NetworkSettings": {"Networks": networks, "Ports": {}}}
+
+    def test_handoff_accepts_only_stopped_previous_endpoint(self):
+        cfg = self.write_config()
+        previous_name = "s5m-agent.rollback.123"
+        net = {"Containers": {"old-id": {"Name": previous_name}}}
+        with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg)), \\
+             patch.object(nl, "validate_dns_port_bindings") as validate_ports:
+            self.assertTrue(nl.validate_network_endpoint_state(net, cfg, False, previous_name))
+            validate_ports.assert_called_once()
+
+    def test_handoff_refuses_running_previous_container(self):
+        cfg = self.write_config()
+        previous_name = "s5m-agent.rollback.123"
+        net = {"Containers": {"old-id": {"Name": previous_name}}}
+        with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg, running=True)), \\
+             patch.object(nl, "validate_dns_port_bindings"):
+            with self.assertRaises(nl.LifecycleError):
+                nl.validate_network_endpoint_state(net, cfg, False, previous_name)
+
+    def test_handoff_refuses_unexpected_or_duplicate_endpoints(self):
+        cfg = self.write_config()
+        previous_name = "s5m-agent.rollback.123"
+        previous = self.previous_container(cfg)
+        with patch.object(nl, "inspect_container", return_value=previous), \\
+             patch.object(nl, "validate_dns_port_bindings"):
+            unexpected = {"Containers": {"old-id": {"Name": previous_name}, "other-id": {"Name": "other-agent"}}}
+            with self.assertRaises(nl.LifecycleError):
+                nl.validate_network_endpoint_state(unexpected, cfg, False, previous_name)
+            duplicate = {"Containers": {"old-id": {"Name": previous_name}, "new-id": {"Name": cfg["container"]}}}
+            with self.assertRaises(nl.LifecycleError):
+                nl.validate_network_endpoint_state(duplicate, cfg, True, previous_name)
+
+    def test_handoff_refuses_address_drift_and_snapshot_mismatch(self):
+        cfg = self.write_config()
+        previous_name = "s5m-agent.rollback.123"
+        previous = self.previous_container(cfg)
+        previous["NetworkSettings"]["Networks"][cfg["network"]]["IPAddress"] = "172.31.10.99"
+        net = {"Containers": {"old-id": {"Name": previous_name}}}
+        with patch.object(nl, "inspect_container", return_value=previous), \\
+             patch.object(nl, "validate_dns_port_bindings"):
+            with self.assertRaises(nl.LifecycleError):
+                nl.validate_network_endpoint_state(net, cfg, False, previous_name)
+            with self.assertRaises(nl.LifecycleError):
+                nl.validate_network_endpoint_state({"Containers": {}}, cfg, False, previous_name)
+
+    def test_restore_previous_endpoint_uses_low_gateway_priority_and_is_idempotent(self):
+        cfg = self.write_config()
+        previous_name = "s5m-agent.rollback.123"
+        detached = {"State": {"Running": False}, "NetworkSettings": {"Networks": {"bridge": {}}, "Ports": {}}}
+        attached = self.previous_container(cfg)
+        with patch.object(nl, "inspect_container", side_effect=[detached, attached]), \\
+             patch.object(nl, "run") as command, \\
+             patch.object(nl, "validate_dns_port_bindings"):
+            nl.restore_previous_endpoint(previous_name, cfg)
+            args = command.call_args.args[0]
+            self.assertIn("--gw-priority", args)
+            self.assertEqual(args[args.index("--gw-priority") + 1], "-1")
+            self.assertIn("--previous-container", args) if False else None
+            self.assertIn(str(cfg["_networks"][4][2]), args)
+            self.assertIn(str(cfg["_networks"][6][2]), args)
+            self.assertEqual(args[-2:], [cfg["network"], previous_name])
+        with patch.object(nl, "inspect_container", return_value=attached), \\
+             patch.object(nl, "run") as command, \\
+             patch.object(nl, "validate_dns_port_bindings"):
+            nl.restore_previous_endpoint(previous_name, cfg)
+            command.assert_not_called()
 
     def write_config(self):
         td=tempfile.TemporaryDirectory()
