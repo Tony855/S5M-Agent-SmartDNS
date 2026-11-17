@@ -74,7 +74,7 @@ class ControllerTests(unittest.TestCase):
         }
         raw = b'{"version":1,"interface":"eth1"}\n'
         evidence = {
-            "version": 1, "verified_at": 1000,
+            "version": 2, "verified_at": 1000,
             "config_sha256": hashlib.sha256(raw).hexdigest(),
             "client_cidrs": ["192.168.50.0/24"],
             "ipv4_address": "172.31.10.2", "ipv6_address": None,
