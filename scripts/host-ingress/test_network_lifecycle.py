@@ -1,5 +1,5 @@
 import importlib.util, json, os, tempfile, unittest
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -233,6 +233,7 @@ class NetworkSafetyTests(unittest.TestCase):
         previous_name = "s5m-agent.rollback.123"
         state = {"previous_attached": True, "target_attached": False}
         calls = []
+        events = []
         bridge = {"Gateway": "172.17.0.1", "IPv6Gateway": "2001:db8:17::1"}
 
         def networks(name):
@@ -252,6 +253,7 @@ class NetworkSafetyTests(unittest.TestCase):
 
         def command(args, check=True):
             calls.append(list(args))
+            events.append(("command", list(args)))
             result = type("Result", (), {"stdout": "", "stderr": "", "returncode": 0})()
             if args[:3] == ["ip", "link", "show"]:
                 return result
@@ -294,6 +296,7 @@ class NetworkSafetyTests(unittest.TestCase):
              patch.object(nl, "container_networks", side_effect=lambda name: networks(name)), \
              patch.object(nl, "validate_existing"), \
              patch.object(nl, "validate_dns_port_bindings"), \
+             patch.object(nl, "invalidate_host_attestation", side_effect=lambda: events.append(("invalidate",))), \
              patch.object(nl, "host_next_hops", return_value={4: "192.168.50.2", 6: "2001:db8:50::2"}), \
              patch.object(nl, "default_routes", return_value=(
                  ["default via 172.17.0.1 dev eth0"],
@@ -303,26 +306,47 @@ class NetworkSafetyTests(unittest.TestCase):
                 nl._provision_locked(cfg, previous_name)
             except Exception as exc:
                 error = exc
-        return state, calls, error
+        return state, calls, error, events
 
     def test_provision_handoff_detaches_old_before_attaching_new(self):
-        state, calls, error = self.run_handoff()
+        state, calls, error, events = self.run_handoff()
         self.assertIsNone(error)
         self.assertFalse(state["previous_attached"])
         self.assertTrue(state["target_attached"])
+        self.assertEqual(events[0], ("invalidate",))
         old_detach = next(i for i, args in enumerate(calls) if args[:3] == ["docker", "network", "disconnect"] and args[-1] == "s5m-agent.rollback.123")
         new_attach = next(i for i, args in enumerate(calls) if args[:3] == ["docker", "network", "connect"] and args[-1] == "s5m-agent")
         self.assertLess(old_detach, new_attach)
 
     def test_failed_new_attach_restores_previous_routed_endpoint(self):
-        state, calls, error = self.run_handoff(fail_new_connect=True)
+        state, calls, error, events = self.run_handoff(fail_new_connect=True)
         self.assertIsInstance(error, nl.LifecycleError)
         self.assertTrue(state["previous_attached"])
         self.assertFalse(state["target_attached"])
+        self.assertEqual(events[0], ("invalidate",))
         restored = [args for args in calls if args[:3] == ["docker", "network", "connect"] and args[-1] == "s5m-agent.rollback.123"]
         self.assertEqual(len(restored), 1)
         self.assertIn("--gw-priority", restored[0])
         self.assertEqual(restored[0][restored[0].index("--gw-priority") + 1], "-1")
+
+    def test_provision_refreshes_attestation_only_after_releasing_shared_lock(self):
+        cfg = self.write_config()
+        events = []
+
+        @contextmanager
+        def fake_lock():
+            events.append("lock-enter")
+            try:
+                yield
+            finally:
+                events.append("lock-exit")
+
+        with patch.object(nl, "host_ingress_lock", side_effect=fake_lock), \\
+             patch.object(nl, "verify_live_firewall", side_effect=lambda *_args: events.append("verify")), \\
+             patch.object(nl, "_provision_locked", side_effect=lambda *_args: events.append("provision")), \\
+             patch.object(nl, "refresh_host_attestation", side_effect=lambda: events.append("refresh")):
+            nl.provision(cfg, Path("/tmp/firewall.json"))
+        self.assertEqual(events, ["lock-enter", "verify", "provision", "lock-exit", "refresh"])
 
     def write_config(self):
         td=tempfile.TemporaryDirectory()
