@@ -245,6 +245,24 @@ stop_existing_container_checked() {
   fi
 }
 
+# Explicit per-client opt-in is a deployment gate, not a best-effort hint.
+# Keep the previous container until the routed endpoint is actually attached.
+provision_per_client_ingress() {
+  [[ "${ENABLE_PER_CLIENT_INGRESS}" == "1" ]] || return 0
+  local helper="${1:-/usr/local/libexec/s5m-agent-ingress/network-lifecycle.py}"
+  local network_config="${2:-/etc/s5m-agent-ingress/network.json}"
+  local firewall_config="${3:-/etc/s5m-agent-ingress/config.json}"
+  if [[ ! -x "$helper" || ! -f "$network_config" || ! -f "$firewall_config" ]]; then
+    log "错误：per-client ingress 已显式启用，但 host controller/network/firewall 配置不完整。"
+    return 1
+  fi
+  if ! "$helper" provision --config "$network_config" --firewall-config "$firewall_config"; then
+    log "错误：routed Docker ingress provisioning 失败。"
+    return 1
+  fi
+  log "Routed DNS ingress network attached; firewall/physical proof gates remain enforced."
+}
+
 # 保留旧容器直到新容器通过启动检查；失败时自动恢复旧容器。
 BACKUP_NAME="${CONTAINER_NAME}.rollback.$$"
 HAD_OLD=0
@@ -339,25 +357,16 @@ for _ in $(seq 1 60); do
 done
 (( ready == 1 )) || deployment_failed "等待新容器启动超时，已回滚旧容器（如存在）。"
 
+# If per-client ingress was explicitly requested, do not discard the rollback
+# container until the routed network lifecycle has completed successfully.
+if ! provision_per_client_ingress; then
+  deployment_failed "per-client ingress 未能完成安全 provisioning；已回滚新容器。"
+fi
+
 DEPLOY_OK=1
 ROLLBACK_ARMED=0
 if (( HAD_OLD )); then
   if docker rm "$BACKUP_NAME" >/dev/null; then HAD_OLD=0; else log "警告：新容器已运行，但旧容器暂存项未能删除：$BACKUP_NAME"; fi
-fi
-
-if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
-  if [[ -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
-        -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
-    if /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
-        --config /etc/s5m-agent-ingress/network.json \
-        --firewall-config /etc/s5m-agent-ingress/config.json; then
-      log "Routed DNS ingress network attached; firewall/physical proof gates remain enforced."
-    else
-      log "警告：routed DNS ingress provision 失败；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
-    fi
-  else
-    log "警告：缺少 host-ingress helper/config；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
-  fi
 fi
 
 printf '\n===== 容器状态 =====\n'
