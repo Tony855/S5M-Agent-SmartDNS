@@ -203,7 +203,7 @@ def host_next_hops(cfg):
     for device in devices:
         for item in device.get("addr_info",[]):
             if item.get("scope")!="global": continue
-            flags=set(item.get("flags",[])) if isinstance(item.get("flags",[]),list) else set()
+            flags={flag for flag in item.get("flags",[]) if isinstance(flag,str)} if isinstance(item.get("flags",[]),list) else set()
             if item.get("temporary") is True or flags.intersection({"temporary","tentative","dadfailed","deprecated"}): continue
             try: address=ipaddress.ip_address(item.get("local",""))
             except ValueError: continue
