@@ -203,16 +203,18 @@ def host_next_hops(cfg):
     for device in devices:
         for item in device.get("addr_info",[]):
             if item.get("scope")!="global": continue
+            flags=set(item.get("flags",[])) if isinstance(item.get("flags",[]),list) else set()
+            if item.get("temporary") is True or flags.intersection({"temporary","tentative","dadfailed","deprecated"}): continue
             try: address=ipaddress.ip_address(item.get("local",""))
             except ValueError: continue
-            if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast:
+            if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address,"ipv4_mapped",None):
                 continue
             candidates[address.version].append(str(address))
     next_hops={}
     for family in cfg["_networks"]:
         if not candidates[family]:
             raise LifecycleError(f"trusted ingress interface {cfg['interface']} has no global IPv{family} address for the upstream router static route")
-        next_hops[family]=candidates[family][0]
+        next_hops[family]=sorted(candidates[family], key=lambda value: int(ipaddress.ip_address(value)))[0]
     return next_hops
 
 def inspect_container(name):
