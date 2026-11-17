@@ -283,84 +283,185 @@ def routeros_v7_route(subnet, next_hop):
     command = "/ipv6 route add" if family == 6 else "/ip route add"
     return f'{command} dst-address={subnet} gateway={next_hop} comment="S5M-Agent DNS ingress"'
 
-def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json")):
+def validate_network_endpoint_state(net, cfg, target_attached, previous_container=None):
+    endpoint_names = {
+        value.get("Name")
+        for value in (net.get("Containers") or {}).values()
+        if isinstance(value, dict) and value.get("Name")
+    }
+    allowed_names = {cfg["container"]}
+    if previous_container:
+        if previous_container == cfg["container"] or not NAME_RE.fullmatch(previous_container):
+            raise LifecycleError("previous container name is invalid")
+        allowed_names.add(previous_container)
+    unexpected = endpoint_names - allowed_names
+    if unexpected:
+        raise LifecycleError(f"managed ingress network has unexpected attached containers: {sorted(unexpected)}")
+    if target_attached != (cfg["container"] in endpoint_names):
+        raise LifecycleError("Docker network and target container endpoint snapshots disagree")
+
+    if not previous_container:
+        return False
+    previous = inspect_container(previous_container)
+    previous_networks = previous.get("NetworkSettings", {}).get("Networks") or {}
+    previous_attached = cfg["network"] in previous_networks
+    if previous_attached != (previous_container in endpoint_names):
+        raise LifecycleError("previous container and Docker network endpoint snapshots disagree")
+    if not previous_attached:
+        return False
+    if target_attached:
+        raise LifecycleError("both old and new Agent containers are attached to the same routed ingress network")
+    if (previous.get("State") or {}).get("Running") is not False:
+        raise LifecycleError("previous Agent container must be stopped before routed endpoint handoff")
+    endpoint = previous_networks[cfg["network"]]
+    for family, (_, _, address) in cfg["_networks"].items():
+        field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+        if endpoint.get(field) != str(address):
+            raise LifecycleError(f"previous container has an unexpected IPv{family} ingress address")
+    if "bridge" not in previous_networks:
+        raise LifecycleError("previous Agent container must retain the default bridge before ingress handoff")
+    validate_dns_port_bindings(previous, cfg)
+    return True
+
+
+def restore_previous_endpoint(previous_container, cfg):
+    args = [
+        "docker", "network", "connect", "--gw-priority", "-1",
+        "--ip", str(cfg["_networks"][4][2]),
+    ]
+    if 6 in cfg["_networks"]:
+        args += ["--ip6", str(cfg["_networks"][6][2])]
+    args += [cfg["network"], previous_container]
+    run(args)
+    restored = inspect_container(previous_container)
+    networks = restored.get("NetworkSettings", {}).get("Networks") or {}
+    if cfg["network"] not in networks or "bridge" not in networks:
+        raise LifecycleError("previous Agent endpoint was not restored to routed and default bridge networks")
+    endpoint = networks[cfg["network"]]
+    for family, (_, _, address) in cfg["_networks"].items():
+        field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+        if endpoint.get(field) != str(address):
+            raise LifecycleError(f"restored previous container IPv{family} ingress address mismatch")
+    validate_dns_port_bindings(restored, cfg)
+
+
+def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json"), previous_container=None):
     with host_ingress_lock():
         verify_live_firewall(firewall_config_path)
-        _provision_locked(cfg)
+        _provision_locked(cfg, previous_container)
 
 
-def _provision_locked(cfg):
-    if run(["ip","link","show","dev",cfg["interface"]],check=False).returncode:
+def _provision_locked(cfg, previous_container=None):
+    if run(["ip", "link", "show", "dev", cfg["interface"]], check=False).returncode:
         raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
-    next_hops=host_next_hops(cfg)
-    help_result=run(["docker","network","connect","--help"],check=False)
-    help_text=help_result.stdout + help_result.stderr
+    next_hops = host_next_hops(cfg)
+    help_result = run(["docker", "network", "connect", "--help"], check=False)
+    help_text = help_result.stdout + help_result.stderr
     if "--gw-priority" not in help_text:
         raise LifecycleError("Docker CLI must support network connect --gw-priority to preserve default bridge egress")
-    net=inspect_network(cfg["network"]); created=False; connected=False
+    net = inspect_network(cfg["network"])
+    created = False
     if net is None:
-        create_network(cfg); created=True
-        net=inspect_network(cfg["network"])
+        create_network(cfg)
+        created = True
+        net = inspect_network(cfg["network"])
         if net is None:
-            run(["docker","network","rm",cfg["network"]],check=False)
+            run(["docker", "network", "rm", cfg["network"]], check=False)
             raise LifecycleError("Docker did not create the requested network")
+
     try:
-        validate_existing(net,cfg)
-        container=inspect_container(cfg["container"])
-        validate_dns_port_bindings(container,cfg)
-        attached=container["NetworkSettings"]["Networks"]
+        validate_existing(net, cfg)
+        container = inspect_container(cfg["container"])
+        validate_dns_port_bindings(container, cfg)
+        attached = container.get("NetworkSettings", {}).get("Networks") or {}
+        target_attached = cfg["network"] in attached
+        previous_attached = validate_network_endpoint_state(net, cfg, target_attached, previous_container)
     except Exception:
-        if created: run(["docker","network","rm",cfg["network"]],check=False)
+        if created:
+            run(["docker", "network", "rm", cfg["network"]], check=False)
         raise
-    if cfg["network"] in attached:
-        actual=attached[cfg["network"]]
-        for family,(_,_,address) in cfg["_networks"].items():
-            field="IPAddress" if family==4 else "GlobalIPv6Address"
-            if actual.get(field)!=str(address): raise LifecycleError("container already attached with a different ingress address")
-    else:
-        args=["docker","network","connect","--gw-priority","-1","--ip",str(cfg["_networks"][4][2])]
-        if 6 in cfg["_networks"]: args += ["--ip6",str(cfg["_networks"][6][2])]
-        args += [cfg["network"],cfg["container"]]
-        try:
-            run(args); connected=True
-        except Exception:
-            # Docker CLI can report an error after the daemon has completed an
-            # endpoint attach. Inspect before cleanup so a newly-created network
-            # is never left behind with an unexpected live endpoint.
-            try:
-                if cfg["network"] in container_networks(cfg["container"]):
-                    run(["docker","network","disconnect",cfg["network"],cfg["container"]],check=False)
-            except Exception:
-                pass
-            if created: run(["docker","network","rm",cfg["network"]],check=False)
-            raise
+
+    if target_attached:
+        actual = attached[cfg["network"]]
+        for family, (_, _, address) in cfg["_networks"].items():
+            field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+            if actual.get(field) != str(address):
+                raise LifecycleError("container already attached with a different ingress address")
+
+    previous_detached = False
+    connected = False
     try:
-        verified_container=inspect_container(cfg["container"])
-        validate_dns_port_bindings(verified_container,cfg)
-        attached=verified_container["NetworkSettings"]["Networks"]
-        if "bridge" not in attached or cfg["network"] not in attached: raise LifecycleError("container must retain default bridge plus routed ingress network")
-        for family,(_,_,address) in cfg["_networks"].items():
-            field="IPAddress" if family==4 else "GlobalIPv6Address"
-            if attached[cfg["network"]].get(field)!=str(address): raise LifecycleError(f"container ingress IPv{family} address mismatch")
-        routes=default_routes(cfg["container"])
-        bridge=attached["bridge"]
-        gw4=bridge.get("Gateway")
-        if not gw4 or not preserves_single_default_route(routes[0],gw4):
+        if previous_attached:
+            try:
+                run(["docker", "network", "disconnect", cfg["network"], previous_container])
+            except Exception:
+                # Docker may report a client error after completing the detach.
+                if cfg["network"] in container_networks(previous_container):
+                    raise
+            previous_detached = cfg["network"] not in container_networks(previous_container)
+            if not previous_detached:
+                raise LifecycleError("previous Agent routed endpoint could not be detached")
+
+        if not target_attached:
+            args = [
+                "docker", "network", "connect", "--gw-priority", "-1",
+                "--ip", str(cfg["_networks"][4][2]),
+            ]
+            if 6 in cfg["_networks"]:
+                args += ["--ip6", str(cfg["_networks"][6][2])]
+            args += [cfg["network"], cfg["container"]]
+            try:
+                run(args)
+            except Exception:
+                # Inspect after a failed CLI response; the daemon may have
+                # completed the endpoint attach before the client timed out.
+                if cfg["network"] in container_networks(cfg["container"]):
+                    connected = True
+                raise
+            connected = True
+
+        verified_container = inspect_container(cfg["container"])
+        validate_dns_port_bindings(verified_container, cfg)
+        attached = verified_container.get("NetworkSettings", {}).get("Networks") or {}
+        if "bridge" not in attached or cfg["network"] not in attached:
+            raise LifecycleError("container must retain default bridge plus routed ingress network")
+        for family, (_, _, address) in cfg["_networks"].items():
+            field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+            if attached[cfg["network"]].get(field) != str(address):
+                raise LifecycleError(f"container ingress IPv{family} address mismatch")
+        routes = default_routes(cfg["container"])
+        bridge = attached["bridge"]
+        gw4 = bridge.get("Gateway")
+        if not gw4 or not preserves_single_default_route(routes[0], gw4):
             raise LifecycleError(f"default IPv4 egress changed; expected exactly one default route via bridge gateway {gw4}, got {routes[0]}")
         if 6 in cfg["_networks"]:
-            gw6=bridge.get("IPv6Gateway")
+            gw6 = bridge.get("IPv6Gateway")
             if not gw6:
                 raise LifecycleError("dual-stack ingress requires an IPv6 gateway on the default bridge to preserve default IPv6 egress")
-            if not preserves_single_default_route(routes[1],gw6):
+            if not preserves_single_default_route(routes[1], gw6):
                 raise LifecycleError(f"default IPv6 egress changed; expected exactly one default route via bridge gateway {gw6}, got {routes[1]}")
-    except Exception:
-        if connected: run(["docker","network","disconnect",cfg["network"],cfg["container"]],check=False)
-        if created: run(["docker","network","rm",cfg["network"]],check=False)
+    except Exception as error:
+        cleanup_errors = []
+        if connected or (not target_attached and cfg["network"] in container_networks(cfg["container"])):
+            try:
+                run(["docker", "network", "disconnect", cfg["network"], cfg["container"]], check=False)
+            except Exception as cleanup_error:
+                cleanup_errors.append(f"new endpoint detach failed: {cleanup_error}")
+        if previous_detached:
+            try:
+                restore_previous_endpoint(previous_container, cfg)
+            except Exception as restore_error:
+                cleanup_errors.append(f"previous endpoint restore failed: {restore_error}")
+        if created and not previous_detached:
+            run(["docker", "network", "rm", cfg["network"]], check=False)
+        if cleanup_errors:
+            raise LifecycleError(f"{error}; routed ingress rollback incomplete: {'; '.join(cleanup_errors)}") from error
         raise
+
     print(f"ROUTED_INGRESS_READY network={cfg['network']} container={cfg['container']} default_bridge_egress=preserved")
-    for family,(subnet,_,_) in cfg["_networks"].items():
+    for family, (subnet, _, _) in cfg["_networks"].items():
         print(f"UPSTREAM_ROUTER_STATIC_ROUTE IPv{family}: route {subnet} via {next_hops[family]} on {cfg['interface']}")
-        print(f"ROUTEROS_V7_COMMAND: {routeros_v7_route(subnet,next_hops[family])}")
+        print(f"ROUTEROS_V7_COMMAND: {routeros_v7_route(subnet, next_hops[family])}")
     print("Apply the displayed static routes on the upstream router; this helper does not change router or host routes.")
     print("Physical LAN source-IP acceptance remains a separate mandatory step.")
 
@@ -383,13 +484,13 @@ def _uninstall_locked(cfg):
     print(f"REMOVED managed ingress network {cfg['network']}")
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("action",choices=("provision","uninstall")); p.add_argument("--config",type=Path,default=Path("/etc/s5m-agent-ingress/network.json")); p.add_argument("--firewall-config",type=Path,default=Path("/etc/s5m-agent-ingress/config.json"))
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("action",choices=("provision","uninstall")); p.add_argument("--config",type=Path,default=Path("/etc/s5m-agent-ingress/network.json")); p.add_argument("--firewall-config",type=Path,default=Path("/etc/s5m-agent-ingress/config.json")); p.add_argument("--previous-container",default=None)
     a=p.parse_args()
     if os.geteuid()!=0: raise LifecycleError("run on Docker host as root")
     cfg=read_config(a.config)
     if a.action=="provision":
         validate_firewall_contract(cfg,a.firewall_config)
-        provision(cfg,a.firewall_config)
+        provision(cfg,a.firewall_config,a.previous_container)
     else:
         # Cleanup must remain possible after firewall settings change; network
         # ownership and exact Docker network shape are still independently checked.
