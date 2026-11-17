@@ -219,7 +219,6 @@ class NetworkSafetyTests(unittest.TestCase):
             args = command.call_args.args[0]
             self.assertIn("--gw-priority", args)
             self.assertEqual(args[args.index("--gw-priority") + 1], "-1")
-            self.assertIn("--previous-container", args) if False else None
             self.assertIn(str(cfg["_networks"][4][2]), args)
             self.assertIn(str(cfg["_networks"][6][2]), args)
             self.assertEqual(args[-2:], [cfg["network"], previous_name])
