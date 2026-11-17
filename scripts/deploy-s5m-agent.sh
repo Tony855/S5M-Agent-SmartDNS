@@ -653,7 +653,15 @@ do_recreate() {
   if ! provision_per_client_ingress "" "" "" "$backup_container"; then
     err "per-client ingress provisioning 未完成，正在回滚新容器"
     docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-    restore_previous_container "${backup_container}" || true
+    if restore_previous_container "${backup_container}"; then
+      if [[ -n "${backup_container}" && -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
+            -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
+        /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
+          --config /etc/s5m-agent-ingress/network.json \
+          --firewall-config /etc/s5m-agent-ingress/config.json ||
+          warn "旧容器已恢复，但 routed ingress endpoint 重新挂载失败；per-client 保持 fail-closed。"
+      fi
+    fi
     return 1
   fi
 
