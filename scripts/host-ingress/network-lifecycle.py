@@ -360,10 +360,30 @@ def restore_previous_endpoint(previous_container, cfg):
     validate_dns_port_bindings(restored, cfg)
 
 
+def invalidate_host_attestation():
+    controller_path = Path(__file__).with_name("controller.py")
+    spec = importlib.util.spec_from_file_location("_s5m_agent_ingress_controller", controller_path)
+    if spec is None or spec.loader is None:
+        raise LifecycleError("host ingress controller cannot be loaded to invalidate stale readiness")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.invalidate_attestation(module.ATTEST)
+
+
+def refresh_host_attestation():
+    controller_path = Path(__file__).with_name("controller.py")
+    if not controller_path.is_file():
+        raise LifecycleError("host ingress controller is missing; cannot refresh readiness after Docker endpoint change")
+    run([sys.executable, str(controller_path), "apply"])
+
+
 def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json"), previous_container=None):
     with host_ingress_lock():
         verify_live_firewall(firewall_config_path)
         _provision_locked(cfg, previous_container)
+    # controller.py uses the same flock. Refresh only after releasing this
+    # process's lock so it can re-read live Docker/NIC/nftables state.
+    refresh_host_attestation()
 
 
 def _provision_locked(cfg, previous_container=None):
@@ -406,6 +426,11 @@ def _provision_locked(cfg, previous_container=None):
     previous_detached = False
     connected = False
     try:
+        if not target_attached:
+            # A previous container's HMAC-backed packet proof is not transferable
+            # to a new Docker container ID, even when the IP/CIDRs are unchanged.
+            # Remove the Agent-readable readiness file before changing endpoints.
+            invalidate_host_attestation()
         if previous_attached:
             # Arm endpoint restoration before the daemon call: Docker can return
             # a client-side error after it has already completed the detach.
