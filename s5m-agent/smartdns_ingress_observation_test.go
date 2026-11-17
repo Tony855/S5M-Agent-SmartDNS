@@ -136,3 +136,52 @@ func TestProcSocketTableExactListenerInodesAndSmartDNSProcessOwnership(t *testin
 		t.Fatalf("a different process owning only TCP must not satisfy SmartDNS readiness: owned=%v err=%v", owned, err)
 	}
 }
+
+
+func TestSmartDNSAddressSocketsBoundRequiresOneProcessToOwnExactUDPAndTCP(t *testing.T) {
+	procRoot := t.TempDir()
+	netDir := filepath.Join(procRoot, "net")
+	if err := os.MkdirAll(netDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	udp := "sl local_address rem_address st tx_queue\\n 0: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\\n"
+	tcp := "sl local_address rem_address st tx_queue\\n 0: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\\n"
+	if err := os.WriteFile(filepath.Join(netDir, "udp"), []byte(udp), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(netDir, "tcp"), []byte(tcp), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fdDir := filepath.Join(procRoot, "1234", "fd")
+	if err := os.MkdirAll(fdDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := smartDNSAddressSocketsBoundWithProcRoot(procRoot, "127.0.0.1", 6053, true, []int{1234})
+	if err != nil || !bound {
+		t.Fatalf("one SmartDNS PID owning exact loopback UDP/TCP sockets should pass: bound=%v err=%v", bound, err)
+	}
+
+	if err := os.Remove(filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	otherFDDir := filepath.Join(procRoot, "5678", "fd")
+	if err := os.MkdirAll(otherFDDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	bound, err = smartDNSAddressSocketsBoundWithProcRoot(procRoot, "127.0.0.1", 6053, true, []int{1234, 5678})
+	if err != nil || bound {
+		t.Fatalf("split ownership by unrelated PIDs must not satisfy SmartDNS readiness: bound=%v err=%v", bound, err)
+	}
+	if _, err := smartDNSAddressSocketsBoundWithProcRoot(procRoot, "0.0.0.0", 6053, true, []int{1234}); err == nil {
+		t.Fatal("loopback listener verification must reject wildcard addresses")
+	}
+}
