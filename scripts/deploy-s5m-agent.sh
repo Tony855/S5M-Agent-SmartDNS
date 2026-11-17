@@ -352,6 +352,24 @@ except Exception as exc:
 PY
 }
 
+# Per-client ingress is an explicit deployment contract. Do not discard the
+# previous container until the routed Docker endpoint is attached successfully.
+provision_per_client_ingress() {
+  [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || return 0
+  local helper="${1:-/usr/local/libexec/s5m-agent-ingress/network-lifecycle.py}"
+  local network_config="${2:-/etc/s5m-agent-ingress/network.json}"
+  local firewall_config="${3:-/etc/s5m-agent-ingress/config.json}"
+  if [[ ! -x "$helper" || ! -f "$network_config" || ! -f "$firewall_config" ]]; then
+    err "per-client ingress 已启用，但缺少 host controller/network/firewall 配置"
+    return 1
+  fi
+  if ! "$helper" provision --config "$network_config" --firewall-config "$firewall_config"; then
+    err "routed Docker ingress provisioning 失败"
+    return 1
+  fi
+  log "Routed DNS ingress network attached; firewall/physical proof gates remain enforced."
+}
+
 verify_container() {
   log "等待容器进入健康状态（最多 120 秒）..."
   local deadline=$((SECONDS + 120)) state="unknown" health="unknown"
@@ -397,7 +415,7 @@ verify_container() {
   docker logs "${CONTAINER_NAME}" 2>&1 | grep -iE 'tun|error|fatal' | tail -10 || true
   log "监听端口："
   ss -lntup 2>/dev/null | grep -E ':(80|7890|6053)\b' || echo "  （无匹配，稍后再查看）"
-  log "完成。数据目录：${DATA_DIR}"
+  log "容器基础健康检查通过；per-client ingress provisioning 由部署事务单独验收。数据目录：${DATA_DIR}"
   return 0
 }
 
@@ -627,23 +645,16 @@ do_recreate() {
     return 1
   fi
 
-  if [[ -n "${backup_container}" ]]; then
-    log "新容器健康，删除回滚副本 ${backup_container}"
-    docker rm "${backup_container}" >/dev/null 2>&1 || warn "回滚副本未能清理，可手动删除"
+  if ! provision_per_client_ingress; then
+    err "per-client ingress provisioning 未完成，正在回滚新容器"
+    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    restore_previous_container "${backup_container}" || true
+    return 1
   fi
-  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
-    if [[ -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
-          -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
-      if /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
-          --config /etc/s5m-agent-ingress/network.json \
-          --firewall-config /etc/s5m-agent-ingress/config.json; then
-        log "Routed DNS ingress network attached; firewall/physical proof gates remain enforced."
-      else
-        warn "routed DNS ingress provision 失败；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
-      fi
-    else
-      warn "缺少 host-ingress helper/config；共享 SmartDNS 保持运行，per-client 继续 fail-closed。"
-    fi
+
+  if [[ -n "${backup_container}" ]]; then
+    log "新容器健康且 ingress provisioning 通过，删除回滚副本 ${backup_container}"
+    docker rm "${backup_container}" >/dev/null 2>&1 || warn "回滚副本未能清理，可手动删除"
   fi
   if [[ "${remove_image}" == "true" ]]; then
     log "清理旧的 dangling 镜像"
