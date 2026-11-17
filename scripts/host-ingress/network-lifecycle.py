@@ -291,7 +291,7 @@ def validate_network_endpoint_state(net, cfg, target_attached, previous_containe
     }
     allowed_names = {cfg["container"]}
     if previous_container:
-        if previous_container == cfg["container"] or not NAME_RE.fullmatch(previous_container):
+        if previous_container == cfg["container"] or not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$", previous_container):
             raise LifecycleError("previous container name is invalid")
         allowed_names.add(previous_container)
     unexpected = endpoint_names - allowed_names
