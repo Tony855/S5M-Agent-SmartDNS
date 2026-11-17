@@ -52,7 +52,7 @@ for item in records[0].get("addr_info", []):
     if not isinstance(item, dict) or item.get("scope") != "global":
         continue
     flags = set(item.get("flags", [])) if isinstance(item.get("flags", []), list) else set()
-    if item.get("temporary') is True or flags.intersection({"temporary", "tentative", "dadfailed", "deprecated"}):
+    if item.get("temporary") is True or flags.intersection({"temporary", "tentative", "dadfailed", "deprecated"}):
         continue
     try:
         address = ipaddress.ip_address(item.get("local", ""))
