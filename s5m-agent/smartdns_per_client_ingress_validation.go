@@ -244,7 +244,10 @@ func validateSmartDNSConfigWithIngressInternal(data []byte, contract smartDNSPer
 			if err != nil {
 				return fmt.Errorf("line %d: invalid group-match CIDR", lineNo+1)
 			}
-			cidr := prefix.Masked().String()
+			if prefix.String() != fields[2] || prefix != prefix.Masked() {
+				return fmt.Errorf("line %d: group-match CIDR must be canonical", lineNo+1)
+			}
+			cidr := prefix.String()
 			if !cidrs[cidr] {
 				return fmt.Errorf("line %d: group-match CIDR is not in the attested allowlist", lineNo+1)
 			}
