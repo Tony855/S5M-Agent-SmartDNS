@@ -145,6 +145,53 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 	return dir, restore
 }
 
+func TestSmartDNSPerClientReplayProbeRequiresFreshHostAndAgentProof(t *testing.T) {
+	contract := smartDNSPerClientIngressContract{
+		Version: smartDNSPerClientIngressContractVersion,
+		Ready: true,
+		IPv4Address: "172.31.10.2",
+		ClientCIDRs: []string{"192.168.50.0/24"},
+	}
+	attestation := smartDNSHostIngressAttestation{
+		Version: smartDNSHostIngressAttestationVersion,
+		UpdatedAt: time.Now().Unix(),
+		Interface: "eth0",
+		IPv4Address: "172.31.10.2",
+		ClientCIDRs: []string{"192.168.50.0/24"},
+		SourceIPPreserved: true,
+		FirewallReady: true,
+		FirewallPersistent: true,
+		UDPReady: true,
+		TCPReady: true,
+	}
+	observation := smartDNSIngressObservation{AddressInterfaces: map[string]string{"172.31.10.2": "eth1"}}
+	data := []byte("contract-bound per-client SmartDNS config")
+	probeCalls := 0
+	probe := smartDNSPerClientReplayProbe(
+		data,
+		contract,
+		func() (smartDNSHostIngressAttestation, error) { return attestation, nil },
+		func() (smartDNSIngressObservation, error) { return observation, nil },
+		func(got []byte, gotAttestation smartDNSHostIngressAttestation) bool {
+			probeCalls++
+			return bytes.Equal(got, data) && gotAttestation.IPv4Address == contract.IPv4Address
+		},
+	)
+	if !probe() || probeCalls != 1 {
+		t.Fatal("healthy per-client replay must use the contract-aware DNS probe")
+	}
+
+	attestation.SourceIPPreserved = false
+	if probe() {
+		t.Fatal("per-client replay must fail when fresh host source-IP proof is absent")
+	}
+	attestation.SourceIPPreserved = true
+	observation.AddressInterfaces = map[string]string{}
+	if probe() {
+		t.Fatal("per-client replay must fail when the attested ingress IP is absent from Agent interfaces")
+	}
+}
+
 func TestConfigTransactionRestoresAllSnapshotsWhenMihomoReloadFails(t *testing.T) {
 	dir, _ := setupConfigTransactionFixture(t)
 	reloadCalls := 0
