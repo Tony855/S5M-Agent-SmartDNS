@@ -121,6 +121,20 @@ func TestValidateSmartDNSConfigWithIngressRejectsDuplicateListenersAndReservedCI
 	}
 }
 
+func TestValidateSmartDNSConfigWithIngressRejectsNonCanonicalGroupMatchCIDR(t *testing.T) {
+	config, contract := validPerClientIngressFixture()
+	contract.ClientCIDRs = []string{"192.168.50.0/24"}
+	contract.Mappings[0].ClientCIDR = "192.168.50.0/24"
+	canonical := bytes.Replace(config, []byte("192.168.50.10/32"), []byte("192.168.50.0/24"), 1)
+	if err := validateSmartDNSConfigWithIngress(canonical, contract); err != nil {
+		t.Fatalf("canonical group-match CIDR rejected: %v", err)
+	}
+	nonCanonical := bytes.Replace(canonical, []byte("group-match -client-ip 192.168.50.0/24"), []byte("group-match -client-ip 192.168.50.1/24"), 1)
+	if err := validateSmartDNSConfigWithIngress(nonCanonical, contract); err == nil {
+		t.Fatal("group-match CIDR with host bits was normalized and accepted")
+	}
+}
+
 func TestValidateSmartDNSConfigWithIngressRejectsNonCanonicalAndOversizedContracts(t *testing.T) {
 	config, contract := validPerClientIngressFixture()
 	contract.ClientCIDRs = []string{"192.168.50.1/24"}
