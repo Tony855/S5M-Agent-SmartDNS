@@ -846,6 +846,13 @@ func writeSmartDNSConfigLockedWithBackupCleanup(data []byte, cleanupBackup bool)
 // The validator is supplied by the caller while the existing file-apply,
 // parser preflight, restart, and rollback mechanics remain shared.
 func writeSmartDNSConfigLockedWithValidator(data []byte, cleanupBackup bool, validator func([]byte) error) (string, error) {
+	return writeSmartDNSConfigLockedWithValidatorAndReplayProbe(data, cleanupBackup, validator, probeSmartDNSDNS)
+}
+
+// A per-client config has no shared default resolver on 127.0.0.1:6053. Its
+// replay probe must revalidate the current host ingress contract and the
+// per-client DNS path instead of using the shared-mode loopback probe.
+func writeSmartDNSConfigLockedWithValidatorAndReplayProbe(data []byte, cleanupBackup bool, validator func([]byte) error, replayProbe func() bool) (string, error) {
 	if validator == nil {
 		return "", fmt.Errorf("SmartDNS validator is unavailable")
 	}
@@ -862,7 +869,7 @@ func writeSmartDNSConfigLockedWithValidator(data []byte, cleanupBackup bool, val
 	// Commands are redelivered until the controller durably stores their ACK.
 	// Treat an identical already-applied config as success without restarting
 	// SmartDNS again, making configure_smartdns safe under ACK loss/replay.
-	replayHealthy, readErr := smartDNSReplayIsHealthy(smartDNSConfigPath, data, probeSmartDNSDNS)
+	replayHealthy, readErr := smartDNSReplayIsHealthy(smartDNSConfigPath, data, replayProbe)
 	if readErr != nil {
 		return "", fmt.Errorf("读取现有 SmartDNS 配置失败，拒绝重复应用: %w", readErr)
 	}
