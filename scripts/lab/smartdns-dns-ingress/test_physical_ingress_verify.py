@@ -128,6 +128,20 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
             "192.168.50.0/24": [],
         })
 
+    def test_capture_requires_unchanged_stable_host_interface_addresses(self):
+        manifest = {"host_interface_addresses": ["192.168.1.2"]}
+        cfg = {"interface": "eth1", "networks": [VERIFY.ipaddress.ip_network("192.168.50.0/24")]}
+        current = [{"ifname": "eth1", "flags": ["UP"], "addr_info": [
+            {"family": "inet", "local": "192.168.1.2", "scope": "global"},
+            {"family": "inet", "local": "192.168.1.3", "scope": "global", "flags": ["temporary"]},
+        ]}]
+        with mock.patch.object(VERIFY.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(current))):
+            VERIFY.validate_capture_host_interface(manifest, cfg)
+        current[0]["addr_info"][0]["local"] = "192.168.1.9"
+        with mock.patch.object(VERIFY.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(current))):
+            with self.assertRaisesRegex(ValueError, "changed since packet capture"):
+                VERIFY.validate_capture_host_interface(manifest, cfg)
+
     def test_capture_must_match_current_container_id_pid_and_ingress_ip(self):
         manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123}
         cfg={"interface":"eth1","addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
