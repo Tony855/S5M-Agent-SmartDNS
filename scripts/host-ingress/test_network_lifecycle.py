@@ -286,22 +286,27 @@ class NetworkSafetyTests(unittest.TestCase):
             },
             "Containers": {"old-id": {"Name": previous_name}},
         }
-        with patch.object(nl, "run", side_effect=command), \\
-             patch.object(nl, "inspect_network", return_value=net), \\
-             patch.object(nl, "inspect_container", side_effect=inspect_container), \\
-             patch.object(nl, "container_networks", side_effect=lambda name: networks(name)), \\
-             patch.object(nl, "validate_existing"), \\
-             patch.object(nl, "validate_dns_port_bindings"), \\
-             patch.object(nl, "host_next_hops", return_value={4: "192.168.50.2", 6: "2001:db8:50::2"}), \\
+        error = None
+        with patch.object(nl, "run", side_effect=command), \
+             patch.object(nl, "inspect_network", return_value=net), \
+             patch.object(nl, "inspect_container", side_effect=inspect_container), \
+             patch.object(nl, "container_networks", side_effect=lambda name: networks(name)), \
+             patch.object(nl, "validate_existing"), \
+             patch.object(nl, "validate_dns_port_bindings"), \
+             patch.object(nl, "host_next_hops", return_value={4: "192.168.50.2", 6: "2001:db8:50::2"}), \
              patch.object(nl, "default_routes", return_value=(
                  ["default via 172.17.0.1 dev eth0"],
                  ["default via 2001:db8:17::1 dev eth0"],
              )):
-            nl._provision_locked(cfg, previous_name)
-        return state, calls
+            try:
+                nl._provision_locked(cfg, previous_name)
+            except Exception as exc:
+                error = exc
+        return state, calls, error
 
     def test_provision_handoff_detaches_old_before_attaching_new(self):
-        state, calls = self.run_handoff()
+        state, calls, error = self.run_handoff()
+        self.assertIsNone(error)
         self.assertFalse(state["previous_attached"])
         self.assertTrue(state["target_attached"])
         old_detach = next(i for i, args in enumerate(calls) if args[:3] == ["docker", "network", "disconnect"] and args[-1] == "s5m-agent.rollback.123")
@@ -309,8 +314,8 @@ class NetworkSafetyTests(unittest.TestCase):
         self.assertLess(old_detach, new_attach)
 
     def test_failed_new_attach_restores_previous_routed_endpoint(self):
-        with self.assertRaises(nl.LifecycleError):
-            state, calls = self.run_handoff(fail_new_connect=True)
+        state, calls, error = self.run_handoff(fail_new_connect=True)
+        self.assertIsInstance(error, nl.LifecycleError)
         self.assertTrue(state["previous_attached"])
         self.assertFalse(state["target_attached"])
         restored = [args for args in calls if args[:3] == ["docker", "network", "connect"] and args[-1] == "s5m-agent.rollback.123"]
