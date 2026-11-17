@@ -45,8 +45,10 @@ before enabling SmartDNS per-client mode.
    Replace eth0 with the physical LAN interface that receives client traffic.
    The helper captures port 6055 on the physical interface and inside the Agent
    namespace. Its root-owned capture manifest records container identity,
-   interface and time window. The verifier requires the configured host
-   interface to match the manifest.
+   interface, stable global host-interface addresses and time window. The
+   capture helper rejects address changes during the capture; the verifier
+   compares the exact stable address set with the live NIC before signing. A
+   changed host next-hop address invalidates old physical evidence.
 
 2. On at least one actual client in every configured IPv4 or IPv6 CIDR, send both UDP
    and TCP packet probes to that family's fixed routed Agent ingress address:
@@ -68,8 +70,11 @@ before enabling SmartDNS per-client mode.
    Every configured IPv4 and IPv6 CIDR must have both UDP and TCP tuples in both pcaps,
    with identical source/destination addresses and ports. The verifier writes
    physical-evidence.json atomically, root-owned mode 0600, bound to the exact
-   host config hash, container ID and routed network ID. Evidence expires after
-   seven days and is invalidated by config/container/network changes.
+   host config hash, stable host-interface address set, container ID and routed
+   network ID. Evidence expires after seven days and is invalidated by
+   config/host-address/container/network changes. Temporary, tentative,
+   deprecated and DAD-failed NIC addresses are excluded from the route/evidence
+   snapshot so privacy-address rotation cannot silently change the router next hop.
 
 4. After the full Master/Agent readiness gate permits per-client runtime, run
    unique, uncached A and AAAA DNS names over UDP and TCP from every physical
