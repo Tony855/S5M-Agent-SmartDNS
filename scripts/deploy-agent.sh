@@ -295,15 +295,25 @@ deployment_failed() {
   local message="$1" had_previous="$HAD_OLD"
   docker logs --tail 100 "$CONTAINER_NAME" 2>/dev/null || true
   if restore_previous; then
-    # If the handoff failed after detaching the old endpoint, retry against the
-    # restored container name after the failed candidate has been removed.
-    if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" && "$had_previous" == "1" &&
-          -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
-          -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
-      /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
-        --config /etc/s5m-agent-ingress/network.json \
-        --firewall-config /etc/s5m-agent-ingress/config.json ||
-        log "错误：旧容器已恢复，但 routed ingress endpoint 重新挂载失败；per-client 保持 fail-closed。"
+    # Recreate a fresh host attestation after the failed candidate was removed.
+    # This also clears stale proof after a first-install failure with no backup.
+    if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" &&
+          -x /usr/local/libexec/s5m-agent-ingress/controller.py &&
+          -f /etc/s5m-agent-ingress/config.json ]]; then
+      if /usr/local/libexec/s5m-agent-ingress/controller.py apply; then
+        # If the previous container was detached during handoff, attach it only
+        # after its original name/ID has been restored and the firewall proof refreshed.
+        if [[ "$had_previous" == "1" &&
+              -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
+              -f /etc/s5m-agent-ingress/network.json ]]; then
+          /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
+            --config /etc/s5m-agent-ingress/network.json \
+            --firewall-config /etc/s5m-agent-ingress/config.json ||
+            log "错误：旧容器已恢复，但 routed ingress endpoint 重新挂载失败；per-client 保持 fail-closed。"
+        fi
+      else
+        log "错误：旧容器回滚后无法刷新 host ingress attestation；per-client 保持 fail-closed。"
+      fi
     fi
   else
     log "错误：旧容器回滚未完成；保留回滚副本供人工恢复。"
