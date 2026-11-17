@@ -167,7 +167,7 @@ class NetworkSafetyTests(unittest.TestCase):
         cfg = self.write_config()
         previous_name = "s5m-agent.rollback.123"
         net = {"Containers": {"old-id": {"Name": previous_name}}}
-        with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg)), \\
+        with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg)), \
              patch.object(nl, "validate_dns_port_bindings") as validate_ports:
             self.assertTrue(nl.validate_network_endpoint_state(net, cfg, False, previous_name))
             validate_ports.assert_called_once()
@@ -176,7 +176,7 @@ class NetworkSafetyTests(unittest.TestCase):
         cfg = self.write_config()
         previous_name = "s5m-agent.rollback.123"
         net = {"Containers": {"old-id": {"Name": previous_name}}}
-        with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg, running=True)), \\
+        with patch.object(nl, "inspect_container", return_value=self.previous_container(cfg, running=True)), \
              patch.object(nl, "validate_dns_port_bindings"):
             with self.assertRaises(nl.LifecycleError):
                 nl.validate_network_endpoint_state(net, cfg, False, previous_name)
@@ -185,7 +185,7 @@ class NetworkSafetyTests(unittest.TestCase):
         cfg = self.write_config()
         previous_name = "s5m-agent.rollback.123"
         previous = self.previous_container(cfg)
-        with patch.object(nl, "inspect_container", return_value=previous), \\
+        with patch.object(nl, "inspect_container", return_value=previous), \
              patch.object(nl, "validate_dns_port_bindings"):
             unexpected = {"Containers": {"old-id": {"Name": previous_name}, "other-id": {"Name": "other-agent"}}}
             with self.assertRaises(nl.LifecycleError):
@@ -200,7 +200,7 @@ class NetworkSafetyTests(unittest.TestCase):
         previous = self.previous_container(cfg)
         previous["NetworkSettings"]["Networks"][cfg["network"]]["IPAddress"] = "172.31.10.99"
         net = {"Containers": {"old-id": {"Name": previous_name}}}
-        with patch.object(nl, "inspect_container", return_value=previous), \\
+        with patch.object(nl, "inspect_container", return_value=previous), \
              patch.object(nl, "validate_dns_port_bindings"):
             with self.assertRaises(nl.LifecycleError):
                 nl.validate_network_endpoint_state(net, cfg, False, previous_name)
@@ -212,8 +212,8 @@ class NetworkSafetyTests(unittest.TestCase):
         previous_name = "s5m-agent.rollback.123"
         detached = {"State": {"Running": False}, "NetworkSettings": {"Networks": {"bridge": {}}, "Ports": {}}}
         attached = self.previous_container(cfg)
-        with patch.object(nl, "inspect_container", side_effect=[detached, attached]), \\
-             patch.object(nl, "run") as command, \\
+        with patch.object(nl, "inspect_container", side_effect=[detached, attached]), \
+             patch.object(nl, "run") as command, \
              patch.object(nl, "validate_dns_port_bindings"):
             nl.restore_previous_endpoint(previous_name, cfg)
             args = command.call_args.args[0]
@@ -222,8 +222,8 @@ class NetworkSafetyTests(unittest.TestCase):
             self.assertIn(str(cfg["_networks"][4][2]), args)
             self.assertIn(str(cfg["_networks"][6][2]), args)
             self.assertEqual(args[-2:], [cfg["network"], previous_name])
-        with patch.object(nl, "inspect_container", return_value=attached), \\
-             patch.object(nl, "run") as command, \\
+        with patch.object(nl, "inspect_container", return_value=attached), \
+             patch.object(nl, "run") as command, \
              patch.object(nl, "validate_dns_port_bindings"):
             nl.restore_previous_endpoint(previous_name, cfg)
             command.assert_not_called()
