@@ -132,7 +132,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         return False
     if not isinstance(evidence["network_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", evidence["network_id"]):
         return False
-    if type(evidence["version"]) is not int or evidence["version"] != 1:
+    if type(evidence["version"]) is not int or evidence["version"] != 2:
         return False
     if type(evidence["verified_at"]) is not int:
         return False
