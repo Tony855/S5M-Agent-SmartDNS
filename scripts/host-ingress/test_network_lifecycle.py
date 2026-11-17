@@ -130,7 +130,9 @@ class NetworkSafetyTests(unittest.TestCase):
         cfg=self.write_config()
         fake={"stdout":json.dumps([{"addr_info":[
             {"family":"inet","scope":"global","local":"192.168.50.2"},
+            {"family":"inet","scope":"global","local":"192.168.50.3","flags":["deprecated"]},
             {"family":"inet6","scope":"global","local":"2001:db8:50::2"},
+            {"family":"inet6","scope":"global","local":"2001:db8:50::99","flags":["temporary"]},
             {"family":"inet6","scope":"link","local":"fe80::1"}]}]),"returncode":0}
         with patch.object(nl,"run",return_value=type("Result",(),fake)()):
             self.assertEqual(nl.host_next_hops(cfg),{4:"192.168.50.2",6:"2001:db8:50::2"})
