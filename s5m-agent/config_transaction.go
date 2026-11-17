@@ -207,9 +207,6 @@ func smartDNSPerClientReplayProbe(
 		if readAttestation == nil || observe == nil {
 			return false
 		}
-		if err := validateSmartDNSConfigWithContractBoundIngress(data, contract); err != nil {
-			return false
-		}
 		attestation, err := readAttestation()
 		if err != nil || validateSmartDNSHostIngressContract(contract, attestation) != nil {
 			return false
