@@ -103,7 +103,11 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 	oldReload := transactionReloadMihomo
 	oldApplySmart := transactionApplySmartDNS
 	oldWait := transactionWaitSmartDNSHealthy
+	oldWaitPerClient := transactionWaitSmartDNSPerClientHealthy
+	oldReadIngressAttestation := transactionReadSmartDNSHostIngressAttestation
 	oldRestart := transactionRestartSmartDNS
+	oldStop := transactionStopSmartDNS
+	oldWaitStopped := transactionWaitSmartDNSStopped
 	oldWriteController := transactionWriteControllerConfig
 	oldRemoveBackup := transactionRemoveBackup
 	oldSnapshotFile := transactionSnapshotFile
@@ -114,7 +118,11 @@ func setupConfigTransactionFixture(t *testing.T) (string, func()) {
 		transactionReloadMihomo = oldReload
 		transactionApplySmartDNS = oldApplySmart
 		transactionWaitSmartDNSHealthy = oldWait
+		transactionWaitSmartDNSPerClientHealthy = oldWaitPerClient
+		transactionReadSmartDNSHostIngressAttestation = oldReadIngressAttestation
 		transactionRestartSmartDNS = oldRestart
+		transactionStopSmartDNS = oldStop
+		transactionWaitSmartDNSStopped = oldWaitStopped
 		transactionWriteControllerConfig = oldWriteController
 		transactionRemoveBackup = oldRemoveBackup
 		transactionSnapshotFile = oldSnapshotFile
@@ -969,5 +977,68 @@ func TestSmartDNSDisableTransitionRejectsMissingDependenciesBeforeMutation(t *te
 	}
 	if markerCalls != 0 || stopCalls != 0 {
 		t.Fatalf("missing dependency must fail before mutation: marker=%d stop=%d", markerCalls, stopCalls)
+	}
+}
+
+
+
+func TestPerClientTransactionRestartsRestoredSmartDNSAfterPostApplyFailure(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(dir, "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+
+	oldConfig := []byte("proxy-server socks5://127.0.0.1:15000 -name s5m-smartdns-15000\n")
+	if err := os.WriteFile(smartDNSConfigPath, oldConfig, 0600); err != nil {
+		t.Fatal(err)
+	}
+	transactionMergeMihomo = func(_ []byte, _ string) (bool, error) { return false, nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool {
+		t.Fatal("per-client rollback must use its contract-aware health probe")
+		return false
+	}
+	restartCalls, perClientHealthCalls := 0, 0
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	transactionReadSmartDNSHostIngressAttestation = func() (smartDNSHostIngressAttestation, error) {
+		return smartDNSHostIngressAttestation{
+			Version: 1, UpdatedAt: time.Now().Unix(), Interface: "eth1",
+			IPv4Address: "172.31.10.2", ClientCIDRs: []string{"192.168.50.0/24"},
+			SourceIPPreserved: true, FirewallReady: true, FirewallPersistent: true,
+			UDPReady: true, TCPReady: true,
+		}, nil
+	}
+	transactionWaitSmartDNSPerClientHealthy = func(data []byte, attestation smartDNSHostIngressAttestation, timeout time.Duration) bool {
+		perClientHealthCalls++
+		if !bytes.Equal(data, oldConfig) {
+			t.Fatalf("rollback probe received %q, want restored old config %q", data, oldConfig)
+		}
+		if attestation.IPv4Address != "172.31.10.2" || timeout != 5*time.Second {
+			t.Fatalf("rollback probe received wrong attestation/timeout: %#v %s", attestation, timeout)
+		}
+		return true
+	}
+
+	applySmartDNS := func(data []byte, cleanup bool) (string, error) {
+		if cleanup {
+			t.Fatal("joint transaction must retain the SmartDNS backup until commit")
+		}
+		return "", atomicWriteFile(smartDNSConfigPath, data, 0600)
+	}
+	postApplyFailure := errors.New("injected ingress proof expiry")
+	err := applyAgentConfigTransactionWithSmartDNSApply(
+		[]byte("candidate-mihomo"), []byte("candidate-smartdns"), true, "",
+		false, []byte("candidate-mihomo"), true, applySmartDNS,
+		func() error { return postApplyFailure },
+	)
+	if !errors.Is(err, postApplyFailure) {
+		t.Fatalf("expected post-apply ingress failure, got %v", err)
+	}
+	got, readErr := os.ReadFile(smartDNSConfigPath)
+	if readErr != nil || !bytes.Equal(got, oldConfig) {
+		t.Fatalf("old SmartDNS config was not restored: got=%q err=%v", got, readErr)
+	}
+	if restartCalls != 1 || perClientHealthCalls != 1 {
+		t.Fatalf("per-client rollback must restart and verify restored config: restarts=%d perClientHealth=%d", restartCalls, perClientHealthCalls)
 	}
 }
