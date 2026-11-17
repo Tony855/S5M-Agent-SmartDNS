@@ -228,6 +228,96 @@ class NetworkSafetyTests(unittest.TestCase):
             nl.restore_previous_endpoint(previous_name, cfg)
             command.assert_not_called()
 
+    def run_handoff(self, *, fail_new_connect=False):
+        cfg = self.write_config()
+        previous_name = "s5m-agent.rollback.123"
+        state = {"previous_attached": True, "target_attached": False}
+        calls = []
+        bridge = {"Gateway": "172.17.0.1", "IPv6Gateway": "2001:db8:17::1"}
+
+        def networks(name):
+            result = {"bridge": bridge}
+            if name == previous_name and state["previous_attached"]:
+                result[cfg["network"]] = {"IPAddress": "172.31.10.2", "GlobalIPv6Address": "2001:db8:31::2"}
+            if name == cfg["container"] and state["target_attached"]:
+                result[cfg["network"]] = {"IPAddress": "172.31.10.2", "GlobalIPv6Address": "2001:db8:31::2"}
+            return result
+
+        def inspect_container(name):
+            return {
+                "State": {"Running": False if name == previous_name else True},
+                "NetworkSettings": {"Networks": networks(name), "Ports": {}},
+            }
+
+        def command(args, check=True):
+            calls.append(list(args))
+            result = type("Result", (), {"stdout": "", "stderr": "", "returncode": 0})()
+            if args[:3] == ["ip", "link", "show"]:
+                return result
+            if args[:4] == ["docker", "network", "connect", "--help"]:
+                result.stdout = "--gw-priority"
+                return result
+            if args[:3] == ["docker", "network", "disconnect"]:
+                if args[-1] == previous_name:
+                    state["previous_attached"] = False
+                elif args[-1] == cfg["container"]:
+                    state["target_attached"] = False
+                return result
+            if args[:3] == ["docker", "network", "connect"]:
+                if args[-1] == cfg["container"]:
+                    state["target_attached"] = True
+                    if fail_new_connect:
+                        raise nl.LifecycleError("mock new endpoint attach failure")
+                elif args[-1] == previous_name:
+                    state["previous_attached"] = True
+                return result
+            raise AssertionError(f"unexpected command: {args}")
+
+        net = {
+            "Labels": {nl.OWNER: nl.VALUE}, "Driver": "bridge",
+            "IPAM": {"Config": [
+                {"Subnet": "172.31.10.0/24", "Gateway": "172.31.10.1"},
+                {"Subnet": "2001:db8:31::/64", "Gateway": "2001:db8:31::1"},
+            ]},
+            "Options": {
+                "com.docker.network.bridge.gateway_mode_ipv4": "routed",
+                "com.docker.network.bridge.gateway_mode_ipv6": "routed",
+                "com.docker.network.bridge.trusted_host_interfaces": "eth1",
+            },
+            "Containers": {"old-id": {"Name": previous_name}},
+        }
+        with patch.object(nl, "run", side_effect=command), \\
+             patch.object(nl, "inspect_network", return_value=net), \\
+             patch.object(nl, "inspect_container", side_effect=inspect_container), \\
+             patch.object(nl, "container_networks", side_effect=lambda name: networks(name)), \\
+             patch.object(nl, "validate_existing"), \\
+             patch.object(nl, "validate_dns_port_bindings"), \\
+             patch.object(nl, "host_next_hops", return_value={4: "192.168.50.2", 6: "2001:db8:50::2"}), \\
+             patch.object(nl, "default_routes", return_value=(
+                 ["default via 172.17.0.1 dev eth0"],
+                 ["default via 2001:db8:17::1 dev eth0"],
+             )):
+            nl._provision_locked(cfg, previous_name)
+        return state, calls
+
+    def test_provision_handoff_detaches_old_before_attaching_new(self):
+        state, calls = self.run_handoff()
+        self.assertFalse(state["previous_attached"])
+        self.assertTrue(state["target_attached"])
+        old_detach = next(i for i, args in enumerate(calls) if args[:3] == ["docker", "network", "disconnect"] and args[-1] == "s5m-agent.rollback.123")
+        new_attach = next(i for i, args in enumerate(calls) if args[:3] == ["docker", "network", "connect"] and args[-1] == "s5m-agent")
+        self.assertLess(old_detach, new_attach)
+
+    def test_failed_new_attach_restores_previous_routed_endpoint(self):
+        with self.assertRaises(nl.LifecycleError):
+            state, calls = self.run_handoff(fail_new_connect=True)
+        self.assertTrue(state["previous_attached"])
+        self.assertFalse(state["target_attached"])
+        restored = [args for args in calls if args[:3] == ["docker", "network", "connect"] and args[-1] == "s5m-agent.rollback.123"]
+        self.assertEqual(len(restored), 1)
+        self.assertIn("--gw-priority", restored[0])
+        self.assertEqual(restored[0][restored[0].index("--gw-priority") + 1], "-1")
+
     def write_config(self):
         td=tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
