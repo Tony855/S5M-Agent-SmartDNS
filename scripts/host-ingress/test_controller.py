@@ -80,6 +80,7 @@ class ControllerTests(unittest.TestCase):
             "ipv4_address": "172.31.10.2", "ipv6_address": None,
             "coverage": [{"cidr": "192.168.50.0/24", "transports": ["tcp", "udp"]}],
             "verified_client_sources": ["192.168.50.10"],
+            "host_interface_addresses": ["192.168.1.2"],
             "source_ip_preserved": True, "udp_ready": True, "tcp_ready": True,
             "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
             "probe_results_sha256": "c" * 64, "capture_manifest_sha256": "e" * 64,
@@ -248,12 +249,18 @@ class ControllerTests(unittest.TestCase):
             ],
         }])
         self.assertTrue(mod.interface_state_matches(cfg, valid))
+        self.assertTrue(mod.interface_state_matches(cfg, valid, ["192.168.1.2", "2001:db8:1::2"]))
+        self.assertFalse(mod.interface_state_matches(cfg, valid, ["192.168.1.3", "2001:db8:1::2"]))
+        self.assertFalse(mod.interface_state_matches(cfg, valid, ["192.168.1.2"]))
         self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"UP", ', "")))
         no_global_ipv6 = json.loads(valid)
         no_global_ipv6[0]["addr_info"][1]["local"] = "fe80::2"
         no_global_ipv6[0]["addr_info"][1]["scope"] = "link"
         self.assertFalse(mod.interface_state_matches(cfg, json.dumps(no_global_ipv6)))
         self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"ifname": "eth1"', '"ifname": "eth2"')))
+        temporary = json.loads(valid)
+        temporary[0]["addr_info"].append({"family": "inet6", "local": "2001:db8:1::99", "scope": "global", "flags": ["temporary"]})
+        self.assertFalse(mod.interface_state_matches(cfg, json.dumps(temporary), ["192.168.1.2", "2001:db8:1::2", "2001:db8:1::99"]))
 
     def test_firewall_persistence_requires_permanent_timer_enablement(self):
         self.assertTrue(mod.systemd_unit_is_persistently_enabled("enabled\n", 0))
