@@ -341,9 +341,9 @@ class NetworkSafetyTests(unittest.TestCase):
             finally:
                 events.append("lock-exit")
 
-        with patch.object(nl, "host_ingress_lock", side_effect=fake_lock), \\
-             patch.object(nl, "verify_live_firewall", side_effect=lambda *_args: events.append("verify")), \\
-             patch.object(nl, "_provision_locked", side_effect=lambda *_args: events.append("provision")), \\
+        with patch.object(nl, "host_ingress_lock", side_effect=fake_lock), \
+             patch.object(nl, "verify_live_firewall", side_effect=lambda *_args: events.append("verify")), \
+             patch.object(nl, "_provision_locked", side_effect=lambda *_args: events.append("provision")), \
              patch.object(nl, "refresh_host_attestation", side_effect=lambda: events.append("refresh")):
             nl.provision(cfg, Path("/tmp/firewall.json"))
         self.assertEqual(events, ["lock-enter", "verify", "provision", "lock-exit", "refresh"])
