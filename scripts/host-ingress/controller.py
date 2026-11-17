@@ -113,7 +113,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         "version", "verified_at", "config_sha256", "client_cidrs", "ipv4_address",
         "ipv6_address", "coverage", "verified_client_sources", "source_ip_preserved",
         "udp_ready", "tcp_ready", "host_pcap_sha256", "container_pcap_sha256",
-        "probe_results_sha256", "capture_manifest_sha256", "container", "container_id", "network", "network_id", "evidence_hmac_sha256",
+        "probe_results_sha256", "capture_manifest_sha256", "host_interface_addresses", "container", "container_id", "network", "network_id", "evidence_hmac_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
         return False
@@ -147,6 +147,19 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     expected_v6 = next((str(ip) for ip in cfg["addresses"] if ip.version == 6), None)
     if evidence["client_cidrs"] != expected_cidrs or evidence["ipv4_address"] != expected_v4 or evidence["ipv6_address"] != expected_v6:
         return False
+    host_addresses = evidence["host_interface_addresses"]
+    if not isinstance(host_addresses, list) or not host_addresses or host_addresses != sorted(set(host_addresses)):
+        return False
+    try:
+        parsed_host_addresses = [ipaddress.ip_address(value) for value in host_addresses if isinstance(value, str)]
+    except ValueError:
+        return False
+    if len(parsed_host_addresses) != len(host_addresses):
+        return False
+    if any(str(address) != raw or address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address, "ipv4_mapped", None) for address, raw in zip(parsed_host_addresses, host_addresses)):
+        return False
+    if not {network.version for network in cfg["networks"]}.issubset({address.version for address in parsed_host_addresses}):
+        return False
     expected_coverage = [{"cidr": cidr, "transports": ["tcp", "udp"]} for cidr in expected_cidrs]
     if evidence["coverage"] != expected_coverage:
         return False
@@ -174,7 +187,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     return True
 
 
-def interface_state_matches(cfg: dict, output: str) -> bool:
+def interface_state_matches(cfg: dict, output: str, expected_addresses: list[str] | None = None) -> bool:
     try:
         records = json.loads(output)
     except (TypeError, json.JSONDecodeError):
@@ -186,6 +199,7 @@ def interface_state_matches(cfg: dict, output: str) -> bool:
         return False
     required_families = {network.version for network in cfg["networks"]}
     observed_families = set()
+    observed_addresses = set()
     addresses = record.get("addr_info")
     if not isinstance(addresses, list):
         return False
@@ -200,9 +214,15 @@ def interface_state_matches(cfg: dict, output: str) -> bool:
             continue
         if (family == "inet" and address.version != 4) or (family == "inet6" and address.version != 6):
             continue
+        flags = set(item.get("flags", [])) if isinstance(item.get("flags", []), list) else set()
+        if item.get("temporary") is True or flags.intersection({"temporary", "tentative", "dadfailed", "deprecated"}):
+            continue
         if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address, "ipv4_mapped", None):
             continue
         observed_families.add(address.version)
+        observed_addresses.add(str(address))
+    if expected_addresses is not None and sorted(observed_addresses) != expected_addresses:
+        return False
     return required_families.issubset(observed_families)
 
 
@@ -218,6 +238,15 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
     except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     if not physical_evidence_payload_valid(evidence, config_raw, cfg, now, evidence_key=evidence_key):
+        return False
+    try:
+        interface = subprocess.run(
+            ["ip", "-j", "addr", "show", "dev", cfg["interface"]],
+            text=True, capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    if not interface_state_matches(cfg, interface.stdout, evidence["host_interface_addresses"]):
         return False
     # A signed packet capture is tied to the Docker container that was actually
     # observed. Do not keep source-preservation readiness after redeploy has
