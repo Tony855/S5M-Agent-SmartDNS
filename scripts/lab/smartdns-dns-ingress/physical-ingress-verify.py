@@ -18,7 +18,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "host-ingress"))
-from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature, physical_evidence_network_matches_current
+from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature, physical_evidence_network_matches_current, interface_state_matches
 
 
 def secure_read(path, require_root=True, max_bytes=2 * 1024 * 1024 * 1024):
@@ -248,6 +248,18 @@ def correlate_probe_packets(host_packets, container_packets, key, transport, mar
     return host_match,container_match
 
 
+def validate_capture_host_interface(manifest: dict, cfg: dict) -> None:
+    addresses = manifest.get("host_interface_addresses")
+    if not isinstance(addresses, list) or not addresses or addresses != sorted(set(addresses)):
+        raise ValueError("capture manifest stable host-interface address snapshot is invalid")
+    try:
+        result = subprocess.run(["ip", "-j", "addr", "show", "dev", cfg["interface"]], check=True, capture_output=True, text=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(f"cannot inspect current trusted host interface addresses: {exc}") from exc
+    if not interface_state_matches(cfg, result.stdout, addresses):
+        raise ValueError("trusted host interface stable global addresses changed since packet capture; recapture physical ingress")
+
+
 def validate_capture_container(manifest: dict, cfg: dict) -> None:
     try:
         result=subprocess.run(["docker","inspect",manifest["container"]],check=True,capture_output=True,text=True)
@@ -298,7 +310,7 @@ def main():
     container_pcap_raw = secure_read(args.container_pcap, require_root=True)
     probe_results_raw = secure_read(args.probe_results, require_root=False, max_bytes=8 * 1024 * 1024)
     manifest = json.loads(manifest_raw)
-    manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "host_interface", "started_at", "finished_at", "host_pcap", "container_pcap"}
+    manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "host_interface", "host_interface_addresses", "started_at", "finished_at", "host_pcap", "container_pcap"}
     if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 1:
         raise ValueError("capture manifest schema is invalid")
     if manifest["host_interface"] == "" or type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or type(manifest["container_pid"]) is not int or manifest["container_pid"] <= 0:
@@ -315,6 +327,7 @@ def main():
     cfg = load_config(args.config)
     if manifest["host_interface"] != cfg["interface"]:
         raise ValueError("capture host interface does not match the configured physical ingress interface")
+    validate_capture_host_interface(manifest, cfg)
     validate_capture_container(manifest,cfg)
     config_bytes = _secure_regular(args.config)
     host_packets = pcap_packets(args.host_pcap, host_pcap_raw)
@@ -385,6 +398,7 @@ def main():
         "ipv6_address": next((str(ip) for ip in cfg["addresses"] if ip.version == 6), None),
         "coverage": [{"cidr": cidr, "transports": ["tcp", "udp"]} for cidr in sorted(coverage)],
         "verified_client_sources": verified_sources,
+        "host_interface_addresses": manifest["host_interface_addresses"],
         "source_ip_preserved": True,
         "udp_ready": True,
         "tcp_ready": True,
