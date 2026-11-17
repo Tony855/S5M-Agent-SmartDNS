@@ -654,12 +654,20 @@ do_recreate() {
     err "per-client ingress provisioning 未完成，正在回滚新容器"
     docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
     if restore_previous_container "${backup_container}"; then
-      if [[ -n "${backup_container}" && -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
-            -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
-        /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
-          --config /etc/s5m-agent-ingress/network.json \
-          --firewall-config /etc/s5m-agent-ingress/config.json ||
-          warn "旧容器已恢复，但 routed ingress endpoint 重新挂载失败；per-client 保持 fail-closed。"
+      if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" &&
+            -x /usr/local/libexec/s5m-agent-ingress/controller.py &&
+            -f /etc/s5m-agent-ingress/config.json ]]; then
+        if /usr/local/libexec/s5m-agent-ingress/controller.py apply; then
+          if [[ -n "${backup_container}" && -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
+                -f /etc/s5m-agent-ingress/network.json ]]; then
+            /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
+              --config /etc/s5m-agent-ingress/network.json \
+              --firewall-config /etc/s5m-agent-ingress/config.json ||
+              warn "旧容器已恢复，但 routed ingress endpoint 重新挂载失败；per-client 保持 fail-closed。"
+          fi
+        else
+          warn "旧容器回滚后无法刷新 host ingress attestation；per-client 保持 fail-closed。"
+        fi
       fi
     fi
     return 1
