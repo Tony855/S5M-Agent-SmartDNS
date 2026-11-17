@@ -291,7 +291,26 @@ restore_previous() {
 }
 rollback_on_exit() { local status=$?; if (( DEPLOY_OK == 0 && ROLLBACK_ARMED == 1 )); then restore_previous || log "警告：自动回滚未能完整完成，请检查 $BACKUP_NAME"; fi; return "$status"; }
 trap rollback_on_exit EXIT
-deployment_failed() { local message="$1"; docker logs --tail 100 "$CONTAINER_NAME" 2>/dev/null || true; restore_previous || true; ROLLBACK_ARMED=0; die "$message"; }
+deployment_failed() {
+  local message="$1" had_previous="$HAD_OLD"
+  docker logs --tail 100 "$CONTAINER_NAME" 2>/dev/null || true
+  if restore_previous; then
+    # If the handoff failed after detaching the old endpoint, retry against the
+    # restored container name after the failed candidate has been removed.
+    if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" && "$had_previous" == "1" &&
+          -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
+          -f /etc/s5m-agent-ingress/network.json && -f /etc/s5m-agent-ingress/config.json ]]; then
+      /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
+        --config /etc/s5m-agent-ingress/network.json \
+        --firewall-config /etc/s5m-agent-ingress/config.json ||
+        log "错误：旧容器已恢复，但 routed ingress endpoint 重新挂载失败；per-client 保持 fail-closed。"
+    fi
+  else
+    log "错误：旧容器回滚未完成；保留回滚副本供人工恢复。"
+  fi
+  ROLLBACK_ARMED=0
+  die "$message"
+}
 
 validate_ingress_port_publication() {
   [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || return 0
