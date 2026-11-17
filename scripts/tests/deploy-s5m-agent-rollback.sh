@@ -172,14 +172,14 @@ chmod +x "$TMP/helper"
 : >"$TMP/network.json"
 : >"$TMP/firewall.json"
 export INGRESS_HELPER_LOG="$TMP/helper.log" INGRESS_HELPER_EXIT=0
-provision_per_client_ingress "$TMP/helper" "$TMP/network.json" "$TMP/firewall.json"
-grep -Fxq "provision --config $TMP/network.json --firewall-config $TMP/firewall.json" "$INGRESS_HELPER_LOG"
+provision_per_client_ingress "$TMP/helper" "$TMP/network.json" "$TMP/firewall.json" "s5m-agent.rollback.test"
+grep -Fxq "provision --config $TMP/network.json --firewall-config $TMP/firewall.json --previous-container s5m-agent.rollback.test" "$INGRESS_HELPER_LOG"
 export INGRESS_HELPER_EXIT=1
 if provision_per_client_ingress "$TMP/helper" "$TMP/network.json" "$TMP/firewall.json"; then
   echo "enabled per-client ingress unexpectedly accepted a failed routed network provision" >&2
   exit 1
 fi
-provision_call_line="$(grep -n '^  if ! provision_per_client_ingress; then' "$DEPLOY_SCRIPT" | cut -d: -f1)"
+provision_call_line="$(grep -n '^  if ! provision_per_client_ingress "" "" "" "$backup_container"; then' "$DEPLOY_SCRIPT" | cut -d: -f1)"
 backup_delete_line="$(grep -n 'docker rm "${backup_container}"' "$DEPLOY_SCRIPT" | head -n1 | cut -d: -f1)"
 [[ -n "$provision_call_line" && -n "$backup_delete_line" ]]
 (( provision_call_line < backup_delete_line )) || {
