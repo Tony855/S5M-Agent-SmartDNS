@@ -4,7 +4,7 @@
 
 仓库已包含 Agent 对 host attestation 的安全读取、root-only nftables controller、独立 routed Docker network lifecycle helper、物理抓包证据 verifier，以及 Master/Agent 的 readiness 和事务校验。PR #242 仍为 Draft；本文件描述的是代码合同，不表示目标生产主机或真实 LAN 已验收。
 
-**当前生产代码只允许 IPv4 per-client ingress。** 两个部署入口和 network lifecycle helper 都拒绝 IPv6 per-client provisioning。不要设置 ENABLE_PER_CLIENT_INGRESS_IPV6=1，也不要把 IPv6 CI/namespace 试验当成可用能力。IPv6 必须先完成安全的 Docker routed publication 设计、回归测试和真实 LAN 验收。
+**代码提供 IPv4 per-client ingress，并提供显式 opt-in 的双栈 IPv4/IPv6 provisioning 路径；IPv6 默认关闭且尚未通过生产现场验收。** 两个部署入口和 network lifecycle helper 都实现了 IPv6 前置条件、loopback-only `::1` host mapping、routed `::` 空 HostPort、IPv6 默认出口路由校验和失败回滚。不要把 GitHub Actions/namespace 试验当成真实 LAN 源地址证明；现场验收完成前必须保持生产 IPv6 ingress 关闭。
 
 ## 文件位置与权限
 
@@ -19,14 +19,14 @@
 - host controller 通过同目录临时文件、fsync 和 rename 原子写入；
 - controller 每次 reconcile 前先使旧 attestation 失效，失败时不得残留 ready=true。
 
-示例字段（当前 IPv4-only 配置）：
+示例字段（以下是 IPv4-only 示例；双栈 opt-in 时可填写 IPv6 地址并配置 IPv6 CIDR）：
 
 - version：合同版本 1；
 - updated_at：最近一次 host controller reconcile 时间；
 - interface：实际接收 LAN 流量的宿主机物理接口；
 - ipv4_address：Agent routed ingress endpoint 的固定 IPv4；
-- ipv6_address：当前必须为 null；
-- client_cidrs：精确、规范化且互不重叠的可信客户端 IPv4 CIDR 集合；
+- ipv6_address：IPv4-only 时为 null；双栈 opt-in 时为专用 routed IPv6 endpoint 地址；
+- client_cidrs：与启用的 ingress 地址族精确匹配、规范化且互不重叠的可信 IPv4/IPv6 客户端 CIDR 集合；
 - source_ip_preserved、firewall_ready、firewall_persistent、udp_ready、tcp_ready：只能由 host controller 根据实际状态和已验证证据生成，不能由部署配置或人工布尔值代替。
 
 ## 证明来源
@@ -49,7 +49,7 @@ firewall_ready 表示 live nftables allowlist 已精确应用；firewall_persist
 
 network-lifecycle.py 是独立的 root-only helper，与 nftables controller 共用 flock：
 
-- 创建/复用带所有权标签且配置完全匹配的专用 IPv4 routed bridge；
+- 创建/复用带所有权标签且配置完全匹配的专用 IPv4 routed bridge；满足显式双栈条件时可同时配置 IPv6 routed subnet；
 - 设置固定 ingress IPv4、trusted_host_interfaces 和较低 gateway priority；
 - attach 前调用 controller 的只读 verify，要求 live nft table、接口、attestation、timer 均满足 provisioning 条件；
 - attach 后验证 Agent 仍只有普通 Docker bridge 作为默认 IPv4 egress route；
@@ -75,11 +75,11 @@ Master 保留现有 ingress readiness gate：普通 per-client 发布必须有�
 
 1. 在目标 Docker 主机安装 controller，检查 nftables 规则、systemd timer、provision/uninstall 和主机重启后的恢复；
 2. 在实际上游 LAN 路由器添加 helper 输出的静态路由；
-3. 从每个真实 IPv4 client CIDR 至少一台设备发起 UDP 与 TCP probe，确认 host LAN pcap 和 Agent namespace pcap 的源 IP/端口完全一致；
+3. 从每个实际启用的 IPv4/IPv6 client CIDR 至少一台真实设备发起 UDP 与 TCP probe，确认 host LAN pcap 和 Agent namespace pcap 的源 IP/端口完全一致；
 4. 在 SmartDNS 启用后，从每个真实客户端验证 A/AAAA、UDP/TCP、预期 CIDR group 和未映射客户端 fail-closed；
 5. 对真实 Mihomo listener 执行代理 CONNECT，验证真实 DoT 上游路径和外部出口 IP 与预期代理逐一对应；
 6. 完成 TUN on/off、SmartDNS enable/disable、Agent 断线重连、Master/Agent 重启、重复命令、配置事务中断和 rollback 矩阵。
 
-**IPv6 目前不具备可部署路径。** 在独立的无公网 host-port routed IPv6 方案完成前，不配置 IPv6 client CIDR、不发布 IPv6 6055、不宣称 IPv6 source preservation。未来启用前必须重复完成 IPv6 UDP/TCP 双端抓包和真实路由器现场验收。
+**IPv6 代码路径为 opt-in，不代表生产可用。** 只有显式启用 `ENABLE_PER_CLIENT_INGRESS_IPV6=1` 且 Docker default bridge、可信 host interface、`network.json`、loopback-only `::1` mappings、routed `::` empty-HostPort mappings 和默认 IPv6 egress 全部通过实时检查时，helper 才会尝试 provision。任一检查失败必须 fail-closed 并回滚。生产环境仍须保持 IPv6 关闭，直到真实路由器静态路由、LAN 客户端 IPv6 UDP/TCP 双端抓包、SmartDNS group、代理 CONNECT/DoT 和外部出口均完成现场验收。
 
 CI 的 Server tests/race/vet、Agent tests/race/vet、AMD64/ARM64 build/runtime smoke、installer validation、host lifecycle lab 和 real SmartDNS daemon lab 只证明代码与隔离 runner 行为。它们不证明物理 LAN 路由、真实代理 CONNECT/DoT 或公网出口 IP。
