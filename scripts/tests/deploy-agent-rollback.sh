@@ -71,7 +71,7 @@ test_per_client_ingress_provisioning_is_fail_closed() (
 
   cat >"$ingress_tmp/helper" <<'HELPER'
 #!/usr/bin/env bash
-printf '%s\\n' "$*" >"$INGRESS_HELPER_LOG"
+printf '%s\n' "$*" >"$INGRESS_HELPER_LOG"
 exit "${INGRESS_HELPER_EXIT:-0}"
 HELPER
   chmod +x "$ingress_tmp/helper"
