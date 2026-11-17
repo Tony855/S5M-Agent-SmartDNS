@@ -144,8 +144,8 @@ func TestSmartDNSAddressSocketsBoundRequiresOneProcessToOwnExactUDPAndTCP(t *tes
 	if err := os.MkdirAll(netDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	udp := "sl local_address rem_address st tx_queue\\n 0: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\\n"
-	tcp := "sl local_address rem_address st tx_queue\\n 0: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\\n"
+	udp := "sl local_address rem_address st tx_queue\n 0: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n"
+	tcp := "sl local_address rem_address st tx_queue\n 0: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n"
 	if err := os.WriteFile(filepath.Join(netDir, "udp"), []byte(udp), 0600); err != nil {
 		t.Fatal(err)
 	}
