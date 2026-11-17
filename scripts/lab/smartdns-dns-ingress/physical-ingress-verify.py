@@ -313,7 +313,7 @@ def main():
     probe_results_raw = secure_read(args.probe_results, require_root=False, max_bytes=8 * 1024 * 1024)
     manifest = json.loads(manifest_raw)
     manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "host_interface", "host_interface_addresses", "started_at", "finished_at", "host_pcap", "container_pcap"}
-    if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 1:
+    if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 2:
         raise ValueError("capture manifest schema is invalid")
     if manifest["host_interface"] == "" or type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or type(manifest["container_pid"]) is not int or manifest["container_pid"] <= 0:
         raise ValueError("capture manifest fields are invalid")
@@ -392,7 +392,7 @@ def main():
     verified_sources = sorted({source for sources in complete_sources.values() for source in sources})
     now = int(time.time())
     evidence = {
-        "version": 1,
+        "version": 2,
         "verified_at": now,
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
         "client_cidrs": sorted(str(net) for net in cfg["networks"]),
