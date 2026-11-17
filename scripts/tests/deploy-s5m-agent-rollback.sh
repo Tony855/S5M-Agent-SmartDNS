@@ -181,8 +181,10 @@ if provision_per_client_ingress "$TMP/helper" "$TMP/network.json" "$TMP/firewall
 fi
 provision_call_line="$(grep -n '^  if ! provision_per_client_ingress "" "" "" "$backup_container"; then' "$DEPLOY_SCRIPT" | cut -d: -f1)"
 backup_delete_line="$(grep -n 'docker rm "${backup_container}"' "$DEPLOY_SCRIPT" | head -n1 | cut -d: -f1)"
-[[ -n "$provision_call_line" && -n "$backup_delete_line" ]]
-(( provision_call_line < backup_delete_line )) || {
+rollback_apply_line="$(grep -n 'controller.py apply' "$DEPLOY_SCRIPT" | head -n1 | cut -d: -f1)"
+rollback_reprovision_line="$(grep -n 'network-lifecycle.py provision' "$DEPLOY_SCRIPT" | head -n1 | cut -d: -f1)"
+[[ -n "$provision_call_line" && -n "$backup_delete_line" && -n "$rollback_apply_line" && -n "$rollback_reprovision_line" ]]
+(( provision_call_line < backup_delete_line && rollback_apply_line < rollback_reprovision_line )) || {
   echo "legacy deployer must provision ingress before deleting its rollback container" >&2
   exit 1
 }
