@@ -143,8 +143,11 @@ test_per_client_ingress_provisioning_is_fail_closed
 provision_call_line="$(grep -n '^if ! provision_per_client_ingress "" "" "" "$previous_container"; then' "$DEPLOY" | cut -d: -f1)"
 deploy_ok_line="$(grep -n '^DEPLOY_OK=1$' "$DEPLOY" | cut -d: -f1)"
 backup_delete_line="$(grep -n 'if docker rm "$BACKUP_NAME"' "$DEPLOY" | cut -d: -f1)"
-[[ -n "$provision_call_line" && -n "$deploy_ok_line" && -n "$backup_delete_line" ]]
-(( provision_call_line < deploy_ok_line && provision_call_line < backup_delete_line )) || {
+rollback_restore_line="$(grep -n 'if restore_previous; then' "$DEPLOY" | head -n1 | cut -d: -f1)"
+rollback_apply_line="$(grep -n 'controller.py apply' "$DEPLOY" | head -n1 | cut -d: -f1)"
+rollback_reprovision_line="$(grep -n 'network-lifecycle.py provision' "$DEPLOY" | head -n1 | cut -d: -f1)"
+[[ -n "$provision_call_line" && -n "$deploy_ok_line" && -n "$backup_delete_line" && -n "$rollback_restore_line" && -n "$rollback_apply_line" && -n "$rollback_reprovision_line" ]]
+(( provision_call_line < deploy_ok_line && provision_call_line < backup_delete_line && rollback_restore_line < rollback_apply_line && rollback_apply_line < rollback_reprovision_line )) || {
   echo "per-client ingress provisioning must precede deploy commit and old-container deletion" >&2
   exit 1
 }
