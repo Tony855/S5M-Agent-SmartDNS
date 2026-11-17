@@ -209,6 +209,15 @@ def append_result(path, record):
             pass
 
 
+def complete_sources_by_cidr(coverage):
+    """Return only client sources proven over both UDP and TCP in each CIDR."""
+    required = {"udp", "tcp"}
+    return {
+        cidr: sorted(source for source, transports in sources.items() if required.issubset(transports))
+        for cidr, sources in coverage.items()
+    }
+
+
 def correlate_probe_packets(host_packets, container_packets, key, transport, marker, result, started_at, finished_at, label="probe"):
     def matching_packet(packets):
         for packet in packets:
@@ -325,8 +334,10 @@ def main():
         raise ValueError("no physical client probe results supplied")
 
     addresses = {str(ip) for ip in cfg["addresses"]}
-    coverage = {str(net): set() for net in cfg["networks"]}
-    verified_sources = set()
+    # Track transports per physical source address, not only per CIDR.
+    # Otherwise UDP from client A and TCP from client B in the same subnet
+    # could be combined into a false full-coverage attestation.
+    coverage = {str(net): {} for net in cfg["networks"]}
     for item in results:
         transport = item.get("transport")
         if transport not in ("udp", "tcp") or item.get("destination_port") != 6055:
@@ -356,12 +367,14 @@ def main():
         correlate_probe_packets(host_packets,container_packets,key,transport,
             b"S5M-INGRESS-PROBE:"+item["nonce"].encode(),item["result"],
             manifest["started_at"],manifest["finished_at"],network)
-        coverage[str(network)].add(transport)
-        verified_sources.add(str(source))
+        source_transports = coverage[str(network)].setdefault(str(source), set())
+        source_transports.add(transport)
 
-    missing = {cidr: sorted({"udp", "tcp"} - transports) for cidr, transports in coverage.items() if transports != {"udp", "tcp"}}
+    complete_sources = complete_sources_by_cidr(coverage)
+    missing = {cidr: "one same client source must pass both UDP and TCP" for cidr, sources in complete_sources.items() if not sources}
     if missing:
-        raise ValueError("each configured client CIDR needs a captured UDP and TCP probe: " + json.dumps(missing, sort_keys=True))
+        raise ValueError("each configured client CIDR needs at least one same physical client source with both UDP and TCP probes: " + json.dumps(missing, sort_keys=True))
+    verified_sources = sorted({source for sources in complete_sources.values() for source in sources})
     now = int(time.time())
     evidence = {
         "version": 1,
@@ -371,7 +384,7 @@ def main():
         "ipv4_address": next((str(ip) for ip in cfg["addresses"] if ip.version == 4), None),
         "ipv6_address": next((str(ip) for ip in cfg["addresses"] if ip.version == 6), None),
         "coverage": [{"cidr": cidr, "transports": ["tcp", "udp"]} for cidr in sorted(coverage)],
-        "verified_client_sources": sorted(verified_sources),
+        "verified_client_sources": verified_sources,
         "source_ip_preserved": True,
         "udp_ready": True,
         "tcp_ready": True,
