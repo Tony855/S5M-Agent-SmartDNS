@@ -145,7 +145,6 @@ var (
 	transactionRestartSmartDNS = func() error {
 		return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
 	}
-	transactionStopSmartDNS = smartDNSServiceStop
 	transactionWaitSmartDNSStopped = waitForSmartDNSProcessStopped
 	transactionWriteControllerConfig = writeControllerConfig
 	transactionRemoveBackup = removeTransactionBackup
