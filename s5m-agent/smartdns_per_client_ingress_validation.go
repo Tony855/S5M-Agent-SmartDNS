@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -611,44 +612,58 @@ func hasPerClientSmartDNSDirectives(data []byte) bool {
 // committed. It deliberately does not send a query from the Agent's own source
 // address: that address is not expected to belong to any client CIDR mapping.
 func smartDNSIngressAddressSocketsBound(address string) (bool, error) {
-	ip, err := netip.ParseAddr(strings.TrimSpace(address))
-	if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
-		return false, fmt.Errorf("invalid ingress address")
-	}
-	var udpPath, tcpPath string
-	ipv6 := ip.Is6()
-	if ipv6 {
-		udpPath, tcpPath = "/proc/net/udp6", "/proc/net/tcp6"
-	} else {
-		udpPath, tcpPath = "/proc/net/udp", "/proc/net/tcp"
-	}
-	udp, err := os.ReadFile(udpPath)
-	if err != nil {
-		return false, fmt.Errorf("read UDP socket table: %w", err)
-	}
-	tcp, err := os.ReadFile(tcpPath)
-	if err != nil {
-		return false, fmt.Errorf("read TCP socket table: %w", err)
-	}
-	udpInodes := procSocketTableExactListenerInodes(udp, ipv6, smartDNSPerClientIngressPort, ip.String(), false)
-	tcpInodes := procSocketTableExactListenerInodes(tcp, ipv6, smartDNSPerClientIngressPort, ip.String(), true)
-	if len(udpInodes) == 0 || len(tcpInodes) == 0 {
-		return false, nil
-	}
+	return smartDNSAddressSocketsBound(address, smartDNSPerClientIngressPort, false)
+}
 
-	// Socket-table presence alone is insufficient: another local process could
-	// occupy 6055 while SmartDNS failed to bind. Require both socket inodes to
-	// be held by one PID returned for the SmartDNS executable.
+// smartDNSAddressSocketsBound requires both exact UDP and TCP socket inodes to
+// be owned by one SmartDNS PID. Socket-table presence alone can be a false
+// positive when another local process occupies the port.
+func smartDNSAddressSocketsBound(address string, port int, allowLoopback bool) (bool, error) {
 	pidsOutput, err := exec.Command("pidof", "smartdns").Output()
 	if err != nil {
 		return false, nil
 	}
+	pids := make([]int, 0)
 	for _, rawPID := range strings.Fields(string(pidsOutput)) {
 		pid, parseErr := strconv.Atoi(rawPID)
-		if parseErr != nil || pid <= 0 {
+		if parseErr == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return smartDNSAddressSocketsBoundWithProcRoot("/proc", address, port, allowLoopback, pids)
+}
+
+// smartDNSAddressSocketsBoundWithProcRoot keeps procfs parsing and process
+// ownership testable without weakening the production /proc + pidof checks.
+func smartDNSAddressSocketsBoundWithProcRoot(procRoot, address string, port int, allowLoopback bool, pids []int) (bool, error) {
+	ip, err := netip.ParseAddr(strings.TrimSpace(address))
+	if err != nil || ip.IsUnspecified() || ip.Zone() != "" || ip.Is4In6() || ip.IsMulticast() || ip.IsLinkLocalUnicast() ||
+		(allowLoopback && !ip.IsLoopback()) || (!allowLoopback && ip.IsLoopback()) || port < 1 || port > 65535 {
+		return false, fmt.Errorf("invalid SmartDNS listener address or port")
+	}
+	ipv6 := ip.Is6()
+	udpPath, tcpPath := "udp", "tcp"
+	if ipv6 {
+		udpPath, tcpPath = "udp6", "tcp6"
+	}
+	udp, err := os.ReadFile(filepath.Join(procRoot, "net", udpPath))
+	if err != nil {
+		return false, fmt.Errorf("read UDP socket table: %w", err)
+	}
+	tcp, err := os.ReadFile(filepath.Join(procRoot, "net", tcpPath))
+	if err != nil {
+		return false, fmt.Errorf("read TCP socket table: %w", err)
+	}
+	udpInodes := procSocketTableExactListenerInodes(udp, ipv6, port, ip.String(), false)
+	tcpInodes := procSocketTableExactListenerInodes(tcp, ipv6, port, ip.String(), true)
+	if len(udpInodes) == 0 || len(tcpInodes) == 0 {
+		return false, nil
+	}
+	for _, pid := range pids {
+		if pid <= 0 {
 			continue
 		}
-		owned, ownerErr := procProcessOwnsSocketInodes("/proc", pid, udpInodes, tcpInodes)
+		owned, ownerErr := procProcessOwnsSocketInodes(procRoot, pid, udpInodes, tcpInodes)
 		if ownerErr != nil {
 			if os.IsNotExist(ownerErr) {
 				continue // process exited during the readiness snapshot
