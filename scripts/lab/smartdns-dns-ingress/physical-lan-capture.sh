@@ -108,7 +108,7 @@ CONTAINER_PID=""
 FINISHED_AT=$(date +%s)
 HOST_INTERFACE_ADDRESSES_END=$(capture_stable_host_addresses) || { echo "ERROR: cannot recheck stable global addresses on $LAN_IF" >&2; exit 1; }
 [[ "$HOST_INTERFACE_ADDRESSES" == "$HOST_INTERFACE_ADDRESSES_END" ]] || { echo "ERROR: trusted host interface addresses changed during capture; discard evidence and recapture" >&2; exit 1; }
-printf '{"version":1,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"host_interface":"%s","host_interface_addresses":%s,"started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
+printf '{"version":2,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"host_interface":"%s","host_interface_addresses":%s,"started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
   "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$LAN_IF" "$HOST_INTERFACE_ADDRESSES" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
 chmod 0600 "$OUT_DIR/capture-manifest.json.tmp"
 mv "$OUT_DIR/capture-manifest.json.tmp" "$OUT_DIR/capture-manifest.json"
