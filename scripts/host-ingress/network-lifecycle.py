@@ -6,7 +6,7 @@ container and never changes host routes. Host-published 6055 ports are
 ephemeral and loopback-only; remote clients use direct routed ingress.
 """
 from __future__ import annotations
-import argparse, fcntl, ipaddress, json, os, re, stat, subprocess, sys
+import argparse, importlib.util, fcntl, ipaddress, json, os, re, stat, subprocess, sys
 from contextlib import contextmanager
 from pathlib import Path
 
