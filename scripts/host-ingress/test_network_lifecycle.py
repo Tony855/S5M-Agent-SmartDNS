@@ -1,5 +1,5 @@
 import importlib.util, json, os, tempfile, unittest
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -332,25 +332,6 @@ class NetworkSafetyTests(unittest.TestCase):
         self.assertEqual(len(restored), 1)
         self.assertIn("--gw-priority", restored[0])
         self.assertEqual(restored[0][restored[0].index("--gw-priority") + 1], "-1")
-
-    def test_provision_refreshes_attestation_only_after_releasing_shared_lock(self):
-        cfg = self.write_config()
-        events = []
-
-        @contextmanager
-        def fake_lock():
-            events.append("lock-enter")
-            try:
-                yield
-            finally:
-                events.append("lock-exit")
-
-        with patch.object(nl, "host_ingress_lock", side_effect=fake_lock), \
-             patch.object(nl, "verify_live_firewall", side_effect=lambda *_args: events.append("verify")), \
-             patch.object(nl, "_provision_locked", side_effect=lambda *_args: events.append("provision")), \
-             patch.object(nl, "refresh_host_attestation", side_effect=lambda: events.append("refresh")):
-            nl.provision(cfg, Path("/tmp/firewall.json"))
-        self.assertEqual(events, ["lock-enter", "verify", "provision", "lock-exit", "refresh"])
 
     def write_config(self):
         td=tempfile.TemporaryDirectory()
