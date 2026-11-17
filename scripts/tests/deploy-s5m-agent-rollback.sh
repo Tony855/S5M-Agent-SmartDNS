@@ -148,4 +148,43 @@ fi
 [[ "$(cat "$TMP/rm-failure-data/identity")" == "preserve-me-too" ]]
 [[ "$(cat "$TMP/state")" == "s5m-agent|stopped" ]]
 
+# Exercise the explicit ingress gate independently from Docker and prove the
+# old-container deletion is ordered after routed network provisioning.
+ingress_fn="$(mktemp)"
+trap 'rm -rf "$TMP"; rm -f "$ingress_fn"' EXIT
+awk '/^provision_per_client_ingress\(\)/ { copy=1 } copy { print } copy && /^}/ { exit }' "$DEPLOY_SCRIPT" >"$ingress_fn"
+log() { :; }
+err() { :; }
+source "$ingress_fn"
+ENABLE_PER_CLIENT_INGRESS=0
+provision_per_client_ingress "$TMP/missing-helper" "$TMP/missing-network" "$TMP/missing-firewall"
+ENABLE_PER_CLIENT_INGRESS=1
+if provision_per_client_ingress "$TMP/missing-helper" "$TMP/missing-network" "$TMP/missing-firewall"; then
+  echo "enabled per-client ingress unexpectedly accepted missing host controller/config" >&2
+  exit 1
+fi
+cat >"$TMP/helper" <<'HELPER'
+#!/usr/bin/env bash
+printf '%s\\n' "$*" >"$INGRESS_HELPER_LOG"
+exit "${INGRESS_HELPER_EXIT:-0}"
+HELPER
+chmod +x "$TMP/helper"
+: >"$TMP/network.json"
+: >"$TMP/firewall.json"
+export INGRESS_HELPER_LOG="$TMP/helper.log" INGRESS_HELPER_EXIT=0
+provision_per_client_ingress "$TMP/helper" "$TMP/network.json" "$TMP/firewall.json"
+grep -Fxq "provision --config $TMP/network.json --firewall-config $TMP/firewall.json" "$INGRESS_HELPER_LOG"
+export INGRESS_HELPER_EXIT=1
+if provision_per_client_ingress "$TMP/helper" "$TMP/network.json" "$TMP/firewall.json"; then
+  echo "enabled per-client ingress unexpectedly accepted a failed routed network provision" >&2
+  exit 1
+fi
+provision_call_line="$(grep -n '^  if ! provision_per_client_ingress; then' "$DEPLOY_SCRIPT" | cut -d: -f1)"
+backup_delete_line="$(grep -n 'docker rm "${backup_container}"' "$DEPLOY_SCRIPT" | head -n1 | cut -d: -f1)"
+[[ -n "$provision_call_line" && -n "$backup_delete_line" ]]
+(( provision_call_line < backup_delete_line )) || {
+  echo "legacy deployer must provision ingress before deleting its rollback container" >&2
+  exit 1
+}
+
 echo "Legacy Agent deployment stop, data-wipe safety and rollback paths verified."
