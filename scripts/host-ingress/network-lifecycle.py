@@ -372,11 +372,21 @@ def invalidate_host_attestation():
 
 def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json"), previous_container=None):
     with host_ingress_lock():
-        verify_live_firewall(firewall_config_path)
+        try:
+            verify_live_firewall(firewall_config_path)
+        except Exception as error:
+            try:
+                invalidate_host_attestation()
+            except Exception as invalidate_error:
+                raise LifecycleError(f"{error}; stale readiness invalidation failed: {invalidate_error}") from error
+            raise
         _provision_locked(cfg, previous_container)
 
 
 def _provision_locked(cfg, previous_container=None):
+    # Even an idempotent reconcile must not reuse an attestation from a prior
+    # container ID. The verified timer will publish a fresh live-state record.
+    invalidate_host_attestation()
     if run(["ip", "link", "show", "dev", cfg["interface"]], check=False).returncode:
         raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
     next_hops = host_next_hops(cfg)
@@ -508,6 +518,7 @@ def _provision_locked(cfg, previous_container=None):
 
 def uninstall(cfg):
     with host_ingress_lock():
+        invalidate_host_attestation()
         _uninstall_locked(cfg)
 
 
@@ -528,7 +539,14 @@ def main():
     p=argparse.ArgumentParser(description=__doc__); p.add_argument("action",choices=("provision","uninstall")); p.add_argument("--config",type=Path,default=Path("/etc/s5m-agent-ingress/network.json")); p.add_argument("--firewall-config",type=Path,default=Path("/etc/s5m-agent-ingress/config.json")); p.add_argument("--previous-container",default=None)
     a=p.parse_args()
     if os.geteuid()!=0: raise LifecycleError("run on Docker host as root")
-    cfg=read_config(a.config)
+    try:
+        cfg=read_config(a.config)
+    except Exception as error:
+        try:
+            invalidate_host_attestation()
+        except Exception as invalidate_error:
+            raise LifecycleError(f"{error}; stale readiness invalidation failed: {invalidate_error}") from error
+        raise
     if a.action=="provision":
         validate_firewall_contract(cfg,a.firewall_config)
         provision(cfg,a.firewall_config,a.previous_container)
