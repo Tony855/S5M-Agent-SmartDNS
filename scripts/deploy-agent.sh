@@ -252,11 +252,16 @@ provision_per_client_ingress() {
   local helper="${1:-/usr/local/libexec/s5m-agent-ingress/network-lifecycle.py}"
   local network_config="${2:-/etc/s5m-agent-ingress/network.json}"
   local firewall_config="${3:-/etc/s5m-agent-ingress/config.json}"
+  local previous_container="${4:-}"
+  local -a provision_args=(provision --config "$network_config" --firewall-config "$firewall_config")
   if [[ ! -x "$helper" || ! -f "$network_config" || ! -f "$firewall_config" ]]; then
     log "错误：per-client ingress 已显式启用，但 host controller/network/firewall 配置不完整。"
     return 1
   fi
-  if ! "$helper" provision --config "$network_config" --firewall-config "$firewall_config"; then
+  if [[ -n "$previous_container" ]]; then
+    provision_args+=(--previous-container "$previous_container")
+  fi
+  if ! "$helper" "${provision_args[@]}"; then
     log "错误：routed Docker ingress provisioning 失败。"
     return 1
   fi
@@ -359,7 +364,9 @@ done
 
 # If per-client ingress was explicitly requested, do not discard the rollback
 # container until the routed network lifecycle has completed successfully.
-if ! provision_per_client_ingress; then
+previous_container=""
+if (( HAD_OLD )); then previous_container="$BACKUP_NAME"; fi
+if ! provision_per_client_ingress "" "" "" "$previous_container"; then
   deployment_failed "per-client ingress 未能完成安全 provisioning；已回滚新容器。"
 fi
 
