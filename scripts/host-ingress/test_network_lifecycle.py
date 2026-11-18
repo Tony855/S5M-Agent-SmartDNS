@@ -147,16 +147,59 @@ class NetworkSafetyTests(unittest.TestCase):
         self.assertEqual(nl.routeros_v7_route("fd00:172:31::/64","fd00:192:168::2"),
             '/ipv6 route add dst-address=fd00:172:31::/64 gateway=fd00:192:168::2 comment="S5M-Agent DNS ingress"')
 
-    def test_single_default_route_must_use_bridge_gateway_exactly(self):
-        self.assertTrue(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0"],"172.17.0.1"))
-        self.assertTrue(nl.preserves_single_default_route(["default via 2001:db8:17::1 dev eth0"],"2001:db8:17::1"))
-        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.10 dev eth0"],"172.17.0.1"))
-        self.assertFalse(nl.preserves_single_default_route(["default via 2001:db8:17::10 dev eth0"],"2001:db8:17::1"))
-        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0","default via 172.31.10.1 dev eth1"],"172.17.0.1"))
-        self.assertFalse(nl.preserves_single_default_route(["default via 172.31.10.1 dev eth1"],"172.17.0.1"))
-        self.assertFalse(nl.preserves_single_default_route(["default dev eth0"],"172.17.0.1"))
-        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 via 172.17.0.2 dev eth0"],"172.17.0.1"))
-        self.assertFalse(nl.preserves_single_default_route(["unicast default via 172.17.0.1 dev eth0"],"172.17.0.1"))
+    def test_single_default_route_must_use_exact_bridge_gateway_and_device(self):
+        self.assertTrue(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0"], "172.17.0.1", "eth0"))
+        self.assertTrue(nl.preserves_single_default_route(["default via 2001:db8:17::1 dev eth0"], "2001:db8:17::1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth1"], "172.17.0.1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 2001:db8:17::1 dev eth1"], "2001:db8:17::1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.10 dev eth0"], "172.17.0.1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 2001:db8:17::10 dev eth0"], "2001:db8:17::1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0", "default via 172.31.10.1 dev eth1"], "172.17.0.1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.31.10.1 dev eth1"], "172.17.0.1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default dev eth0"], "172.17.0.1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 via 172.17.0.2 dev eth0"], "172.17.0.1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["default via 172.17.0.1 dev eth0 dev eth1"], "172.17.0.1", "eth0"))
+        self.assertFalse(nl.preserves_single_default_route(["unicast default via 172.17.0.1 dev eth0"], "172.17.0.1", "eth0"))
+
+    def test_default_bridge_interface_is_resolved_from_exact_endpoint_addresses(self):
+        bridge = {"IPAddress": "172.17.0.2", "GlobalIPv6Address": "2001:db8:17::2"}
+        devices = [
+            {"ifname": "lo", "flags": ["UP", "LOOPBACK"], "addr_info": [{"local": "127.0.0.1"}]},
+            {"ifname": "eth0", "flags": ["UP", "BROADCAST"], "addr_info": [
+                {"family": "inet", "local": "172.17.0.2"},
+                {"family": "inet6", "local": "2001:db8:17::2"},
+            ]},
+            {"ifname": "eth1", "flags": ["UP", "BROADCAST"], "addr_info": [
+                {"family": "inet", "local": "172.31.10.2"},
+                {"family": "inet6", "local": "2001:db8:31::2"},
+            ]},
+        ]
+        result = type("Result", (), {"stdout": json.dumps(devices)})()
+        with patch.object(nl, "run", return_value=result) as command:
+            self.assertEqual(nl.default_bridge_interfaces("s5m-agent", bridge, [4, 6]), {4: "eth0", 6: "eth0"})
+        self.assertEqual(command.call_args.args[0], ["docker", "exec", "s5m-agent", "ip", "-j", "addr", "show"])
+
+    def test_default_bridge_interface_rejects_ambiguous_or_missing_endpoint(self):
+        bridge = {"IPAddress": "172.17.0.2", "GlobalIPv6Address": "2001:db8:17::2"}
+        duplicate = [
+            {"ifname": "eth0", "flags": ["UP"], "addr_info": [{"local": "172.17.0.2"}]},
+            {"ifname": "eth1", "flags": ["UP"], "addr_info": [{"local": "172.17.0.2"}]},
+            {"ifname": "eth2", "flags": ["UP"], "addr_info": [{"local": "2001:db8:17::2"}]},
+        ]
+        with patch.object(nl, "run", return_value=type("Result", (), {"stdout": json.dumps(duplicate)})()):
+            with self.assertRaises(nl.LifecycleError):
+                nl.default_bridge_interfaces("s5m-agent", bridge, [4, 6])
+        missing = [{"ifname": "eth0", "flags": ["UP"], "addr_info": [{"local": "172.17.0.3"}]}]
+        with patch.object(nl, "run", return_value=type("Result", (), {"stdout": json.dumps(missing)})()):
+            with self.assertRaises(nl.LifecycleError):
+                nl.default_bridge_interfaces("s5m-agent", bridge, [4])
+
+    def test_default_egress_rejects_correct_gateway_on_wrong_device(self):
+        bridge = {"Gateway": "172.17.0.1", "IPAddress": "172.17.0.2"}
+        with patch.object(nl, "default_routes", return_value=(["default via 172.17.0.1 dev eth1"], [])), \
+             patch.object(nl, "default_bridge_interfaces", return_value={4: "eth0"}):
+            with self.assertRaises(nl.LifecycleError):
+                nl.validate_default_bridge_egress("s5m-agent", bridge, [4])
 
     def previous_container(self, cfg, *, running=False):
         networks = {
@@ -216,8 +259,10 @@ class NetworkSafetyTests(unittest.TestCase):
         attached = self.previous_container(cfg)
         with patch.object(nl, "inspect_container", side_effect=[detached, attached]), \
              patch.object(nl, "run") as command, \
-             patch.object(nl, "validate_dns_port_bindings"):
+             patch.object(nl, "validate_dns_port_bindings"), \
+             patch.object(nl, "validate_default_bridge_egress") as validate_egress:
             nl.restore_previous_endpoint(previous_name, cfg)
+            validate_egress.assert_called_once_with(previous_name, attached["NetworkSettings"]["Networks"]["bridge"], [4, 6])
             args = command.call_args.args[0]
             self.assertIn("--gw-priority", args)
             self.assertEqual(args[args.index("--gw-priority") + 1], "-1")
@@ -226,8 +271,10 @@ class NetworkSafetyTests(unittest.TestCase):
             self.assertEqual(args[-2:], [cfg["network"], previous_name])
         with patch.object(nl, "inspect_container", return_value=attached), \
              patch.object(nl, "run") as command, \
-             patch.object(nl, "validate_dns_port_bindings"):
+             patch.object(nl, "validate_dns_port_bindings"), \
+             patch.object(nl, "validate_default_bridge_egress") as validate_egress:
             nl.restore_previous_endpoint(previous_name, cfg)
+            validate_egress.assert_called_once_with(previous_name, attached["NetworkSettings"]["Networks"]["bridge"], [4, 6])
             command.assert_not_called()
 
     def run_handoff(self, *, fail_new_connect=False):
@@ -300,14 +347,13 @@ class NetworkSafetyTests(unittest.TestCase):
              patch.object(nl, "validate_dns_port_bindings"), \
              patch.object(nl, "invalidate_host_attestation", side_effect=lambda: events.append(("invalidate",))), \
              patch.object(nl, "host_next_hops", return_value={4: "192.168.50.2", 6: "2001:db8:50::2"}), \
-             patch.object(nl, "default_routes", return_value=(
-                 ["default via 172.17.0.1 dev eth0"],
-                 ["default via 2001:db8:17::1 dev eth0"],
-             )):
+             patch.object(nl, "validate_default_bridge_egress") as validate_egress:
             try:
                 nl._provision_locked(cfg, previous_name)
             except Exception as exc:
                 error = exc
+        if error is None:
+            validate_egress.assert_called_once_with(cfg["container"], bridge, [4, 6])
         return state, calls, error, events
 
     def test_provision_handoff_detaches_old_before_attaching_new(self):

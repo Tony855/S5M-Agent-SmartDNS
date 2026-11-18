@@ -272,27 +272,119 @@ def default_routes(container):
     v6=run(["docker","exec",container,"ip","-6","route","show","default"],check=False).stdout.strip().splitlines()
     return v4,v6
 
-def preserves_single_default_route(routes, gateway):
-    """Require one default route whose parsed next-hop IP exactly matches Docker.
+def default_bridge_interfaces(container, bridge, families):
+    """Resolve the container interface that owns each Docker default-bridge IP.
 
-    Substring matching is unsafe here: an expected gateway of 172.17.0.1
-    must not accept an observed next hop of 172.17.0.10.
+    A matching gateway alone is insufficient: a stale or malicious route can
+    use the same next hop on a different interface. Bind the route check to the
+    interface that actually owns Docker's default-bridge endpoint address.
+    """
+    expected = {}
+    for family in families:
+        if family not in (4, 6) or family in expected:
+            raise LifecycleError("invalid or duplicate default-bridge address family")
+        field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+        raw = bridge.get(field) if isinstance(bridge, dict) else None
+        try:
+            address = ipaddress.ip_address(raw)
+        except (TypeError, ValueError):
+            raise LifecycleError(f"default bridge has no valid IPv{family} endpoint address")
+        if address.version != family or address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast:
+            raise LifecycleError(f"default bridge IPv{family} endpoint address is unusable")
+        expected[family] = str(address)
+    if not expected:
+        raise LifecycleError("no default-bridge address families were requested")
+
+    result = run(["docker", "exec", container, "ip", "-j", "addr", "show"])
+    try:
+        devices = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise LifecycleError(f"cannot parse Agent interface addresses for default-bridge route verification: {error}") from error
+    if not isinstance(devices, list):
+        raise LifecycleError("Agent interface address snapshot is malformed")
+
+    matches = {family: set() for family in expected}
+    seen_interfaces = set()
+    for device in devices:
+        if not isinstance(device, dict):
+            raise LifecycleError("Agent interface address snapshot contains a malformed device")
+        name = device.get("ifname")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", name) or name in seen_interfaces:
+            raise LifecycleError("Agent interface address snapshot contains an invalid or duplicate interface")
+        seen_interfaces.add(name)
+        flags = device.get("flags")
+        if not isinstance(flags, list) or "UP" not in flags:
+            continue
+        addr_info = device.get("addr_info")
+        if not isinstance(addr_info, list):
+            raise LifecycleError(f"Agent interface {name} has no valid address list")
+        for item in addr_info:
+            if not isinstance(item, dict):
+                continue
+            try:
+                address = ipaddress.ip_address(item.get("local"))
+            except (TypeError, ValueError):
+                continue
+            for family, expected_address in expected.items():
+                if address.version == family and str(address) == expected_address:
+                    matches[family].add(name)
+
+    resolved = {}
+    for family, interfaces in matches.items():
+        if len(interfaces) != 1:
+            raise LifecycleError(f"default bridge IPv{family} endpoint must belong to exactly one active Agent interface")
+        resolved[family] = next(iter(interfaces))
+    return resolved
+
+
+def preserves_single_default_route(routes, gateway, expected_interface):
+    """Require one default route with the exact Docker gateway and bridge device.
+
+    Checking only the gateway can accept a route through the routed ingress
+    interface when addresses or route state drift. The device must be the
+    unique active interface owning Docker's default-bridge endpoint address.
     """
     entries = [line.strip() for line in routes if line.strip()]
-    if len(entries) != 1 or not isinstance(gateway, str):
+    if (
+        len(entries) != 1
+        or not isinstance(gateway, str)
+        or not isinstance(expected_interface, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", expected_interface)
+    ):
         return False
     fields = entries[0].split()
-    if not fields or fields[0] != "default" or fields.count("via") != 1:
+    if (
+        not fields
+        or fields[0] != "default"
+        or fields.count("via") != 1
+        or fields.count("dev") != 1
+    ):
         return False
     try:
         expected = ipaddress.ip_address(gateway)
         via_index = fields.index("via")
-        if via_index + 1 >= len(fields):
+        dev_index = fields.index("dev")
+        if via_index + 1 >= len(fields) or dev_index + 1 >= len(fields):
             return False
         observed = ipaddress.ip_address(fields[via_index + 1])
+        observed_interface = fields[dev_index + 1]
     except (TypeError, ValueError):
         return False
-    return observed == expected
+    return observed == expected and observed_interface == expected_interface
+
+
+def validate_default_bridge_egress(container, bridge, families):
+    routes = default_routes(container)
+    interfaces = default_bridge_interfaces(container, bridge, families)
+    for family in families:
+        gateway_field = "Gateway" if family == 4 else "IPv6Gateway"
+        gateway = bridge.get(gateway_field) if isinstance(bridge, dict) else None
+        route = routes[0] if family == 4 else routes[1]
+        if not gateway or not preserves_single_default_route(route, gateway, interfaces[family]):
+            raise LifecycleError(
+                f"default IPv{family} egress changed; expected exactly one default route "
+                f"via bridge gateway {gateway} dev {interfaces[family]}, got {route}"
+            )
 
 def routeros_v7_route(subnet, next_hop):
     family = 6 if ":" in str(subnet) or ":" in str(next_hop) else 4
@@ -374,6 +466,11 @@ def restore_previous_endpoint(previous_container, cfg):
         if endpoint.get(field) != str(address):
             raise LifecycleError(f"restored previous container IPv{family} ingress address mismatch")
     validate_dns_port_bindings(restored, cfg)
+    validate_default_bridge_egress(
+        previous_container,
+        networks["bridge"],
+        [4, *([6] if 6 in cfg["_networks"] else [])],
+    )
 
 
 def invalidate_host_attestation():
@@ -488,17 +585,12 @@ def _provision_locked(cfg, previous_container=None):
             field = "IPAddress" if family == 4 else "GlobalIPv6Address"
             if attached[cfg["network"]].get(field) != str(address):
                 raise LifecycleError(f"container ingress IPv{family} address mismatch")
-        routes = default_routes(cfg["container"])
         bridge = attached["bridge"]
-        gw4 = bridge.get("Gateway")
-        if not gw4 or not preserves_single_default_route(routes[0], gw4):
-            raise LifecycleError(f"default IPv4 egress changed; expected exactly one default route via bridge gateway {gw4}, got {routes[0]}")
-        if 6 in cfg["_networks"]:
-            gw6 = bridge.get("IPv6Gateway")
-            if not gw6:
-                raise LifecycleError("dual-stack ingress requires an IPv6 gateway on the default bridge to preserve default IPv6 egress")
-            if not preserves_single_default_route(routes[1], gw6):
-                raise LifecycleError(f"default IPv6 egress changed; expected exactly one default route via bridge gateway {gw6}, got {routes[1]}")
+        validate_default_bridge_egress(
+            cfg["container"],
+            bridge,
+            [4, *([6] if 6 in cfg["_networks"] else [])],
+        )
     except Exception as error:
         cleanup_errors = []
         target_is_attached = connected
