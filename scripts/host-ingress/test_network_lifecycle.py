@@ -174,23 +174,49 @@ class NetworkSafetyTests(unittest.TestCase):
                 {"family": "inet6", "local": "2001:db8:31::2"},
             ]},
         ]
-        result = type("Result", (), {"stdout": json.dumps(devices)})()
-        with patch.object(nl, "run", return_value=result) as command:
+        link_output = "\n".join([
+            "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536",
+            "2: eth0@if42: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500",
+            "3: eth1@if43: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500",
+        ])
+        # BusyBox/iproute2-compatible one-line output from the Alpine image.
+        address_output = "\n".join([
+            "1: lo inet 127.0.0.1/8 scope host lo",
+            "2: eth0 inet 172.17.0.2/16 brd 172.17.255.255 scope global eth0",
+            "2: eth0 inet6 2001:db8:17::2/64 scope global",
+            "3: eth1 inet 172.31.10.2/24 scope global eth1",
+            "3: eth1 inet6 2001:db8:31::2/64 scope global",
+        ])
+        result_link = type("Result", (), {"stdout": link_output})()
+        result_addr = type("Result", (), {"stdout": address_output})()
+        with patch.object(nl, "run", side_effect=[result_link, result_addr]) as command:
             self.assertEqual(nl.default_bridge_interfaces("s5m-agent", bridge, [4, 6]), {4: "eth0", 6: "eth0"})
-        self.assertEqual(command.call_args.args[0], ["docker", "exec", "s5m-agent", "ip", "-j", "addr", "show"])
+        self.assertEqual(command.call_args_list[0].args[0], ["docker", "exec", "s5m-agent", "ip", "-o", "link", "show"])
+        self.assertEqual(command.call_args_list[1].args[0], ["docker", "exec", "s5m-agent", "ip", "-o", "addr", "show"])
 
     def test_default_bridge_interface_rejects_ambiguous_or_missing_endpoint(self):
         bridge = {"IPAddress": "172.17.0.2", "GlobalIPv6Address": "2001:db8:17::2"}
-        duplicate = [
-            {"ifname": "eth0", "flags": ["UP"], "addr_info": [{"local": "172.17.0.2"}]},
-            {"ifname": "eth1", "flags": ["UP"], "addr_info": [{"local": "172.17.0.2"}]},
-            {"ifname": "eth2", "flags": ["UP"], "addr_info": [{"local": "2001:db8:17::2"}]},
-        ]
-        with patch.object(nl, "run", return_value=type("Result", (), {"stdout": json.dumps(duplicate)})()):
+        link_output = "\n".join([
+            "2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500",
+            "3: eth1: <BROADCAST,MULTICAST,UP> mtu 1500",
+            "4: eth2: <BROADCAST,MULTICAST,UP> mtu 1500",
+        ])
+        duplicate_addresses = "\n".join([
+            "2: eth0 inet 172.17.0.2/16 scope global eth0",
+            "3: eth1 inet 172.17.0.2/16 scope global eth1",
+            "4: eth2 inet6 2001:db8:17::2/64 scope global",
+        ])
+        with patch.object(nl, "run", side_effect=[
+            type("Result", (), {"stdout": link_output})(),
+            type("Result", (), {"stdout": duplicate_addresses})(),
+        ]):
             with self.assertRaises(nl.LifecycleError):
                 nl.default_bridge_interfaces("s5m-agent", bridge, [4, 6])
-        missing = [{"ifname": "eth0", "flags": ["UP"], "addr_info": [{"local": "172.17.0.3"}]}]
-        with patch.object(nl, "run", return_value=type("Result", (), {"stdout": json.dumps(missing)})()):
+        missing_addresses = "2: eth0 inet 172.17.0.3/16 scope global eth0"
+        with patch.object(nl, "run", side_effect=[
+            type("Result", (), {"stdout": "2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500"})(),
+            type("Result", (), {"stdout": missing_addresses})(),
+        ]):
             with self.assertRaises(nl.LifecycleError):
                 nl.default_bridge_interfaces("s5m-agent", bridge, [4])
 

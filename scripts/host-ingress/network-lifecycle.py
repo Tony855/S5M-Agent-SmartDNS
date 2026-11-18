@@ -295,39 +295,45 @@ def default_bridge_interfaces(container, bridge, families):
     if not expected:
         raise LifecycleError("no default-bridge address families were requested")
 
-    result = run(["docker", "exec", container, "ip", "-j", "addr", "show"])
-    try:
-        devices = json.loads(result.stdout)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise LifecycleError(f"cannot parse Agent interface addresses for default-bridge route verification: {error}") from error
-    if not isinstance(devices, list):
-        raise LifecycleError("Agent interface address snapshot is malformed")
+    # The production Agent image is Alpine/BusyBox and does not ship
+    # iproute2's JSON output mode. Use portable one-line output supported by
+    # both BusyBox ip and iproute2.
+    link_result = run(["docker", "exec", container, "ip", "-o", "link", "show"])
+    address_result = run(["docker", "exec", container, "ip", "-o", "addr", "show"])
+
+    active_interfaces = set()
+    for line in link_result.stdout.splitlines():
+        match = re.match(r"^\d+:\s+([^:]+):\s+<([^>]*)>", line.strip())
+        if not match:
+            raise LifecycleError("Agent interface link snapshot is malformed")
+        name = match.group(1).split("@", 1)[0]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", name) or name in active_interfaces:
+            raise LifecycleError("Agent interface link snapshot contains an invalid or duplicate interface")
+        flags = set(match.group(2).split(","))
+        if "UP" in flags:
+            active_interfaces.add(name)
 
     matches = {family: set() for family in expected}
-    seen_interfaces = set()
-    for device in devices:
-        if not isinstance(device, dict):
-            raise LifecycleError("Agent interface address snapshot contains a malformed device")
-        name = device.get("ifname")
-        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", name) or name in seen_interfaces:
-            raise LifecycleError("Agent interface address snapshot contains an invalid or duplicate interface")
-        seen_interfaces.add(name)
-        flags = device.get("flags")
-        if not isinstance(flags, list) or "UP" not in flags:
+    for line in address_result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
             continue
-        addr_info = device.get("addr_info")
-        if not isinstance(addr_info, list):
-            raise LifecycleError(f"Agent interface {name} has no valid address list")
-        for item in addr_info:
-            if not isinstance(item, dict):
-                continue
-            try:
-                address = ipaddress.ip_address(item.get("local"))
-            except (TypeError, ValueError):
-                continue
-            for family, expected_address in expected.items():
-                if address.version == family and str(address) == expected_address:
-                    matches[family].add(name)
+        name = fields[1].rstrip(":").split("@", 1)[0]
+        family_name = fields[2]
+        if name not in active_interfaces or family_name not in ("inet", "inet6"):
+            continue
+        if "scope" not in fields:
+            continue
+        scope_index = fields.index("scope")
+        if scope_index + 1 >= len(fields) or fields[scope_index + 1] != "global":
+            continue
+        try:
+            address = ipaddress.ip_address(fields[3].split("/", 1)[0])
+        except ValueError:
+            continue
+        for family, expected_address in expected.items():
+            if address.version == family and str(address) == expected_address:
+                matches[family].add(name)
 
     resolved = {}
     for family, interfaces in matches.items():
