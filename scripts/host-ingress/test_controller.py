@@ -139,6 +139,9 @@ class ControllerTests(unittest.TestCase):
             "s5m-agent-ingress": {"NetworkID": "a" * 64, "IPAddress": "172.31.10.99", "GlobalIPv6Address": ""}
         }}}
         self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([network]), json.dumps([changed_endpoint])))
+        extra_same_family = json.loads(json.dumps(network))
+        extra_same_family["IPAM"]["Config"].append({"Subnet": "172.32.10.0/24", "Gateway": "172.32.10.1"})
+        self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([extra_same_family]), json.dumps([container])))
     def test_systemd_preserves_attestation_directory_after_oneshot_exit(self):
         unit = pathlib.Path(__file__).with_name("s5m-agent-ingress.service").read_text()
         self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)

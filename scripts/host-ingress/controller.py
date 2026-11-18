@@ -320,16 +320,30 @@ def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network
     ipam_state = network.get("IPAM")
     if not isinstance(ipam_state, dict):
         return False
-    ipam = ipam_state.get("Config") or []
-    if not isinstance(ipam, list):
+    ipam = ipam_state.get("Config")
+    expected_addresses = cfg.get("addresses", [])
+    expected_families = {address.version for address in expected_addresses}
+    # The managed ingress network has exactly one subnet per configured family.
+    # Do not collapse duplicate-family IPAM entries into a dict: an extra
+    # directly-routed subnet could otherwise escape the DNS-only firewall.
+    if not isinstance(ipam, list) or len(ipam) != len(expected_families):
         return False
-    for address in cfg.get("addresses", []):
-        if not any(
-            isinstance(item, dict)
-            and _network_contains_address(item.get("Subnet"), address)
-            for item in ipam
-        ):
+    seen_families = set()
+    for item in ipam:
+        if not isinstance(item, dict):
             return False
+        try:
+            subnet = ipaddress.ip_network(item.get("Subnet", ""), strict=True)
+        except (TypeError, ValueError):
+            return False
+        if subnet.version not in expected_families or subnet.version in seen_families:
+            return False
+        family_addresses = [address for address in expected_addresses if address.version == subnet.version]
+        if len(family_addresses) != 1 or family_addresses[0] not in subnet:
+            return False
+        seen_families.add(subnet.version)
+    if seen_families != expected_families:
+        return False
     network_settings = container.get("NetworkSettings")
     if not isinstance(network_settings, dict):
         return False

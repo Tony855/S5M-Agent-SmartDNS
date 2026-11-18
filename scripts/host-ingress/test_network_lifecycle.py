@@ -357,4 +357,28 @@ class NetworkSafetyTests(unittest.TestCase):
                         "com.docker.network.bridge.trusted_host_interfaces":"eth1"}}
         with self.assertRaises(nl.LifecycleError): nl.validate_existing(net,cfg)
 
+    def test_network_ipam_rejects_duplicate_or_extra_subnets_per_family(self):
+        cfg=self.write_config()
+        base={"Labels":{nl.OWNER:nl.VALUE},"Driver":"bridge",
+              "IPAM":{"Config":[
+                  {"Subnet":"172.31.10.0/24","Gateway":"172.31.10.1"},
+                  {"Subnet":"2001:db8:31::/64","Gateway":"2001:db8:31::1"}]},
+              "Options":{"com.docker.network.bridge.gateway_mode_ipv4":"routed",
+                         "com.docker.network.bridge.gateway_mode_ipv6":"routed",
+                         "com.docker.network.bridge.trusted_host_interfaces":"eth1"}}
+        nl.validate_existing(base,cfg)
+        duplicate_family={"Labels":base["Labels"],"Driver":"bridge",
+                          "IPAM":{"Config":[
+                              {"Subnet":"172.31.10.0/24","Gateway":"172.31.10.1"},
+                              {"Subnet":"172.31.11.0/24","Gateway":"172.31.11.1"}]},
+                          "Options":base["Options"]}
+        with self.assertRaises(nl.LifecycleError):
+            nl.validate_existing(duplicate_family,cfg)
+        extra_subnet={"Labels":base["Labels"],"Driver":"bridge",
+                      "IPAM":{"Config":base["IPAM"]["Config"]+[
+                          {"Subnet":"172.31.11.0/24","Gateway":"172.31.11.1"}]},
+                      "Options":base["Options"]}
+        with self.assertRaises(nl.LifecycleError):
+            nl.validate_existing(extra_subnet,cfg)
+
 if __name__ == "__main__": unittest.main()

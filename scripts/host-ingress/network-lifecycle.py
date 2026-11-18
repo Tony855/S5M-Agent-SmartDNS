@@ -169,14 +169,28 @@ def expected_subnets(cfg):
 def validate_existing(net,cfg):
     if labels(net).get(OWNER)!=VALUE: raise LifecycleError("network name already exists but is not owned by S5M ingress lifecycle")
     if net.get("Driver")!="bridge": raise LifecycleError("managed network driver drift")
-    ipam=net.get("IPAM",{}).get("Config",[])
+    ipam_state=net.get("IPAM")
+    if not isinstance(ipam_state,dict):
+        raise LifecycleError("managed network IPAM state is missing")
+    ipam=ipam_state.get("Config")
+    expected=expected_subnets(cfg)
+    if not isinstance(ipam,list) or len(ipam)!=len(expected):
+        raise LifecycleError("managed network must contain exactly one IPAM subnet per configured address family")
     actual={}
     for item in ipam:
+        if not isinstance(item,dict):
+            raise LifecycleError("managed network has malformed IPAM config")
         try:
             n=ipaddress.ip_network(item.get("Subnet",""),strict=True)
-            actual[n.version]=(str(n),str(ipaddress.ip_address(item.get("Gateway",""))))
-        except ValueError: raise LifecycleError("managed network has malformed IPAM config")
-    if actual!=expected_subnets(cfg): raise LifecycleError("managed network subnet/gateway drift; refusing destructive repair")
+            gateway=ipaddress.ip_address(item.get("Gateway",""))
+        except (TypeError,ValueError):
+            raise LifecycleError("managed network has malformed IPAM config")
+        if n.version!=gateway.version or gateway not in n:
+            raise LifecycleError("managed network has an invalid IPAM gateway")
+        if n.version in actual:
+            raise LifecycleError("managed network contains duplicate IPAM subnets for one address family")
+        actual[n.version]=(str(n),str(gateway))
+    if actual!=expected: raise LifecycleError("managed network subnet/gateway drift; refusing destructive repair")
     opts=net.get("Options") or {}
     required={"com.docker.network.bridge.gateway_mode_ipv4":"routed",
               "com.docker.network.bridge.trusted_host_interfaces":cfg["interface"]}
