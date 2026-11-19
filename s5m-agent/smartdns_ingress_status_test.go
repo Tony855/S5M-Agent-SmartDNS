@@ -124,3 +124,40 @@ func TestCollectSmartDNSStatusUsesPerClientHealthWithoutDefaultResolverProbe(t *
 		t.Fatalf("per-client config should report its dedicated health and ingress readiness: %#v", status)
 	}
 }
+
+func TestCollectSmartDNSStatusFailsClosedOnPartialIngressObservationError(t *testing.T) {
+	status := map[string]any{}
+	attestation := smartDNSHostIngressAttestation{
+		Version: 1,
+		UpdatedAt: time.Now().Unix(),
+		Interface: "eno1",
+		IPv4Address: "172.31.0.10",
+		ClientCIDRs: []string{"192.168.50.0/24"},
+		SourceIPPreserved: true,
+		FirewallReady: true,
+		FirewallPersistent: true,
+		UDPReady: true,
+		TCPReady: true,
+	}
+	collectSmartDNSStatusWithDependencies(status, smartDNSStatusDependencies{
+		binaryInfo: func() (os.FileInfo, error) { return nil, errors.New("not installed") },
+		ingressAttestation: func() (smartDNSHostIngressAttestation, error) { return attestation, nil },
+		ingressObservation: func() (smartDNSIngressObservation, error) {
+			// Simulate an address snapshot that saw the attested IP on one
+			// interface before discovering an ambiguous duplicate on another.
+			return smartDNSIngressObservation{
+				Interfaces: []string{"eth1"},
+				IPv4: []string{"172.31.0.10"},
+				AddressInterfaces: map[string]string{"172.31.0.10": "eth1"},
+			}, errors.New("global address 172.31.0.10 is assigned more than once")
+		},
+		ingressSocketBound: func(string) (bool, error) { return true, nil },
+	})
+	if status["dns_ingress_observation_error"] == "" {
+		t.Fatalf("observation failure was not surfaced: %#v", status)
+	}
+	if status["dns_ingress_ready"] != false || status["dns_ingress_ipv4_ready"] != false ||
+		status["dns_ingress_smartdns_listener_ready"] != true {
+		t.Fatalf("partial interface observation must not establish ingress readiness: %#v", status)
+	}
+}
