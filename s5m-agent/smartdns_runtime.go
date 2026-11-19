@@ -632,7 +632,7 @@ func collectSmartDNSStatusWithDependencies(status map[string]any, deps smartDNSS
 			status["dns_ingress_tcp_ready"] = attestation.TCPReady
 			ipv4Observed := attestation.IPv4Address == "" || observation.AddressInterfaces[attestation.IPv4Address] != ""
 			ipv6Observed := attestation.IPv6Address == "" || observation.AddressInterfaces[attestation.IPv6Address] != ""
-			interfaceObserved := ipv4Observed && ipv6Observed
+			interfaceObserved := observationErr == nil && ipv4Observed && ipv6Observed
 			ipv4Bound, ipv6Bound := false, false
 			socketBound := deps.ingressSocketBound
 			if socketBound == nil { socketBound = smartDNSIngressAddressSocketsBound }
