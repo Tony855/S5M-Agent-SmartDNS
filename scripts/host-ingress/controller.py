@@ -221,8 +221,13 @@ def interface_state_matches(cfg: dict, output: str, expected_addresses: list[str
             continue
         if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address, "ipv4_mapped", None):
             continue
+        canonical = str(address)
+        # A duplicate address entry on the trusted NIC is ambiguous evidence:
+        # a set must not collapse it into an apparently unique interface state.
+        if canonical in observed_addresses:
+            return False
         observed_families.add(address.version)
-        observed_addresses.add(str(address))
+        observed_addresses.add(canonical)
     if expected_addresses is not None and sorted(observed_addresses) != expected_addresses:
         return False
     return required_families.issubset(observed_families)
