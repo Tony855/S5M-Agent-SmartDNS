@@ -54,24 +54,8 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 		if err != nil {
 			return observed, fmt.Errorf("read addresses for interface %s: %w", iface.Name, err)
 		}
-		var ifaceAddresses []string
-		for _, address := range addresses {
-			ip, _, err := net.ParseCIDR(address.String())
-			if err != nil || ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
-				continue
-			}
-			value := ip.String()
-			addressSet[value] = true
-			observed.AddressInterfaces[value] = iface.Name
-			ifaceAddresses = append(ifaceAddresses, value)
-			if ip.To4() != nil {
-				observed.IPv4 = append(observed.IPv4, value)
-			} else {
-				observed.IPv6 = append(observed.IPv6, value)
-			}
-		}
-		if len(ifaceAddresses) > 0 {
-			observed.Interfaces = append(observed.Interfaces, iface.Name)
+		if err := appendSmartDNSIngressInterfaceAddresses(&observed, iface, addresses, addressSet); err != nil {
+			return observed, fmt.Errorf("validate Agent interface %s addresses: %w", iface.Name, err)
 		}
 	}
 	if len(addressSet) == 0 {
@@ -92,6 +76,42 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 		procSocketTableHasListener(tcp6, true, smartDNSPerClientIngressPort, addressSet, true)
 	return observed, nil
 }
+
+
+ // appendSmartDNSIngressInterfaceAddresses records only global-unicast addresses,
+ // because those are the only addresses eligible for a host ingress contract.
+ // A duplicate global address on a second interface makes routing ambiguous and
+ // must fail closed rather than letting the last interface silently win.
+ func appendSmartDNSIngressInterfaceAddresses(
+ 	observed *smartDNSIngressObservation,
+ 	iface net.Interface,
+ 	addresses []net.Addr,
+ 	addressSet map[string]bool,
+ ) error {
+ 	var ifaceAddresses []string
+ 	for _, address := range addresses {
+ 		ip, _, err := net.ParseCIDR(address.String())
+ 		if err != nil || ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+ 			continue
+ 		}
+ 		value := ip.String()
+ 		if addressSet[value] {
+ 			return fmt.Errorf("global address %s is assigned more than once in the Agent network namespace", value)
+ 		}
+ 		addressSet[value] = true
+ 		observed.AddressInterfaces[value] = iface.Name
+ 		ifaceAddresses = append(ifaceAddresses, value)
+ 		if ip.To4() != nil {
+ 			observed.IPv4 = append(observed.IPv4, value)
+ 		} else {
+ 			observed.IPv6 = append(observed.IPv6, value)
+ 		}
+ 	}
+ 	if len(ifaceAddresses) > 0 {
+ 		observed.Interfaces = append(observed.Interfaces, iface.Name)
+ 	}
+ 	return nil
+ }
 
 func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddresses map[string]bool, requireTCPListen bool) bool {
 	lines := strings.Split(string(data), "\n")
