@@ -185,3 +185,41 @@ func TestSmartDNSAddressSocketsBoundRequiresOneProcessToOwnExactUDPAndTCP(t *tes
 		t.Fatal("loopback listener verification must reject wildcard addresses")
 	}
 }
+
+func TestAppendSmartDNSIngressInterfaceAddressesRejectsDuplicateGlobalAddress(t *testing.T) {
+	ip, network, err := net.ParseCIDR("172.31.0.10/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := &net.IPNet{IP: ip, Mask: network.Mask}
+	observed := smartDNSIngressObservation{AddressInterfaces: make(map[string]string)}
+	addressSet := make(map[string]bool)
+
+	if err := appendSmartDNSIngressInterfaceAddresses(&observed, net.Interface{Name: "eth0"}, []net.Addr{address}, addressSet); err != nil {
+		t.Fatalf("first ingress address assignment rejected: %v", err)
+	}
+	if err := appendSmartDNSIngressInterfaceAddresses(&observed, net.Interface{Name: "eth1"}, []net.Addr{address}, addressSet); err == nil {
+		t.Fatal("the same global ingress address on a second interface must fail closed")
+	}
+	if got := observed.AddressInterfaces["172.31.0.10"]; got != "eth0" {
+		t.Fatalf("duplicate address overwrote its original interface: got %q", got)
+	}
+}
+
+func TestAppendSmartDNSIngressInterfaceAddressesIgnoresRepeatedLinkLocalAddress(t *testing.T) {
+	ip, network, err := net.ParseCIDR("fe80::1/64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := &net.IPNet{IP: ip, Mask: network.Mask}
+	observed := smartDNSIngressObservation{AddressInterfaces: make(map[string]string)}
+	addressSet := make(map[string]bool)
+	for _, name := range []string{"eth0", "eth1"} {
+		if err := appendSmartDNSIngressInterfaceAddresses(&observed, net.Interface{Name: name}, []net.Addr{address}, addressSet); err != nil {
+			t.Fatalf("repeated link-local address should not affect global ingress uniqueness: %v", err)
+		}
+	}
+	if len(observed.AddressInterfaces) != 0 || len(addressSet) != 0 {
+		t.Fatalf("link-local address entered global ingress observation: %#v %#v", observed, addressSet)
+	}
+}
