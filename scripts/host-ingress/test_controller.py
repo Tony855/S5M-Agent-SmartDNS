@@ -265,6 +265,25 @@ class ControllerTests(unittest.TestCase):
         temporary[0]["addr_info"].append({"family": "inet6", "local": "2001:db8:1::99", "scope": "global", "flags": ["temporary"]})
         self.assertFalse(mod.interface_state_matches(cfg, json.dumps(temporary), ["192.168.1.2", "2001:db8:1::2", "2001:db8:1::99"]))
 
+    def test_interface_attestation_rejects_duplicate_global_addresses_on_trusted_nic(self):
+        self.write(self.valid())
+        cfg = mod.load_config(self.path, require_root=False)
+        valid = [{
+            "ifname": "eth1", "flags": ["BROADCAST", "MULTICAST", "UP", "LOWER_UP"],
+            "addr_info": [
+                {"family": "inet", "local": "192.168.1.2", "scope": "global"},
+                {"family": "inet6", "local": "2001:db8:1::2", "scope": "global"},
+            ],
+        }]
+        for duplicate in (
+            {"family": "inet", "local": "192.168.1.2", "scope": "global"},
+            {"family": "inet6", "local": "2001:db8:1::2", "scope": "global"},
+        ):
+            with self.subTest(address=duplicate["local"]):
+                snapshot = json.loads(json.dumps(valid))
+                snapshot[0]["addr_info"].append(duplicate)
+                self.assertFalse(mod.interface_state_matches(cfg, json.dumps(snapshot)))
+
     def test_firewall_persistence_requires_permanent_timer_enablement(self):
         self.assertTrue(mod.systemd_unit_is_persistently_enabled("enabled\n", 0))
         for state in ("enabled-runtime", "static", "indirect", "generated", "transient",
