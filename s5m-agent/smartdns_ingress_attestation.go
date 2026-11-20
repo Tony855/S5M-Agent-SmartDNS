@@ -16,25 +16,7 @@ import (
 const smartDNSHostIngressAttestationPath = "/run/s5m-agent-ingress/ingress.json"
 const smartDNSHostIngressAttestationVersion = 1
 
-var smartDNSHostIngressInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}package main
-
-import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/netip"
-	"os"
-	"regexp"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
-)
-
-const smartDNSHostIngressAttestationPath = "/run/s5m-agent-ingress/ingress.json"
-const smartDNSHostIngressAttestationVersion = 1
-
-)
+var smartDNSHostIngressInterfacePattern = regexp.MustCompile("^[A-Za-z0-9_.:-]{1,15}$")
 
 const smartDNSLinuxUserHz = 100
 
@@ -43,52 +25,52 @@ const smartDNSLinuxUserHz = 100
 // network ID/IP, so an attestation written before this PID namespace existed
 // must never be reused by the restarted Agent.
 func parseSmartDNSContainerInitStartTime(processStat, systemStat []byte) (time.Time, error) {
-\tcloseParen := strings.LastIndex(string(processStat), ")")
-\tif closeParen < 0 {
-\t\treturn time.Time{}, fmt.Errorf("container PID 1 proc stat is malformed")
-\t}
-\tfields := strings.Fields(string(processStat[closeParen+1:]))
-\t// Fields begin at proc stat field 3 (state); starttime is field 22.
-\tif len(fields) <= 19 {
-\t\treturn time.Time{}, fmt.Errorf("container PID 1 proc stat is truncated")
-\t}
-\tstartTicks, err := strconv.ParseUint(fields[19], 10, 64)
-\tif err != nil {
-\t\treturn time.Time{}, fmt.Errorf("container PID 1 start ticks are invalid: %w", err)
-\t}
-\tvar bootSeconds int64
-\tfor _, line := range strings.Split(string(systemStat), "\\n") {
-\t\tfields := strings.Fields(line)
-\t\tif len(fields) == 2 && fields[0] == "btime" {
-\t\t\tbootSeconds, err = strconv.ParseInt(fields[1], 10, 64)
-\t\t\tif err != nil || bootSeconds <= 0 {
-\t\t\t\treturn time.Time{}, fmt.Errorf("system boot time is invalid")
-\t\t\t}
-\t\t\tseconds := int64(startTicks / smartDNSLinuxUserHz)
-\t\t\tremainder := int64(startTicks % smartDNSLinuxUserHz)
-\t\t\treturn time.Unix(bootSeconds+seconds, remainder*int64(time.Second)/smartDNSLinuxUserHz), nil
-\t\t}
-\t}
-\treturn time.Time{}, fmt.Errorf("system boot time is missing from proc stat")
+	closeParen := strings.LastIndex(string(processStat), ")")
+	if closeParen < 0 {
+		return time.Time{}, fmt.Errorf("container PID 1 proc stat is malformed")
+	}
+	fields := strings.Fields(string(processStat[closeParen+1:]))
+	// Fields begin at proc stat field 3 (state); starttime is field 22.
+	if len(fields) <= 19 {
+		return time.Time{}, fmt.Errorf("container PID 1 proc stat is truncated")
+	}
+	startTicks, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("container PID 1 start ticks are invalid: %w", err)
+	}
+	for _, line := range strings.Split(string(systemStat), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "btime" {
+			continue
+		}
+		bootSeconds, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || bootSeconds <= 0 {
+			return time.Time{}, fmt.Errorf("system boot time is invalid")
+		}
+		seconds := int64(startTicks / smartDNSLinuxUserHz)
+		remainder := int64(startTicks % smartDNSLinuxUserHz)
+		return time.Unix(bootSeconds+seconds, remainder*int64(time.Second)/smartDNSLinuxUserHz), nil
+	}
+	return time.Time{}, fmt.Errorf("system boot time is missing from proc stat")
 }
 
 func currentSmartDNSContainerInitStartTime() (time.Time, error) {
-\tprocessStat, err := os.ReadFile("/proc/1/stat")
-\tif err != nil {
-\t\treturn time.Time{}, fmt.Errorf("read container PID 1 start time: %w", err)
-\t}
-\tsystemStat, err := os.ReadFile("/proc/stat")
-\tif err != nil {
-\t\treturn time.Time{}, fmt.Errorf("read system boot time: %w", err)
-\t}
-\treturn parseSmartDNSContainerInitStartTime(processStat, systemStat)
+	processStat, err := os.ReadFile("/proc/1/stat")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read container PID 1 start time: %w", err)
+	}
+	systemStat, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read system boot time: %w", err)
+	}
+	return parseSmartDNSContainerInitStartTime(processStat, systemStat)
 }
 
 func validateSmartDNSHostIngressFileFreshForContainer(attestationModTime, containerStartTime time.Time) error {
-\tif attestationModTime.IsZero() || containerStartTime.IsZero() || attestationModTime.Before(containerStartTime) {
-\t\treturn fmt.Errorf("host ingress attestation predates the current Agent container start; waiting for a fresh host reconcile")
-\t}
-\treturn nil
+	if attestationModTime.IsZero() || containerStartTime.IsZero() || attestationModTime.Before(containerStartTime) {
+		return fmt.Errorf("host ingress attestation predates the current Agent container start; waiting for a fresh host reconcile")
+	}
+	return nil
 }
 
 // smartDNSHostIngressAttestation is written atomically by the restricted
