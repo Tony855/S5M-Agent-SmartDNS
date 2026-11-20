@@ -143,9 +143,9 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
                 VERIFY.validate_capture_host_interface(manifest, cfg)
 
     def test_capture_must_match_current_container_id_pid_and_ingress_ip(self):
-        manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123}
+        manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123,"container_started_at":"2026-11-20T02:00:00.000000000Z"}
         cfg={"interface":"eth1","addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
-        inspected={"Id":"a"*64,"Name":"/s5m-agent","State":{"Running":True,"Pid":123},
+        inspected={"Id":"a"*64,"Name":"/s5m-agent","State":{"Running":True,"Pid":123,"StartedAt":"2026-11-20T02:00:00.000000000Z"},
             "NetworkSettings":{"Networks":{"ingress":{"NetworkID":"b"*64,"IPAddress":"172.31.0.10","GlobalIPv6Address":""}}}}
         network={"Id":"b"*64,"Name":"ingress","Driver":"bridge","Labels":{"com.s5m.managed":"s5m-agent-dns-ingress"},
             "Options":{"com.docker.network.bridge.gateway_mode_ipv4":"routed","com.docker.network.bridge.trusted_host_interfaces":"eth1"},
@@ -160,15 +160,20 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
                 VERIFY.validate_capture_container(manifest,cfg)
 
     def test_capture_rejects_restarted_container_or_missing_ingress_address(self):
-        manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123}
+        manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123,"container_started_at":"2026-11-20T02:00:00.000000000Z"}
         cfg={"interface":"eth1","addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
-        inspected={"Id":"a"*64,"State":{"Running":True,"Pid":124},
+        inspected={"Id":"a"*64,"State":{"Running":True,"Pid":124,"StartedAt":"2026-11-20T02:10:00.000000000Z"},
             "NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.2","GlobalIPv6Address":""}}}}
         fake=SimpleNamespace(stdout=json.dumps([inspected]))
         with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
             with self.assertRaisesRegex(ValueError,"restarted"):
                 VERIFY.validate_capture_container(manifest,cfg)
         inspected["State"]["Pid"]=123
+        fake=SimpleNamespace(stdout=json.dumps([inspected]))
+        with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
+            with self.assertRaisesRegex(ValueError,"restarted"):
+                VERIFY.validate_capture_container(manifest,cfg)
+        inspected["State"]["StartedAt"]=manifest["container_started_at"]
         fake=SimpleNamespace(stdout=json.dumps([inspected]))
         with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):
             with self.assertRaisesRegex(ValueError,"not attached"):
