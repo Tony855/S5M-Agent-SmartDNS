@@ -131,7 +131,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
     def test_capture_requires_unchanged_stable_host_interface_addresses(self):
         manifest = {"host_interface_addresses": ["192.168.1.2"]}
         cfg = {"interface": "eth1", "networks": [VERIFY.ipaddress.ip_network("192.168.50.0/24")]}
-        current = [{"ifname": "eth1", "flags": ["UP"], "addr_info": [
+        current = [{"ifname": "eth1", "flags": ["UP", "LOWER_UP"], "addr_info": [
             {"family": "inet", "local": "192.168.1.2", "scope": "global"},
             {"family": "inet", "local": "192.168.1.3", "scope": "global", "flags": ["temporary"]},
         ]}]
