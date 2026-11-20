@@ -197,7 +197,14 @@ def interface_state_matches(cfg: dict, output: str, expected_addresses: list[str
     if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
         return False
     record = records[0]
-    if record.get("ifname") != cfg["interface"] or not isinstance(record.get("flags"), list) or "UP" not in record["flags"]:
+    if (
+        record.get("ifname") != cfg["interface"]
+        or not isinstance(record.get("flags"), list)
+        or "UP" not in record["flags"]
+        or "LOWER_UP" not in record["flags"]
+    ):
+        # Administrative UP alone is insufficient: a NIC with NO-CARRIER
+        # must not produce a live ingress/firewall readiness attestation.
         return False
     required_families = {network.version for network in cfg["networks"]}
     observed_families = set()
