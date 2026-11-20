@@ -271,7 +271,13 @@ def validate_capture_container(manifest: dict, cfg: dict) -> None:
     if item.get("Id")!=manifest["container_id"]:
         raise ValueError("capture manifest container ID does not match the current Agent container")
     state=item.get("State")
-    if not isinstance(state, dict) or state.get("Running") is not True or type(state.get("Pid")) is not int or state["Pid"]!=manifest["container_pid"]:
+    if (
+        not isinstance(state, dict)
+        or state.get("Running") is not True
+        or type(state.get("Pid")) is not int
+        or state["Pid"] != manifest["container_pid"]
+        or state.get("StartedAt") != manifest["container_started_at"]
+    ):
         raise ValueError("Agent container restarted or stopped after capture; recapture physical ingress")
     observed=set()
     for endpoint in (item.get("NetworkSettings",{}).get("Networks") or {}).values():
@@ -312,11 +318,13 @@ def main():
     container_pcap_raw = secure_read(args.container_pcap, require_root=True)
     probe_results_raw = secure_read(args.probe_results, require_root=False, max_bytes=8 * 1024 * 1024)
     manifest = json.loads(manifest_raw)
-    manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "host_interface", "host_interface_addresses", "started_at", "finished_at", "host_pcap", "container_pcap"}
-    if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 2:
+    manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "container_started_at", "host_interface", "host_interface_addresses", "started_at", "finished_at", "host_pcap", "container_pcap"}
+    if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 3:
         raise ValueError("capture manifest schema is invalid")
     if manifest["host_interface"] == "" or type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or type(manifest["container_pid"]) is not int or manifest["container_pid"] <= 0:
         raise ValueError("capture manifest fields are invalid")
+    if not isinstance(manifest["container_started_at"], str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?Z", manifest["container_started_at"]):
+        raise ValueError("capture manifest container start timestamp is invalid")
     if manifest["host_pcap"] != args.host_pcap.name or manifest["container_pcap"] != args.container_pcap.name:
         raise ValueError("capture manifest does not match the supplied pcap files")
     if not isinstance(manifest["container"], str) or not manifest["container"] or not isinstance(manifest["container_id"], str) or len(manifest["container_id"]) != 64 or any(ch not in "0123456789abcdef" for ch in manifest["container_id"]):
@@ -392,7 +400,7 @@ def main():
     verified_sources = sorted({source for sources in complete_sources.values() for source in sources})
     now = int(time.time())
     evidence = {
-        "version": 2,
+        "version": 3,
         "verified_at": now,
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
         "client_cidrs": sorted(str(net) for net in cfg["networks"]),
@@ -410,6 +418,8 @@ def main():
         "capture_manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
         "container": manifest["container"],
         "container_id": manifest["container_id"],
+        "container_pid": manifest["container_pid"],
+        "container_started_at": manifest["container_started_at"],
         "network": manifest["network"],
         "network_id": manifest["network_id"],
     }
