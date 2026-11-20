@@ -1,6 +1,6 @@
 # SmartDNS per-client：宿主机 ingress attestation 合同
 
-## 当前实现状态（2026-11-15，PR #242）
+## 当前实现状态（2026-11-20，PR #242）
 
 仓库已包含 Agent 对 host attestation 的安全读取、root-only nftables controller、独立 routed Docker network lifecycle helper、物理抓包证据 verifier，以及 Master/Agent 的 readiness 和事务校验。PR #242 仍为 Draft；本文件描述的是代码合同，不表示目标生产主机或真实 LAN 已验收。
 
