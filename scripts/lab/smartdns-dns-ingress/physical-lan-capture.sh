@@ -39,8 +39,11 @@ PY
 ) || { echo "ERROR: cannot read routed ingress network identity" >&2; exit 1; }
 NETWORK_ID=$(docker network inspect -f '{{.Id}}' "$NETWORK")
 [[ "$NETWORK_ID" =~ ^[0-9a-f]{64}$ ]] || { echo "ERROR: invalid routed Docker network identity" >&2; exit 1; }
-PID=$(docker inspect -f '{{.State.Pid}}' "$CONTAINER")
+CONTAINER_IDENTITY=$(docker inspect -f '{{.Id}}|{{.State.Pid}}|{{.State.StartedAt}}' "$CONTAINER")
+IFS='|' read -r CONTAINER_ID PID CONTAINER_STARTED_AT <<<"$CONTAINER_IDENTITY"
+[[ "$CONTAINER_ID" =~ ^[0-9a-f]{64}$ ]] || { echo "ERROR: invalid Agent container ID" >&2; exit 1; }
 [[ "$PID" =~ ^[1-9][0-9]*$ ]] && [[ -d "/proc/$PID/ns/net" ]] || { echo "ERROR: container is not running" >&2; exit 1; }
+[[ "$CONTAINER_STARTED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || { echo "ERROR: invalid Agent container start timestamp" >&2; exit 1; }
 capture_stable_host_addresses() {
   ip -j addr show dev "$LAN_IF" | python3 -c '
 import ipaddress, json, sys
@@ -79,7 +82,6 @@ HOST_LOG="$OUT_DIR/host-lan.txt"
 CONTAINER_LOG="$OUT_DIR/container-ingress.txt"
 FILTER='port 6055'
 STARTED_AT=$(date +%s)
-CONTAINER_ID=$(docker inspect -f '{{.Id}}' "$CONTAINER")
 HOST_PID=""
 CONTAINER_PID=""
 cleanup() {
@@ -106,10 +108,12 @@ cleanup
 HOST_PID=""
 CONTAINER_PID=""
 FINISHED_AT=$(date +%s)
+CURRENT_CONTAINER_IDENTITY=$(docker inspect -f '{{.Id}}|{{.State.Pid}}|{{.State.StartedAt}}' "$CONTAINER")
+[[ "$CURRENT_CONTAINER_IDENTITY" == "$CONTAINER_IDENTITY" ]] || { echo "ERROR: Agent container restarted during capture; discard captures and retry" >&2; exit 1; }
 HOST_INTERFACE_ADDRESSES_END=$(capture_stable_host_addresses) || { echo "ERROR: cannot recheck stable global addresses on $LAN_IF" >&2; exit 1; }
 [[ "$HOST_INTERFACE_ADDRESSES" == "$HOST_INTERFACE_ADDRESSES_END" ]] || { echo "ERROR: trusted host interface addresses changed during capture; discard evidence and recapture" >&2; exit 1; }
-printf '{"version":2,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"host_interface":"%s","host_interface_addresses":%s,"started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
-  "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$LAN_IF" "$HOST_INTERFACE_ADDRESSES" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
+printf '{"version":3,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"container_started_at":"%s","host_interface":"%s","host_interface_addresses":%s,"started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
+  "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$CONTAINER_STARTED_AT" "$LAN_IF" "$HOST_INTERFACE_ADDRESSES" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
 chmod 0600 "$OUT_DIR/capture-manifest.json.tmp"
 mv "$OUT_DIR/capture-manifest.json.tmp" "$OUT_DIR/capture-manifest.json"
 tcpdump -nn -tttt -r "$HOST_PCAP" >"$HOST_LOG" 2>&1 || true
