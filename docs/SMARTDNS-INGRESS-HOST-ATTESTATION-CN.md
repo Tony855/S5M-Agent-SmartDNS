@@ -63,7 +63,7 @@ network-lifecycle.py 是独立的 root-only helper，与 nftables controller 共
 
 ## Agent 与 Master 的二次验证
 
-Agent 不把 Master 合同中的 Ready=true 当成证据。每次 per-client 联合配置事务在任何文件/服务 mutation 前，重新读取 root-owned 新鲜 host attestation，要求 source-IP、firewall、持久化、UDP/TCP 物理证明为真，并将 ingress IP、CIDR 集合与 Master contract 精确比较；随后独立枚举 Agent namespace 的活动非 loopback 接口。候选配置启动后、写入事务 committed marker 前再次读取 attestation 和 interface state；若期间 proof 过期或地址消失，事务必须回滚。
+Agent 不把 Master 合同中的 Ready=true 当成证据。每次读取 host attestation 时，除 root ownership、文件类型/权限和 90 秒新鲜度外，还会解析容器 PID 1 的 `/proc/1/stat` starttime 与系统 `/proc/stat` btime，并要求 attestation 文件 mtime 不早于当前容器 PID namespace 的启动时刻。因此容器重启后，旧 attestation 会在 Agent 读取阶段立即被拒绝，不必等待 30 秒 host timer；只有 host controller 在当前容器实例启动后重新 reconcile，且重新验证物理 evidence v3、CIDR、防火墙和 Docker runtime identity 后，Agent 才能继续。每次 per-client 联合配置事务在任何文件/服务 mutation 前，重新读取 root-owned 新鲜 host attestation，要求 source-IP、firewall、持久化、UDP/TCP 物理证明为真，并将 ingress IP、CIDR 集合与 Master contract 精确比较；随后独立枚举 Agent namespace 的活动非 loopback 接口。候选配置启动后、写入事务 committed marker 前再次读取 attestation 和 interface state；若期间 proof 过期或地址消失，事务必须回滚。
 
 Agent 还会检查 SmartDNS 6055 UDP/TCP socket inode 确实由同一个 SmartDNS PID 持有，并只允许绑定合同中的精确 ingress IP，不允许 wildcard。s6 service 在启动前验证持久化 per-client 配置，并运行期间定期复查；attestation 过期或地址丢失时停止 SmartDNS child process。shared-mode 使用原有 validator/runtime，不因 per-client 功能放宽全局校验。
 
