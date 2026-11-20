@@ -130,7 +130,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         return False
     if type(evidence["container_pid"]) is not int or evidence["container_pid"] <= 0:
         return False
-    if not isinstance(evidence["container_started_at"], str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z", evidence["container_started_at"]):
+    if not isinstance(evidence["container_started_at"], str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?Z", evidence["container_started_at"]):
         return False
     if not isinstance(evidence["network"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", evidence["network"]):
         return False
@@ -301,7 +301,7 @@ def physical_evidence_container_matches_current(evidence: dict, inspect_output: 
     expected_started_at = evidence.get("container_started_at")
     if type(expected_pid) is not int or expected_pid <= 0:
         return False
-    if not isinstance(expected_started_at, str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z", expected_started_at):
+    if not isinstance(expected_started_at, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?Z", expected_started_at):
         return False
     return (
         current.get("Id") == evidence.get("container_id")
