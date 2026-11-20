@@ -32,7 +32,8 @@ func TestParseSmartDNSContainerInitStartTime(t *testing.T) {
 		fields[i] = "0"
 	}
 	fields[19] = "12345"
-	processStat := []byte("1 (s6 scan with spaces) S " + strings.Join(fields, " "))
+	fields[0] = "S"
+	processStat := []byte("1 (s6 scan with spaces) " + strings.Join(fields, " "))
 	systemStat := []byte("cpu 1 2 3 4\nbtime 1700000000\n")
 	got, err := parseSmartDNSContainerInitStartTime(processStat, systemStat)
 	if err != nil {
