@@ -74,7 +74,7 @@ class ControllerTests(unittest.TestCase):
         }
         raw = b'{"version":1,"interface":"eth1"}\n'
         evidence = {
-            "version": 2, "verified_at": 1000,
+            "version": 3, "verified_at": 1000,
             "config_sha256": hashlib.sha256(raw).hexdigest(),
             "client_cidrs": ["192.168.50.0/24"],
             "ipv4_address": "172.31.10.2", "ipv6_address": None,
@@ -85,6 +85,7 @@ class ControllerTests(unittest.TestCase):
             "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
             "probe_results_sha256": "c" * 64, "capture_manifest_sha256": "e" * 64,
             "container": "s5m-agent", "container_id": "f" * 64,
+            "container_pid": 123, "container_started_at": "2026-11-20T02:00:00.000000000Z",
             "network": "s5m-agent-ingress", "network_id": "9" * 64,
         }
         key = bytes.fromhex("ab" * 32)
@@ -105,13 +106,32 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.physical_evidence_payload_valid(tampered, raw, cfg, now=1001, evidence_key=key))
         self.assertFalse(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001, evidence_key=bytes.fromhex("cd" * 32)))
     def test_physical_evidence_is_bound_to_the_current_docker_container(self):
-        evidence = {"container": "s5m-agent", "container_id": "a" * 64}
-        current = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {"Running": True}}])
-        replaced = json.dumps([{"Id": "b" * 64, "Name": "/s5m-agent", "State": {"Running": True}}])
-        renamed = json.dumps([{"Id": "a" * 64, "Name": "/other-agent", "State": {"Running": True}}])
+        evidence = {
+            "container": "s5m-agent", "container_id": "a" * 64,
+            "container_pid": 123, "container_started_at": "2026-11-20T02:00:00.000000000Z",
+        }
+        current = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {
+            "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:00:00.000000000Z",
+        }}])
+        replaced = json.dumps([{"Id": "b" * 64, "Name": "/s5m-agent", "State": {
+            "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:00:00.000000000Z",
+        }}])
+        renamed = json.dumps([{"Id": "a" * 64, "Name": "/other-agent", "State": {
+            "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:00:00.000000000Z",
+        }}])
+        restarted = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {
+            "Running": True, "Pid": 124, "StartedAt": "2026-11-20T02:10:00.000000000Z",
+        }}])
+        pid_reused = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {
+            "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:10:00.000000000Z",
+        }}])
+        missing_runtime_identity = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {"Running": True}}])
         self.assertTrue(mod.physical_evidence_container_matches_current(evidence, current))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, replaced))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, renamed))
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, restarted))
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, pid_reused))
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, missing_runtime_identity))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, "not-json"))
     def test_physical_evidence_is_bound_to_current_routed_docker_network(self):
         evidence = {"network": "s5m-agent-ingress", "network_id": "a" * 64}
