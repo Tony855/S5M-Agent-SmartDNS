@@ -113,7 +113,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         "version", "verified_at", "config_sha256", "client_cidrs", "ipv4_address",
         "ipv6_address", "coverage", "verified_client_sources", "source_ip_preserved",
         "udp_ready", "tcp_ready", "host_pcap_sha256", "container_pcap_sha256",
-        "probe_results_sha256", "capture_manifest_sha256", "host_interface_addresses", "container", "container_id", "network", "network_id", "evidence_hmac_sha256",
+        "probe_results_sha256", "capture_manifest_sha256", "host_interface_addresses", "container", "container_id", "container_pid", "container_started_at", "network", "network_id", "evidence_hmac_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
         return False
@@ -128,11 +128,15 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         return False
     if not isinstance(evidence["container_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", evidence["container_id"]):
         return False
+    if type(evidence["container_pid"]) is not int or evidence["container_pid"] <= 0:
+        return False
+    if not isinstance(evidence["container_started_at"], str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z", evidence["container_started_at"]):
+        return False
     if not isinstance(evidence["network"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", evidence["network"]):
         return False
     if not isinstance(evidence["network_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", evidence["network_id"]):
         return False
-    if type(evidence["version"]) is not int or evidence["version"] != 2:
+    if type(evidence["version"]) is not int or evidence["version"] != 3:
         return False
     if type(evidence["verified_at"]) is not int:
         return False
@@ -293,11 +297,20 @@ def physical_evidence_container_matches_current(evidence: dict, inspect_output: 
         return False
     current = containers[0]
     state = current.get("State")
+    expected_pid = evidence.get("container_pid")
+    expected_started_at = evidence.get("container_started_at")
+    if type(expected_pid) is not int or expected_pid <= 0:
+        return False
+    if not isinstance(expected_started_at, str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z", expected_started_at):
+        return False
     return (
         current.get("Id") == evidence.get("container_id")
         and str(current.get("Name", "")).lstrip("/") == evidence.get("container")
         and isinstance(state, dict)
         and state.get("Running") is True
+        and type(state.get("Pid")) is int
+        and state.get("Pid") == expected_pid
+        and state.get("StartedAt") == expected_started_at
     )
 
 
