@@ -256,6 +256,7 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.interface_state_matches(cfg, valid, ["192.168.1.3", "2001:db8:1::2"]))
         self.assertFalse(mod.interface_state_matches(cfg, valid, ["192.168.1.2"]))
         self.assertFalse(mod.interface_state_matches(cfg, valid.replace('"UP", ', "")))
+        self.assertFalse(mod.interface_state_matches(cfg, valid.replace(', "LOWER_UP"', "")))
         no_global_ipv6 = json.loads(valid)
         no_global_ipv6[0]["addr_info"][1]["local"] = "fe80::2"
         no_global_ipv6[0]["addr_info"][1]["scope"] = "link"
