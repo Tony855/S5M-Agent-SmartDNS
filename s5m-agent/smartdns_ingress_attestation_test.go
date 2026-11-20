@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,6 +24,43 @@ func writeHostIngressAttestationFixture(t *testing.T, path string, attestation s
 	if err != nil { t.Fatal(err) }
 	if err := os.WriteFile(path, data, mode); err != nil { t.Fatal(err) }
 	if err := os.Chmod(path, mode); err != nil { t.Fatal(err) }
+}
+
+func TestParseSmartDNSContainerInitStartTime(t *testing.T) {
+	fields := make([]string, 20)
+	for i := range fields {
+		fields[i] = "0"
+	}
+	fields[19] = "12345"
+	processStat := []byte("1 (s6 scan with spaces) S " + strings.Join(fields, " "))
+	systemStat := []byte("cpu 1 2 3 4\nbtime 1700000000\n")
+	got, err := parseSmartDNSContainerInitStartTime(processStat, systemStat)
+	if err != nil {
+		t.Fatalf("parse PID 1 start time: %v", err)
+	}
+	want := time.Unix(1700000123, 450000000)
+	if !got.Equal(want) {
+		t.Fatalf("container start time = %s, want %s", got, want)
+	}
+	if _, err := parseSmartDNSContainerInitStartTime([]byte("malformed"), systemStat); err == nil {
+		t.Fatal("malformed PID 1 stat accepted")
+	}
+	if _, err := parseSmartDNSContainerInitStartTime(processStat, []byte("cpu 1 2 3 4\n")); err == nil {
+		t.Fatal("missing system boot time accepted")
+	}
+}
+
+func TestValidateSmartDNSHostIngressFileFreshForContainer(t *testing.T) {
+	started := time.Unix(1700000000, 500000000)
+	if err := validateSmartDNSHostIngressFileFreshForContainer(started.Add(-time.Nanosecond), started); err == nil {
+		t.Fatal("attestation from before the current container start was accepted")
+	}
+	if err := validateSmartDNSHostIngressFileFreshForContainer(started, started); err != nil {
+		t.Fatalf("attestation at container start should be accepted: %v", err)
+	}
+	if err := validateSmartDNSHostIngressFileFreshForContainer(started.Add(time.Nanosecond), started); err != nil {
+		t.Fatalf("attestation after container start should be accepted: %v", err)
+	}
 }
 
 func TestReadSmartDNSHostIngressAttestationAcceptsFreshRootOwnedFile(t *testing.T) {
