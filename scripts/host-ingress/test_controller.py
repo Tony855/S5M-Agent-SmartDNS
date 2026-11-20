@@ -91,6 +91,12 @@ class ControllerTests(unittest.TestCase):
         key = bytes.fromhex("ab" * 32)
         evidence["evidence_hmac_sha256"] = mod.physical_evidence_signature(evidence, key)
         self.assertTrue(mod.physical_evidence_payload_valid(evidence, raw, cfg, now=1001, evidence_key=key))
+        legacy = dict(evidence); legacy["version"] = 2
+        legacy["evidence_hmac_sha256"] = mod.physical_evidence_signature(legacy, key)
+        self.assertFalse(mod.physical_evidence_payload_valid(legacy, raw, cfg, now=1001, evidence_key=key))
+        missing_runtime_identity = dict(evidence); missing_runtime_identity.pop("container_started_at")
+        missing_runtime_identity["evidence_hmac_sha256"] = mod.physical_evidence_signature(missing_runtime_identity, key)
+        self.assertFalse(mod.physical_evidence_payload_valid(missing_runtime_identity, raw, cfg, now=1001, evidence_key=key))
         stale = dict(evidence); stale["verified_at"] = 0
         stale["evidence_hmac_sha256"] = mod.physical_evidence_signature(stale, key)
         self.assertFalse(mod.physical_evidence_payload_valid(stale, raw, cfg, now=1000 + 8 * 24 * 60 * 60, evidence_key=key))
