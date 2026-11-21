@@ -412,7 +412,7 @@ def table_is_owned_by_controller(output: str) -> bool:
         return False
     lines = []
     for raw_line in output.splitlines():
-        value = re.sub(r"\\s+# handle [0-9]+$", "", raw_line.strip()).strip()
+        value = re.sub(r"\s+# handle [0-9]+$", "", raw_line.strip()).strip()
         if value:
             lines.append(value)
     header = f"table inet {TABLE} {{"
