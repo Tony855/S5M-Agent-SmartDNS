@@ -21,7 +21,7 @@ class ControllerTests(unittest.TestCase):
         })
         transaction = mod.build_nft_transaction(True, rules)
         self.assertTrue(transaction.startswith("delete table inet s5m_agent_ingress\n"))
-        self.assertNotIn("\\n", transaction)
+        self.assertNotIn("\n", transaction)
 
     def test_valid_config_and_rules_are_scoped(self):
         self.write(self.valid()); cfg=mod.load_config(self.path, require_root=False); rules=mod.render_nft(cfg)
@@ -225,7 +225,7 @@ class ControllerTests(unittest.TestCase):
     def test_table_ownership_requires_exact_table_level_comment(self):
         header = f"table inet {mod.TABLE} {{"
         marker = 'comment "managed-by:s5m-agent-ingress-v1"'
-        owned = "\\n".join([header, "    " + marker, "    chain forward_guard {", "    }", "}"])
+        owned = "\n".join([header, "    " + marker, "    chain forward_guard {", "    }", "}"])
         self.assertTrue(mod.table_is_owned_by_controller(owned))
         inline_owned = header + " " + marker + ";\\n    chain forward_guard {\\n    }\\n}"
         self.assertTrue(mod.table_is_owned_by_controller(inline_owned))
@@ -233,7 +233,7 @@ class ControllerTests(unittest.TestCase):
         # A rule comment is untrusted metadata, not proof that this controller
         # owns the table. apply/remove must never delete a foreign table merely
         # because the marker text appears somewhere in its body.
-        rule_only = "\\n".join([
+        rule_only = "\n".join([
             header,
             "    chain input {",
             '        tcp dport 22 accept comment "managed-by:s5m-agent-ingress-v1"',
@@ -241,7 +241,7 @@ class ControllerTests(unittest.TestCase):
             "}",
         ])
         self.assertFalse(mod.table_is_owned_by_controller(rule_only))
-        self.assertFalse(mod.table_is_owned_by_controller("\\n".join([
+        self.assertFalse(mod.table_is_owned_by_controller("\n".join([
             header,
             "    set foreign { type ipv4_addr; }",
             "    " + marker,
