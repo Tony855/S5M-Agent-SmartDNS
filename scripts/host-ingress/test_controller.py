@@ -161,6 +161,8 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([changed_mode]), json.dumps([container])))
         changed_interface = dict(network); changed_interface["Options"] = dict(network["Options"], **{"com.docker.network.bridge.trusted_host_interfaces": "eth0"})
         self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([changed_interface]), json.dumps([container])))
+        extra_option = dict(network); extra_option["Options"] = dict(network["Options"], **{"com.docker.network.bridge.enable_ip_masquerade": "true"})
+        self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([extra_option]), json.dumps([container])))
         changed_endpoint = {"NetworkSettings": {"Networks": {
             "s5m-agent-ingress": {"NetworkID": "a" * 64, "IPAddress": "172.31.10.99", "GlobalIPv6Address": ""}
         }}}

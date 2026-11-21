@@ -191,12 +191,16 @@ def validate_existing(net,cfg):
             raise LifecycleError("managed network contains duplicate IPAM subnets for one address family")
         actual[n.version]=(str(n),str(gateway))
     if actual!=expected: raise LifecycleError("managed network subnet/gateway drift; refusing destructive repair")
-    opts=net.get("Options") or {}
+    opts=net.get("Options")
     required={"com.docker.network.bridge.gateway_mode_ipv4":"routed",
               "com.docker.network.bridge.trusted_host_interfaces":cfg["interface"]}
     if 6 in cfg["_networks"]: required["com.docker.network.bridge.gateway_mode_ipv6"]="routed"
-    for k,v in required.items():
-        if opts.get(k)!=v: raise LifecycleError(f"managed network option drift: {k}")
+    # The routed source-preservation proof is valid only for the exact options
+    # created by this lifecycle. Unknown bridge options can change NAT,
+    # isolation, host binding or interface semantics; accepting a required
+    # subset would let an unreviewed option ride along with a valid attestation.
+    if not isinstance(opts, dict) or opts != required:
+        raise LifecycleError("managed network options must exactly match the routed ingress contract")
     return net
 
 def create_network(cfg):

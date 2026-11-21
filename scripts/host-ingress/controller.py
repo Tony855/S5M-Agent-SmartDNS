@@ -334,13 +334,16 @@ def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network
     if not isinstance(labels, dict) or labels.get("com.s5m.managed") != "s5m-agent-dns-ingress":
         return False
     options = network.get("Options")
-    if not isinstance(options, dict):
-        return False
-    if options.get("com.docker.network.bridge.gateway_mode_ipv4") != "routed":
-        return False
-    if options.get("com.docker.network.bridge.trusted_host_interfaces") != cfg.get("interface"):
-        return False
-    if any(address.version == 6 for address in cfg.get("addresses", [])) and options.get("com.docker.network.bridge.gateway_mode_ipv6") != "routed":
+    expected_options = {
+        "com.docker.network.bridge.gateway_mode_ipv4": "routed",
+        "com.docker.network.bridge.trusted_host_interfaces": cfg.get("interface"),
+    }
+    if any(address.version == 6 for address in cfg.get("addresses", [])):
+        expected_options["com.docker.network.bridge.gateway_mode_ipv6"] = "routed"
+    # Re-check the exact option set whenever signed physical evidence is reused.
+    # A required-subset check would accept an additional Docker bridge option
+    # that was never part of the reviewed source-preserving topology.
+    if not isinstance(options, dict) or options != expected_options:
         return False
     ipam_state = network.get("IPAM")
     if not isinstance(ipam_state, dict):
