@@ -227,7 +227,7 @@ class ControllerTests(unittest.TestCase):
         marker = 'comment "managed-by:s5m-agent-ingress-v1"'
         owned = "\n".join([header, "    " + marker, "    chain forward_guard {", "    }", "}"])
         self.assertTrue(mod.table_is_owned_by_controller(owned))
-        inline_owned = header + " " + marker + ";\\n    chain forward_guard {\\n    }\\n}"
+        inline_owned = header + " " + marker + ";\n    chain forward_guard {\n    }\n}"
         self.assertTrue(mod.table_is_owned_by_controller(inline_owned))
 
         # A rule comment is untrusted metadata, not proof that this controller
@@ -247,8 +247,8 @@ class ControllerTests(unittest.TestCase):
             "    " + marker,
             "}",
         ])))
-        self.assertFalse(mod.table_is_owned_by_controller(header.replace(mod.TABLE, "foreign") + "\\n    " + marker + "\\n}"))
-        self.assertFalse(mod.table_is_owned_by_controller(header + " " + marker + " extra;\\n}"))
+        self.assertFalse(mod.table_is_owned_by_controller(header.replace(mod.TABLE, "foreign") + "\n    " + marker + "\n}"))
+        self.assertFalse(mod.table_is_owned_by_controller(header + " " + marker + " extra;\n}"))
 
     def test_live_nft_table_rejects_unscoped_accept_and_extra_chains(self):
         self.write(self.valid())
@@ -288,7 +288,7 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(mod.ConfigError):
             mod.verify_live_firewall(cfg, interface, live, True, False, attestation_path, now=now, require_root=False)
         with self.assertRaises(mod.ConfigError):
-            mod.verify_live_firewall(cfg, interface, live + "    tcp dport 6055 accept\\n", True, True, attestation_path, now=now, require_root=False)
+            mod.verify_live_firewall(cfg, interface, live + "    tcp dport 6055 accept\n", True, True, attestation_path, now=now, require_root=False)
         stale = dict(attestation)
         stale["updated_at"] = now - 91
         attestation_path.write_text(json.dumps(stale))
