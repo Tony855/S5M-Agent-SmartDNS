@@ -346,3 +346,63 @@ func TestRecoverInterruptedConfigTransactionRetainsJournalIfResidualSmartDNSCann
 		t.Fatalf("recovery journal must remain for retry: %v", err)
 	}
 }
+
+
+func TestRecoverInterruptedPerClientTransactionUsesIngressAwareHealthProbe(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(dir, "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+
+	oldConfig := []byte("proxy-server socks5://127.0.0.1:15000 -name s5m-smartdns-15000\\n")
+	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("uncommitted-smartdns"))
+	restartCalls, perClientProbeCalls := 0, 0
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool {
+		t.Fatal("per-client recovery must not use the shared loopback health probe")
+		return false
+	}
+	transactionReadSmartDNSHostIngressAttestation = func() (smartDNSHostIngressAttestation, error) {
+		return smartDNSHostIngressAttestation{
+			Version: 1, UpdatedAt: time.Now().Unix(), Interface: "eth1",
+			IPv4Address: "172.31.10.2", ClientCIDRs: []string{"192.168.50.0/24"},
+			SourceIPPreserved: true, FirewallReady: true, FirewallPersistent: true,
+			UDPReady: true, TCPReady: true,
+		}, nil
+	}
+	transactionWaitSmartDNSPerClientHealthy = func(data []byte, attestation smartDNSHostIngressAttestation, timeout time.Duration) bool {
+		perClientProbeCalls++
+		if !bytes.Equal(data, oldConfig) {
+			t.Fatalf("recovery probe received %q, want restored config %q", data, oldConfig)
+		}
+		if attestation.IPv4Address != "172.31.10.2" || timeout != 5*time.Second {
+			t.Fatalf("recovery probe received wrong attestation/timeout: %#v %s", attestation, timeout)
+		}
+		return true
+	}
+
+	record := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Data: oldConfig, Existed: true},
+		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
+		Controller: transactionRecoveryFile{Data: []byte("old-controller"), Existed: true},
+	}
+	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverInterruptedConfigTransaction(); err != nil {
+		t.Fatalf("recover per-client transaction: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "smartdns.conf"))
+	if err != nil || !bytes.Equal(got, oldConfig) {
+		t.Fatalf("recovered per-client SmartDNS config = %q, err=%v; want %q", got, err, oldConfig)
+	}
+	if restartCalls != 1 || perClientProbeCalls != 1 {
+		t.Fatalf("per-client recovery must restart and run the contract-aware probe: restarts=%d probes=%d", restartCalls, perClientProbeCalls)
+	}
+	if _, err := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(err) {
+		t.Fatalf("journal should be removed only after successful per-client recovery: %v", err)
+	}
+}

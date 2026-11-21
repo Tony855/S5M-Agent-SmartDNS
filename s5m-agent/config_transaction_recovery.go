@@ -156,7 +156,19 @@ func recoverInterruptedConfigTransactionWithRuntimeChecks(checkRuntime bool) err
 				if err := transactionRestartSmartDNS(); err != nil {
 					return fmt.Errorf("重启恢复后的 SmartDNS 失败，恢复记录保留: %w", err)
 				}
-				if !transactionWaitSmartDNSHealthy(5 * time.Second) {
+				if hasPerClientSmartDNSDirectives(record.SmartDNS.Data) {
+					// A recovered per-client config has no shared default group;
+					// the loopback shared-mode probe cannot prove it healthy. Reuse
+					// the same fresh host attestation and CIDR-aware probe as the
+					// normal per-client transaction rollback path.
+					attestation, attestationErr := transactionReadSmartDNSHostIngressAttestation()
+					if attestationErr != nil {
+						return fmt.Errorf("读取启动恢复后的 per-client ingress 证明失败，恢复记录保留: %w", attestationErr)
+					}
+					if !transactionWaitSmartDNSPerClientHealthy(record.SmartDNS.Data, attestation, 5*time.Second) {
+						return fmt.Errorf("恢复后的 per-client SmartDNS 未通过 CIDR/UDP/TCP 健康检查，恢复记录保留")
+					}
+				} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 					return fmt.Errorf("恢复后的 SmartDNS 未通过 UDP/TCP DNS 健康检查，恢复记录保留")
 				}
 			} else if !record.SmartDNS.Existed {

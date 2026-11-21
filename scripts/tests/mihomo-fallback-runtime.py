@@ -368,10 +368,15 @@ def ipv6_socks_atyp_main():
                     raise RuntimeError(f"unsupported SOCKS ATYP: {atyp}")
                 stage = "read SOCKS destination port"
                 port = int.from_bytes(read_exact(conn, 2), "big")
-                observed.update(atyp=atyp, address=address, port=port)
-                # A successful CONNECT response is enough to test the upstream
-                # SOCKS address encoding; no external IPv6 network is required.
+                probe_payload = b"S5M-IPv6-ATYP-PROBE"
+                # Return a successful CONNECT and require one payload byte sequence.
+                # Mihomo may defer opening the upstream socket until client data is
+                # available; the payload makes the observer prove the actual
+                # IPv4-SOCKS -> IPv6-target data path, not only a local SOCKS reply.
                 conn.sendall(b"\x05\x00\x00\x04" + socket.inet_pton(socket.AF_INET6, "::1") + b"\x00\x00")
+                stage = "read CONNECT payload"
+                payload = read_exact(conn, len(probe_payload))
+                observed.update(atyp=atyp, address=address, port=port, payload=payload)
         except Exception as exc:
             observed.update(error=str(exc), stage=stage)
 
@@ -433,6 +438,9 @@ rules:
                 elif atyp == 3:
                     read_exact(client, read_exact(client, 1)[0])
                 read_exact(client, 2)
+                # Force Mihomo to establish/drive the upstream connection on
+                # implementations that defer dialing until the first data byte.
+                client.sendall(b"S5M-IPv6-ATYP-PROBE")
 
             # The assertion is about the bytes observed by the fake upstream,
             # not whether its worker has completed Python socket cleanup. On
@@ -445,7 +453,7 @@ rules:
             if "atyp" not in observed:
                 raise RuntimeError(f"fake SOCKS5 upstream did not observe the IPv6 ATYP exchange within 20 seconds: {observed!r}")
             server_thread.join(timeout=0.5)
-            expected = {"atyp": 4, "address": "2606:4700:4700::1111", "port": 853}
+            expected = {"atyp": 4, "address": "2606:4700:4700::1111", "port": 853, "payload": b"S5M-IPv6-ATYP-PROBE"}
             if observed != expected:
                 raise RuntimeError(f"IPv6 destination was not preserved as SOCKS5 ATYP=4: {observed!r}")
             print("PASS: IPv4 SOCKS5 ingress carries IPv6 CONNECT destination as ATYP=4 to TCP/853")

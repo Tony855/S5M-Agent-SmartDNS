@@ -15,6 +15,8 @@ NO_SMARTDNS_IMAGE="ghcr.io/tony855/s5m-agent:dev"
 DATA_DIR="/opt/s5m-agent/data"
 TZ_VAL="Asia/Shanghai"
 RESTART_POLICY="unless-stopped"
+ENABLE_PER_CLIENT_INGRESS="0"
+ENABLE_PER_CLIENT_INGRESS_IPV6="0"
 
 # 端口映射（数组内成对出现：参数 值 参数 值 ...）
 PORT_MAP=(
@@ -55,6 +57,16 @@ CLEAN_LEGACY_IMAGES="${CLEAN_LEGACY_IMAGES:-false}"
 log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
+
+prepare_ingress_attestation_dir() {
+  local path="/run/s5m-agent-ingress"
+  if [[ -L "$path" || ( -e "$path" && ! -d "$path" ) ]]; then
+    err "宿主机 ingress attestation 路径不安全：$path"
+    return 1
+  fi
+  install -d -o root -g root -m 0755 -- "$path" || return 1
+  [[ -d "$path" && ! -L "$path" ]] || { err "无法安全创建 ingress attestation 目录：$path"; return 1; }
+}
 
 validate_data_dir_path() {
   local path="${DATA_DIR}" current="" component
@@ -159,6 +171,10 @@ ports_display() {
     [[ "${p}" == "-p" ]] && continue
     out+=("${p}")
   done
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    out+=("127.0.0.1::6055/udp" "127.0.0.1::6055/tcp")
+    :
+  fi
   if [[ ${#out[@]} -eq 0 ]]; then
     echo "（无）"
   else
@@ -230,6 +246,8 @@ save_config() {
     echo "DATA_DIR=$(printf '%q' "${DATA_DIR}")"
     echo "TZ_VAL=$(printf '%q' "${TZ_VAL}")"
     echo "RESTART_POLICY=$(printf '%q' "${RESTART_POLICY}")"
+    echo "ENABLE_PER_CLIENT_INGRESS=$(printf '%q' "${ENABLE_PER_CLIENT_INGRESS}")"
+    echo "ENABLE_PER_CLIENT_INGRESS_IPV6=$(printf '%q' "${ENABLE_PER_CLIENT_INGRESS_IPV6}")"
     echo "PORT_MAP=("
     local i
     if [[ ${#PORT_MAP[@]} -gt 0 ]]; then
@@ -256,6 +274,107 @@ save_config() {
 }
 
 # ---------- 验证 ----------
+validate_ingress_options() {
+  [[ "$ENABLE_PER_CLIENT_INGRESS" == "0" || "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS 必须是 0 或 1"; return 1; }
+  [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "0" || "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]] || { err "ENABLE_PER_CLIENT_INGRESS_IPV6 必须是 0 或 1"; return 1; }
+  if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" && "$ENABLE_PER_CLIENT_INGRESS" != "1" ]]; then
+    err "ENABLE_PER_CLIENT_INGRESS_IPV6=1 需要同时启用 ENABLE_PER_CLIENT_INGRESS"
+    return 1
+  fi
+  if [[ "$IMAGE" == "$NO_SMARTDNS_IMAGE" && "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    err "当前选择的是无 SmartDNS 镜像，不能启用 per-client DNS ingress"
+    return 1
+  fi
+  local spec
+  for spec in "${PORT_MAP[@]}"; do
+    [[ "$spec" == "-p" ]] && continue
+    if [[ "$spec" =~ :6055(/|$) ]]; then
+      err "禁止在 PORT_MAP 中手工映射 6055；请使用 ENABLE_PER_CLIENT_INGRESS 以确保仅 loopback/routed-only 映射"
+      return 1
+    fi
+  done
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    local ingress_help
+    ingress_help="$(docker network connect --help 2>&1)" || true
+    [[ "$ingress_help" == *"--gw-priority"* ]] || { err "当前 Docker CLI 不支持 network connect --gw-priority"; return 1; }
+  fi
+  if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
+    python3 - /etc/s5m-agent-ingress/network.json <<'PY'
+import ipaddress, json, os, stat, subprocess, sys
+path = sys.argv[1]
+try:
+    st = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
+        raise ValueError("network.json must be root-owned mode 0600 or stricter")
+    with open(path, encoding="utf-8") as stream:
+        cfg = json.load(stream)
+    if not all(cfg.get(key) for key in ("ipv6_subnet", "ipv6_gateway", "ipv6_address")):
+        raise ValueError("network.json must define the IPv6 subnet, gateway and ingress address")
+    if not any(ipaddress.ip_network(item, strict=True).version == 6 for item in cfg.get("client_cidrs", [])):
+        raise ValueError("network.json must include at least one IPv6 client CIDR")
+    bridge = json.loads(subprocess.check_output(["docker", "network", "inspect", "bridge"], text=True))[0]
+    if not any(":" in item.get("Subnet", "") and item.get("Gateway") for item in bridge.get("IPAM", {}).get("Config", [])):
+        raise ValueError("Docker default bridge must have an IPv6 gateway to preserve IPv6 egress")
+    addresses = json.loads(subprocess.check_output(["ip", "-j", "addr", "show", "dev", cfg["interface"]], text=True))
+    if not any(item.get("family") == "inet6" and item.get("scope") == "global" for dev in addresses for item in dev.get("addr_info", [])):
+        raise ValueError("trusted host interface must have a global IPv6 address")
+except Exception as exc:
+    print(f"IPv6 ingress preflight failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+    [[ "$?" == "0" ]] || { err "IPv6 routed ingress prerequisites are not satisfied"; return 1; }
+  fi
+}
+
+validate_ingress_port_publication() {
+  [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || return 0
+  python3 - "$CONTAINER_NAME" "$ENABLE_PER_CLIENT_INGRESS_IPV6" <<'PY'
+import json, subprocess, sys
+name, ipv6 = sys.argv[1], sys.argv[2] == "1"
+try:
+    item = json.loads(subprocess.check_output(["docker", "inspect", name], text=True))[0]
+    ports = item.get("NetworkSettings", {}).get("Ports") or {}
+    for proto in ("udp", "tcp"):
+        entries = ports.get(f"6055/{proto}") or []
+        expected = 2 if ipv6 else 1
+        if len(entries) != expected:
+            raise ValueError(f"6055/{proto}: expected {expected} loopback-only mapping(s) before routed attach, got {entries}")
+        v4 = [x for x in entries if x.get("HostIp") == "127.0.0.1" and str(x.get("HostPort", "")).isdigit() and 1 <= int(x["HostPort"]) <= 65535]
+        if len(v4) != 1:
+            raise ValueError(f"6055/{proto}: IPv4 mapping must bind only to 127.0.0.1 with ephemeral host port")
+        if ipv6:
+            v6 = [x for x in entries if x.get("HostIp") == "::1" and str(x.get("HostPort", "")).isdigit() and 1 <= int(x["HostPort"]) <= 65535]
+            if len(v6) != 1:
+                raise ValueError(f"6055/{proto}: IPv6 mapping must bind only to ::1 with ephemeral host port")
+except Exception as exc:
+    print(f"unsafe per-client DNS port publication: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+# Per-client ingress is an explicit deployment contract. Do not discard the
+# previous container until the routed Docker endpoint is attached successfully.
+provision_per_client_ingress() {
+  [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]] || return 0
+  local helper="${1:-/usr/local/libexec/s5m-agent-ingress/network-lifecycle.py}"
+  local network_config="${2:-/etc/s5m-agent-ingress/network.json}"
+  local firewall_config="${3:-/etc/s5m-agent-ingress/config.json}"
+  local previous_container="${4:-}"
+  local -a provision_args=(provision --config "$network_config" --firewall-config "$firewall_config")
+  if [[ ! -x "$helper" || ! -f "$network_config" || ! -f "$firewall_config" ]]; then
+    err "per-client ingress 已启用，但缺少 host controller/network/firewall 配置"
+    return 1
+  fi
+  if [[ -n "$previous_container" ]]; then
+    provision_args+=(--previous-container "$previous_container")
+  fi
+  if ! "$helper" "${provision_args[@]}"; then
+    err "routed Docker ingress provisioning 失败"
+    return 1
+  fi
+  log "Routed DNS ingress network attached; firewall/physical proof gates remain enforced."
+}
+
 verify_container() {
   log "等待容器进入健康状态（最多 120 秒）..."
   local deadline=$((SECONDS + 120)) state="unknown" health="unknown"
@@ -280,6 +399,11 @@ verify_container() {
     return 1
   fi
 
+  if ! validate_ingress_port_publication; then
+    err "per-client DNS 6055 端口映射不安全"
+    return 1
+  fi
+
   log "当前状态："
   docker ps --filter "name=^/${CONTAINER_NAME}$" || true
   log "Health: ${health}"
@@ -296,7 +420,7 @@ verify_container() {
   docker logs "${CONTAINER_NAME}" 2>&1 | grep -iE 'tun|error|fatal' | tail -10 || true
   log "监听端口："
   ss -lntup 2>/dev/null | grep -E ':(80|7890|6053)\b' || echo "  （无匹配，稍后再查看）"
-  log "完成。数据目录：${DATA_DIR}"
+  log "容器基础健康检查通过；per-client ingress provisioning 由部署事务单独验收。数据目录：${DATA_DIR}"
   return 0
 }
 
@@ -322,7 +446,9 @@ do_pull_no_smartdns() {
   fi
 
   IMAGE="${NO_SMARTDNS_IMAGE}"
-  log "已切换当前部署镜像为：${IMAGE}"
+  ENABLE_PER_CLIENT_INGRESS="0"
+  ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+  log "已切换当前部署镜像为：${IMAGE}；无 SmartDNS 镜像自动关闭 per-client DNS ingress"
   save_config
   warn "当前运行中的容器不会被更改；如需使用无 SmartDNS 镜像，请执行“2) 重新部署”"
   warn "重新部署会保留 ${DATA_DIR} 中的数据"
@@ -380,6 +506,7 @@ do_recreate() {
 
   # Validate every existing path component before mkdir, bind-mount, or deletion.
   validate_data_dir_path || return 1
+  prepare_ingress_attestation_dir || return 1
 
   # Confirm destructive intent before touching the current container or data.
   if [[ "${wipe_data}" == "true" ]] && ! confirm_data_wipe; then
@@ -389,6 +516,9 @@ do_recreate() {
     check_host_tun || warn "宿主机 TUN 不可用，Mihomo 的 TUN 模式可能无法启动（其余功能不受影响）"
   fi
 
+  # Validate all ingress publication and router-family prerequisites before
+  # pulling or stopping the existing service.
+  validate_ingress_options || return 1
   # Validate ports and pull the candidate image while the current service is
   # still running. Registry/network failure must never take the old Agent offline.
   if ! check_port_conflict; then
@@ -485,14 +615,23 @@ do_recreate() {
     fi
   fi
 
+  local -a effective_port_map=("${PORT_MAP[@]}")
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    effective_port_map+=("-p" "127.0.0.1::6055/udp" "-p" "127.0.0.1::6055/tcp")
+    if [[ "$ENABLE_PER_CLIENT_INGRESS_IPV6" == "1" ]]; then
+      effective_port_map+=("-p" "[::1]::6055/udp" "-p" "[::1]::6055/tcp")
+    fi
+  fi
+
   log "启动新容器 ${CONTAINER_NAME}"
   if ! docker run -d \
       --name "${CONTAINER_NAME}" \
       --restart "${RESTART_POLICY}" \
-      "${PORT_MAP[@]}" \
+      "${effective_port_map[@]}" \
       "${DEVICE_MAP[@]}" \
       "${CAP_ADD[@]}" \
       -v "${DATA_DIR}:/data" \
+      -v "/run/s5m-agent-ingress:/run/s5m-agent-ingress:ro" \
       -e TZ="${TZ_VAL}" \
       "${EXTRA_ENVS[@]}" \
       "${IMAGE}" >/dev/null; then
@@ -511,8 +650,31 @@ do_recreate() {
     return 1
   fi
 
+  if ! provision_per_client_ingress "" "" "" "$backup_container"; then
+    err "per-client ingress provisioning 未完成，正在回滚新容器"
+    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    if restore_previous_container "${backup_container}"; then
+      if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" &&
+            -x /usr/local/libexec/s5m-agent-ingress/controller.py &&
+            -f /etc/s5m-agent-ingress/config.json ]]; then
+        if /usr/local/libexec/s5m-agent-ingress/controller.py apply; then
+          if [[ -n "${backup_container}" && -x /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py &&
+                -f /etc/s5m-agent-ingress/network.json ]]; then
+            /usr/local/libexec/s5m-agent-ingress/network-lifecycle.py provision \
+              --config /etc/s5m-agent-ingress/network.json \
+              --firewall-config /etc/s5m-agent-ingress/config.json ||
+              warn "旧容器已恢复，但 routed ingress endpoint 重新挂载失败；per-client 保持 fail-closed。"
+          fi
+        else
+          warn "旧容器回滚后无法刷新 host ingress attestation；per-client 保持 fail-closed。"
+        fi
+      fi
+    fi
+    return 1
+  fi
+
   if [[ -n "${backup_container}" ]]; then
-    log "新容器健康，删除回滚副本 ${backup_container}"
+    log "新容器健康且 ingress provisioning 通过，删除回滚副本 ${backup_container}"
     docker rm "${backup_container}" >/dev/null 2>&1 || warn "回滚副本未能清理，可手动删除"
   fi
   if [[ "${remove_image}" == "true" ]]; then
@@ -682,6 +844,30 @@ toggle_tun() {
   warn "提示：要长期生效请选 19) 保存配置"
 }
 
+toggle_per_client_ingress() {
+  read -rp "启用 per-client routed DNS ingress？[y/N]: " ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+    ENABLE_PER_CLIENT_INGRESS="1"
+    read -rp "同时启用 IPv6 ingress？（要求 Docker default bridge 与可信接口均已启用 IPv6）[y/N]: " ipv6_ans
+    if [[ "$ipv6_ans" =~ ^[Yy]$ ]]; then
+      ENABLE_PER_CLIENT_INGRESS_IPV6="1"
+    else
+      ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+    fi
+    if ! validate_ingress_options; then
+      ENABLE_PER_CLIENT_INGRESS="0"
+      ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+      warn "Per-client ingress 前置条件未满足，已保持关闭"
+      return 1
+    fi
+    log "Per-client ingress 已启用；保存配置并重新部署后，还需按 host-ingress 文档执行网络 provision 和物理 LAN 验收"
+  else
+    ENABLE_PER_CLIENT_INGRESS="0"
+    ENABLE_PER_CLIENT_INGRESS_IPV6="0"
+    log "Per-client ingress 已关闭（需保存并重新部署生效）"
+  fi
+}
+
 # ---------- 菜单 ----------
 show_menu() {
   echo
@@ -696,6 +882,7 @@ show_menu() {
   printf "  Capability: %s\n" "$(caps_display)"
   printf "  时区     : %s\n" "${TZ_VAL}"
   printf "  重启策略 : %s\n" "${RESTART_POLICY}"
+  printf "  Per-client ingress: %s (IPv6: %s)\n" "${ENABLE_PER_CLIENT_INGRESS}" "${ENABLE_PER_CLIENT_INGRESS_IPV6}"
   printf "  状态     : %s\n" "$(container_status)"
   echo "────────────────────────────────────────────────────"
   echo "  ── 部署 / 生命周期 ──"
@@ -722,6 +909,7 @@ show_menu() {
   echo "  19) 保存配置到文件（${CONFIG_FILE}）"
   echo "  20) 切换 TUN 映射（--device /dev/net/tun + NET_ADMIN/NET_RAW）"
   echo "  21) 拉取并选择无 SmartDNS 镜像（ghcr.io/tony855/s5m-agent:dev）"
+  echo "  22) 切换 Per-client routed DNS ingress（默认关闭）"
   echo "  0)  退出"
   echo "════════════════════════════════════════════════════"
 }
@@ -753,6 +941,7 @@ main_menu() {
       19) save_config ;;
       20) toggle_tun ;;
       21) do_pull_no_smartdns || warn "无 SmartDNS 镜像拉取/切换失败" ;;
+      22) toggle_per_client_ingress ;;
       0|q|Q|exit) log "退出"; break ;;
       *) warn "无效选项，请重新选择" ;;
     esac
@@ -782,6 +971,11 @@ exec_deploy_auto() {
   echo "  docker logs -f ${CONTAINER_NAME}"
   echo "  docker restart ${CONTAINER_NAME}"
   echo "  docker inspect ${CONTAINER_NAME} --format '{{.State.Health.Status}}'"
+  if [[ "$ENABLE_PER_CLIENT_INGRESS" == "1" ]]; then
+    echo
+    echo "Per-client DNS ingress 的 routed network provision 已自动尝试；请确认上方结果。"
+    echo "仍需配置上游路由器静态路由并完成真实 LAN UDP/TCP 源地址验收。"
+  fi
   echo
   echo "提示：不带参数运行本脚本可进入交互式管理菜单"
 }

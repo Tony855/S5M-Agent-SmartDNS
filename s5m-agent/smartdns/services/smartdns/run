@@ -1,12 +1,64 @@
 #!/command/with-contenv sh
 set -eu
-# The disabled marker is persistent in /data. Keep the supervised service
-# quiescent while disabled, but watch for the marker being removed by an
-# enable command. This is important after container restart: s6 considers
-# this waiting process "up", so a later s6-svc -u alone will not rerun it.
-if [ -f /data/smartdns.disabled ]; then
-  while [ -f /data/smartdns.disabled ]; do
+
+SMARTDNS_DISABLED=/data/smartdns.disabled
+SMARTDNS_PID=
+
+stop_smartdns() {
+  if [ -n "$SMARTDNS_PID" ]; then
+    kill -TERM "$SMARTDNS_PID" 2>/dev/null || true
+    wait "$SMARTDNS_PID" 2>/dev/null || true
+    SMARTDNS_PID=
+  fi
+}
+
+terminate() {
+  stop_smartdns
+  exit 0
+}
+trap terminate TERM INT
+
+wait_until_enabled() {
+  while [ -f "$SMARTDNS_DISABLED" ]; do
     sleep 1
   done
-fi
-exec /usr/sbin/smartdns -f -x -c /data/smartdns.conf
+}
+
+wait_for_ingress_proof() {
+  if /app/s5m-agent --validate-smartdns-ingress-before-service; then
+    return 0
+  fi
+  echo "SmartDNS ingress proof is unavailable or stale; keeping the resolver stopped" >&2
+  while ! /app/s5m-agent --validate-smartdns-ingress-before-service; do
+    sleep 5
+    wait_until_enabled
+  done
+}
+
+start_smartdns() {
+  /usr/sbin/smartdns -f -x -c /data/smartdns.conf &
+  SMARTDNS_PID=$!
+}
+
+# A persisted per-client config must never make SmartDNS bind before the host
+# controller has restored a fresh source-CIDR firewall attestation after reboot.
+wait_until_enabled
+wait_for_ingress_proof
+start_smartdns
+
+# Keep the actual daemon behind a small supervisor. If the host proof expires,
+# the ingress address disappears, or SmartDNS is disabled, stop the listener
+# immediately and wait for a fresh proof/enable transition before restarting.
+while :; do
+  if ! kill -0 "$SMARTDNS_PID" 2>/dev/null; then
+    wait "$SMARTDNS_PID"
+    exit $?
+  fi
+  sleep 5
+  if [ -f "$SMARTDNS_DISABLED" ] || ! /app/s5m-agent --validate-smartdns-ingress-before-service; then
+    stop_smartdns
+    wait_until_enabled
+    wait_for_ingress_proof
+    start_smartdns
+  fi
+done

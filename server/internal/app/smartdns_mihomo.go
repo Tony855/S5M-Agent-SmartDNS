@@ -370,6 +370,17 @@ func applySmartDNSPerClientListeners(document string, plan SmartDNSRoutingPlan) 
 // through the Agent's joint config transaction; neither output is independently
 // safe to activate.
 func buildSmartDNSPerClientRuntimeConfigs(document string, cfg SmartDNSRoutingConfig, proxies []SmartDNSProxyRef) (string, string, []SmartDNSClientRuntimeMapping, error) {
+	return buildSmartDNSPerClientRuntimeConfigsInternal(document, cfg, proxies, "", "", false)
+}
+
+// buildSmartDNSPerClientRuntimeConfigsWithIngress is used only after the
+// Master-side readiness gate has validated the current Agent's exact ingress
+// contract. It adds the 6055 listeners while preserving loopback 6053 service.
+func buildSmartDNSPerClientRuntimeConfigsWithIngress(document string, cfg SmartDNSRoutingConfig, proxies []SmartDNSProxyRef, ingressIPv4, ingressIPv6 string) (string, string, []SmartDNSClientRuntimeMapping, error) {
+	return buildSmartDNSPerClientRuntimeConfigsInternal(document, cfg, proxies, ingressIPv4, ingressIPv6, true)
+}
+
+func buildSmartDNSPerClientRuntimeConfigsInternal(document string, cfg SmartDNSRoutingConfig, proxies []SmartDNSProxyRef, ingressIPv4, ingressIPv6 string, requireIngress bool) (string, string, []SmartDNSClientRuntimeMapping, error) {
 	plan, err := BuildSmartDNSRoutingPlan(cfg, proxies)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("SmartDNS per-client 路由计划无效: %w", err)
@@ -381,7 +392,12 @@ func buildSmartDNSPerClientRuntimeConfigs(document string, cfg SmartDNSRoutingCo
 	if err != nil {
 		return "", "", nil, fmt.Errorf("生成 Mihomo per-client Listener 失败: %w", err)
 	}
-	smartDNSYAML, err := buildSmartDNSPerClientConfig(mappings)
+	var smartDNSYAML string
+	if requireIngress {
+		smartDNSYAML, err = buildSmartDNSPerClientConfigWithIngress(mappings, ingressIPv4, ingressIPv6)
+	} else {
+		smartDNSYAML, err = buildSmartDNSPerClientConfig(mappings)
+	}
 	if err != nil {
 		return "", "", nil, fmt.Errorf("生成 SmartDNS per-client 上游配置失败: %w", err)
 	}

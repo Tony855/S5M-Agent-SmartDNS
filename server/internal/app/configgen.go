@@ -994,6 +994,12 @@ func (a *App) BuildConfigForMachine(machineCode string) (string, error) {
 // buildConfigForMachineWithSmartDNSOverride evaluates a requested node SmartDNS
 // state without committing that desired state before the Agent acknowledges it.
 func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smartDNSEnabled *bool) (string, error) {
+	return a.buildConfigForMachineWithSmartDNSOverrideAndPerClient(machineCode, smartDNSEnabled, false)
+}
+
+// The WebSocket publisher may request the pre-rendered Mihomo document only
+// after it has a fresh ingress contract; all other callers remain fail-closed.
+func (a *App) buildConfigForMachineWithSmartDNSOverrideAndPerClient(machineCode string, smartDNSEnabled *bool, allowPerClient bool) (string, error) {
 	proxies, err := a.store.ListProxies()
 	if err != nil {
 		return "", err
@@ -1051,8 +1057,8 @@ func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smar
 		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
 			return "", fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
 		}
-		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
-			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
+		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) && !allowPerClient {
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时或通过 Agent ingress 合同发布，拒绝生成普通配置")
 		}
 		applySharedFallback = strings.TrimSpace(machineCode) != "" && !nodeSmartDNSDisabled && !noSmartDNSAgent
 	} else if !routingSettingExists && strings.TrimSpace(machineCode) != "" &&
@@ -1066,8 +1072,8 @@ func (a *App) buildConfigForMachineWithSmartDNSOverride(machineCode string, smar
 		if routing.Mode == "" {
 			routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModeShared, Strategy: SmartDNSDefaultStrategy}
 		}
-		if routing.Mode == SmartDNSProxyModePerClient {
-			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时，拒绝发布未生效的配置")
+		if routing.Mode == SmartDNSProxyModePerClient && !allowPerClient {
+			return "", fmt.Errorf("按客户端独立出口尚未接入隔离 DNS 运行时或通过 Agent ingress 合同发布，拒绝生成普通配置")
 		}
 		refs := make([]SmartDNSProxyRef, 0, len(proxies))
 		for _, p := range proxies {

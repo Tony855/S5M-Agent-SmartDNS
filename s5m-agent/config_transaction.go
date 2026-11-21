@@ -140,14 +140,30 @@ var (
 	transactionReloadMihomo = reloadMihomo
 	transactionApplySmartDNS = writeSmartDNSConfigLockedWithBackupCleanup
 	transactionWaitSmartDNSHealthy = waitForSmartDNSHealthy
+	transactionWaitSmartDNSPerClientHealthy = waitForSmartDNSPerClientHealthy
+	transactionReadSmartDNSHostIngressAttestation = readSmartDNSHostIngressAttestation
 	transactionRestartSmartDNS = func() error {
 		return exec.Command("/command/s6-svc", "-r", "/run/service/smartdns").Run()
 	}
+	transactionWaitSmartDNSStopped = waitForSmartDNSProcessStopped
 	transactionWriteControllerConfig = writeControllerConfig
 	transactionRemoveBackup = removeTransactionBackup
 	transactionSnapshotFile = snapshotFileForTransaction
 	transactionProbeMihomoDNS = probeMihomoDNSFallback
 )
+
+func waitForSmartDNSProcessStopped(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if exec.Command("pidof", "smartdns").Run() != nil {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 // applyAgentConfigTransaction serializes the complete Mihomo+SmartDNS update.
 // Lock order is always SmartDNS then Mihomo. The caller must not hold either
@@ -173,6 +189,113 @@ func applyAgentConfigTransactionWithFallbackProbe(mihomoYAML, smartDNSConfig []b
 // Runtime YAML may be sanitized for an image capability while the exact
 // controller payload is retained separately for WebSocket SHA-256 consistency.
 func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool) error {
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, verifyFallbackDNS, controllerPayload, skipSmartDNSHealth, transactionApplySmartDNS, nil)
+}
+
+// smartDNSPerClientReplayProbe verifies an already-written per-client
+// document with fresh local host evidence, current Agent interface state and
+// the per-client DNS/listener probe. It deliberately never falls back to the
+// shared 127.0.0.1:6053 health check.
+func smartDNSPerClientReplayProbe(
+	data []byte,
+	contract smartDNSPerClientIngressContract,
+	readAttestation func() (smartDNSHostIngressAttestation, error),
+	observe func() (smartDNSIngressObservation, error),
+	probe func([]byte, smartDNSHostIngressAttestation) bool,
+) func() bool {
+	return func() bool {
+		if readAttestation == nil || observe == nil {
+			return false
+		}
+		attestation, err := readAttestation()
+		if err != nil || validateSmartDNSHostIngressContract(contract, attestation) != nil {
+			return false
+		}
+		observation, err := observe()
+		if err != nil || validateSmartDNSHostIngressObservation(attestation, observation) != nil {
+			return false
+		}
+		if probe == nil {
+			probe = smartDNSPerClientRuntimeHealthy
+		}
+		return probe(data, attestation)
+	}
+}
+
+// applyAgentConfigTransactionWithIngress validates per-client configuration
+// against the explicit Master-provided ingress contract, then uses the same
+// durable Mihomo+SmartDNS transaction and rollback journal as shared mode.
+func applyAgentConfigTransactionWithIngress(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, contract smartDNSPerClientIngressContract) error {
+	if !smartDNSFeatureSupported() {
+		return fmt.Errorf("当前 Agent 镜像不包含 SmartDNS，拒绝应用 per-client 配置")
+	}
+	validator := func(data []byte) error { return validateSmartDNSConfigWithContractBoundIngress(data, contract) }
+	if err := validator(smartDNSConfig); err != nil {
+		return fmt.Errorf("per-client SmartDNS ingress contract validation failed: %w", err)
+	}
+	if err := validateSmartDNSPerClientMihomoBindings(mihomoYAML, contract); err != nil {
+		return fmt.Errorf("per-client Mihomo listener contract validation failed: %w", err)
+	}
+
+	// Do not trust the Master contract's Ready bit as an attestation. Re-read
+	// the root-owned host proof at the point of mutation and bind it to the
+	// exact addresses/CIDRs carried by this transaction.
+	attestation, err := readSmartDNSHostIngressAttestation()
+	if err != nil {
+		return fmt.Errorf("per-client SmartDNS host ingress attestation is unavailable: %w", err)
+	}
+	if err := validateSmartDNSHostIngressContract(contract, attestation); err != nil {
+		return fmt.Errorf("per-client SmartDNS host ingress attestation rejected: %w", err)
+	}
+	observation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+	if err != nil {
+		return fmt.Errorf("observe Agent ingress interfaces and addresses: %w", err)
+	}
+	if err := validateSmartDNSHostIngressObservation(attestation, observation); err != nil {
+		return fmt.Errorf("per-client SmartDNS Agent ingress observation rejected: %w", err)
+	}
+
+	apply := func(data []byte, cleanupBackup bool) (string, error) {
+		replayProbe := smartDNSPerClientReplayProbe(
+			data,
+			contract,
+			readSmartDNSHostIngressAttestation,
+			func() (smartDNSIngressObservation, error) {
+				return collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+			},
+			smartDNSPerClientRuntimeHealthy,
+		)
+		return writeSmartDNSConfigLockedWithValidatorAndReplayProbe(data, cleanupBackup, validator, replayProbe)
+	}
+	return applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig, updateSmartDNS, centralURL, false, mihomoYAML, true, apply, func() error {
+		// Re-read the host proof after the candidate services are live and before
+		// the transaction commit marker. A timer/firewall/interface change during
+		// apply must trigger rollback rather than commit against stale readiness.
+		currentAttestation, err := readSmartDNSHostIngressAttestation()
+		if err != nil {
+			return fmt.Errorf("per-client SmartDNS host ingress attestation expired during transaction: %w", err)
+		}
+		if err := validateSmartDNSHostIngressContract(contract, currentAttestation); err != nil {
+			return fmt.Errorf("per-client SmartDNS host ingress proof changed during transaction: %w", err)
+		}
+		currentObservation, err := collectSmartDNSIngressObservation(defaultSmartDNSIngressObservationDependencies())
+		if err != nil {
+			return fmt.Errorf("re-observe Agent ingress interfaces and addresses before commit: %w", err)
+		}
+		if err := validateSmartDNSHostIngressObservation(currentAttestation, currentObservation); err != nil {
+			return fmt.Errorf("Agent ingress address changed during transaction: %w", err)
+		}
+		if !waitForSmartDNSPerClientHealthy(smartDNSConfig, currentAttestation, 5*time.Second) {
+			return fmt.Errorf("per-client SmartDNS domestic DNS probe or exact UDP/TCP ingress listeners are not healthy")
+		}
+		return nil
+	})
+}
+
+func applyAgentConfigTransactionWithSmartDNSApply(mihomoYAML, smartDNSConfig []byte, updateSmartDNS bool, centralURL string, verifyFallbackDNS bool, controllerPayload []byte, skipSmartDNSHealth bool, applySmartDNS func([]byte, bool) (string, error), postApplyCheck func() error) error {
+	if applySmartDNS == nil {
+		return fmt.Errorf("SmartDNS transaction apply function is unavailable")
+	}
 	smartDNSConfigMu.Lock()
 	defer smartDNSConfigMu.Unlock()
 	mihomoConfigApplyMu.Lock()
@@ -265,11 +388,39 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 		restored, restoreErr := restoreSmartDNSConfigVerified(smartPath, oldSmartDNS, hadSmartDNS)
 		if !restored {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("恢复 SmartDNS 配置失败: %w", restoreErr))
-		} else if !skipSmartDNSHealth && smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
-			if err := transactionRestartSmartDNS(); err != nil {
-				rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
-			} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
-				rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
+		} else if smartDNSFeatureSupported() && smartDNSRuntimeEnabled() {
+			if skipSmartDNSHealth && updateSmartDNS {
+				// Per-client transactions skip the shared-mode candidate health
+				// probe because their post-apply check is contract-specific. That
+				// must not skip rollback recovery: the old file has been restored,
+				// so the daemon must be restarted onto those exact bytes.
+				if !hadSmartDNS {
+					if err := transactionStopSmartDNS(); err != nil {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("停止无旧配置的 SmartDNS 候选进程失败: %w", err))
+					} else if !transactionWaitSmartDNSStopped(5 * time.Second) {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后 SmartDNS 候选进程在 5 秒内仍未退出"))
+					}
+				} else if err := transactionRestartSmartDNS(); err != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
+				} else if hasPerClientSmartDNSDirectives(oldSmartDNS) {
+					attestation, attestationErr := transactionReadSmartDNSHostIngressAttestation()
+					if attestationErr != nil {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("读取回滚后的 per-client ingress 证明失败: %w", attestationErr))
+					} else if !transactionWaitSmartDNSPerClientHealthy(oldSmartDNS, attestation, 5*time.Second) {
+						rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 per-client SmartDNS 未通过 CIDR/UDP/TCP 健康检查"))
+					}
+				} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的共享 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
+				}
+			} else if !skipSmartDNSHealth {
+				// Preserve the existing shared-mode rollback behavior. A
+				// fallback-only transaction (updateSmartDNS=false) does not
+				// restart or probe the resolver it intentionally leaves running.
+				if err := transactionRestartSmartDNS(); err != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("重启回滚后的 SmartDNS 失败: %w", err))
+				} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("回滚后的 SmartDNS 未通过 UDP/TCP DNS 健康检查"))
+				}
 			}
 		}
 		if err := transactionReloadMihomo(); err != nil {
@@ -298,13 +449,18 @@ func applyAgentConfigTransactionWithControllerPayload(mihomoYAML, smartDNSConfig
 	}
 
 	if updateSmartDNS {
-		if _, err := transactionApplySmartDNS(smartDNSConfig, false); err != nil {
+		if _, err := applySmartDNS(smartDNSConfig, false); err != nil {
 			return rollback(fmt.Errorf("应用 SmartDNS 配置失败: %w", err))
 		}
 	}
 	if !skipSmartDNSHealth && smartDNSFeatureSupported() && (hadSmartDNS || updateSmartDNS) && smartDNSRuntimeEnabled() {
 		if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 			return rollback(fmt.Errorf("SmartDNS 联合事务 UDP/TCP DNS 健康检查失败"))
+		}
+	}
+	if postApplyCheck != nil {
+		if err := postApplyCheck(); err != nil {
+			return rollback(fmt.Errorf("SmartDNS ingress UDP/TCP A/AAAA 健康检查失败: %w", err))
 		}
 	}
 	if err := transactionWriteControllerConfig(controllerPayload); err != nil {
@@ -422,6 +578,20 @@ var smartDNSRuntimeTransitionMu sync.Mutex
 // begins using it. Disabling commits the fallback Mihomo config before stopping
 // the daemon, and the marker survives container restarts.
 func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string) error {
+	return applyAgentSmartDNSEnabledWithValidator(enabled, mihomoYAML, smartDNSConfig, centralURL, validateSmartDNSConfig,
+		func(mihomo, smart []byte, central string) error { return applyAgentConfigTransaction(mihomo, smart, true, central) })
+}
+
+func applyAgentSmartDNSEnabledWithIngress(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string, contract smartDNSPerClientIngressContract) error {
+	validator := func(data []byte) error { return validateSmartDNSConfigWithContractBoundIngress(data, contract) }
+	return applyAgentSmartDNSEnabledWithValidator(enabled, mihomoYAML, smartDNSConfig, centralURL, validator,
+		func(mihomo, smart []byte, central string) error { return applyAgentConfigTransactionWithIngress(mihomo, smart, true, central, contract) })
+}
+
+func applyAgentSmartDNSEnabledWithValidator(enabled bool, mihomoYAML, smartDNSConfig []byte, centralURL string, validator func([]byte) error, applyTransaction func([]byte, []byte, string) error) error {
+	if validator == nil || applyTransaction == nil {
+		return fmt.Errorf("SmartDNS enable validator or transaction is unavailable")
+	}
 	smartDNSRuntimeTransitionMu.Lock()
 	defer smartDNSRuntimeTransitionMu.Unlock()
 
@@ -443,7 +613,7 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 				return fmt.Errorf("启用 SmartDNS 前读取现有配置失败: %w", err)
 			}
 		}
-		if err := validateSmartDNSConfig(smartDNSConfig); err != nil {
+		if err := validator(smartDNSConfig); err != nil {
 			return fmt.Errorf("启用 SmartDNS 的配置未通过安全校验: %w", err)
 		}
 		if !smartDNSConfigHasDomesticListener(smartDNSConfig) {
@@ -454,14 +624,18 @@ func applyAgentSmartDNSEnabled(enabled bool, mihomoYAML, smartDNSConfig []byte, 
 		if err := ensureSmartDNSServiceStarted(wasEnabled); err != nil {
 			return err
 		}
-		if !waitForSmartDNSHealthy(5 * time.Second) {
-			healthErr := fmt.Errorf("SmartDNS 当前未通过 UDP/TCP DNS 健康检查，未切换 Mihomo")
+		healthy := waitForSmartDNSHealthy(5 * time.Second)
+		if hasPerClientSmartDNSDirectives(smartDNSConfig) {
+			healthy = waitForSmartDNSProcess(5 * time.Second)
+		}
+		if !healthy {
+			healthErr := fmt.Errorf("SmartDNS 当前未达到目标运行模式的健康条件，未切换 Mihomo")
 			if !wasEnabled {
 				return rollbackFailedSmartDNSEnable(healthErr, persistSmartDNSDisabled, smartDNSServiceStop)
 			}
 			return healthErr
 		}
-		if err := applyAgentConfigTransaction(mihomoYAML, smartDNSConfig, true, centralURL); err != nil {
+		if err := applyTransaction(mihomoYAML, smartDNSConfig, centralURL); err != nil {
 			transactionErr := fmt.Errorf("启用 SmartDNS 的联合配置事务失败: %w", err)
 			if !wasEnabled {
 				return rollbackFailedSmartDNSEnable(transactionErr, persistSmartDNSDisabled, smartDNSServiceStop)
