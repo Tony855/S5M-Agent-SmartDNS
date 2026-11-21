@@ -400,6 +400,33 @@ def build_nft_transaction(table_exists: bool, rules: str) -> str:
     prefix = f"delete table inet {TABLE}\n" if table_exists else ""
     return prefix + rules
 
+def table_is_owned_by_controller(output: str) -> bool:
+    """Accept ownership only from the nft table-level comment.
+
+    A substring search can mistake a rule comment inside an unrelated table
+    for the ownership marker and then delete that entire table during apply or
+    remove. nft list renders the table comment immediately after the table
+    header (or on the header line); no chain/rule comment is ownership proof.
+    """
+    if not isinstance(output, str):
+        return False
+    lines = []
+    for raw_line in output.splitlines():
+        value = re.sub(r"\\s+# handle [0-9]+$", "", raw_line.strip()).strip()
+        if value:
+            lines.append(value)
+    header = f"table inet {TABLE} {{"
+    marker = 'comment "managed-by:s5m-agent-ingress-v1"'
+    if not lines:
+        return False
+    first = lines[0]
+    if first == header:
+        return len(lines) > 1 and lines[1] in (marker, marker + ";")
+    if first.startswith(header + " "):
+        return first[len(header):].strip().rstrip(";") == marker
+    return False
+
+
 def live_nft_table_matches(cfg: dict, output: str) -> bool:
     """Attest the entire owned table, not just rules that look like our allowlist.
 
@@ -663,7 +690,7 @@ def main(argv=None) -> int:
                 invalidate_attestation(a.attestation)
                 exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
                 if exists.returncode == 0:
-                    if "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
+                    if not table_is_owned_by_controller(exists.stdout):
                         raise ConfigError("refusing to remove an nftables table not owned by this controller")
                     removed = subprocess.run(["nft", "delete", "table", "inet", TABLE], text=True, capture_output=True)
                     if removed.returncode: raise ConfigError(f"nft table removal failed: {removed.stderr.strip()}")
@@ -704,7 +731,7 @@ def main(argv=None) -> int:
             if iface.returncode or not interface_state_matches(cfg, iface.stdout):
                 raise ConfigError(f"ingress interface is down or lacks a global address for every configured client family: {cfg['interface']}")
             exists = subprocess.run(["nft", "list", "table", "inet", TABLE], text=True, capture_output=True)
-            if exists.returncode == 0 and "managed-by:s5m-agent-ingress-v1" not in exists.stdout:
+            if exists.returncode == 0 and not table_is_owned_by_controller(exists.stdout):
                 raise ConfigError("refusing to replace an nftables table not owned by this controller")
             transaction = build_nft_transaction(exists.returncode == 0, rules)
             check = subprocess.run(["nft", "-c", "-f", "-"], input=transaction, text=True, capture_output=True)
