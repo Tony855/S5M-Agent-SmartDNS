@@ -68,6 +68,29 @@ print(json.dumps(sorted(addresses), separators=(",", ":")))
 '
 }
 HOST_INTERFACE_ADDRESSES=$(capture_stable_host_addresses) || { echo "ERROR: cannot snapshot stable global addresses on $LAN_IF" >&2; exit 1; }
+capture_host_link_identity() {
+  ip -j addr show dev "$LAN_IF" | python3 -c '
+import json, re, sys
+records = json.load(sys.stdin)
+if not isinstance(records, list) or len(records) != 1:
+    raise SystemExit("cannot uniquely inspect the trusted host interface")
+record = records[0]
+if type(record.get("ifindex")) is not int or record["ifindex"] <= 0:
+    raise SystemExit("trusted host interface ifindex is missing or invalid")
+flags = record.get("flags", [])
+if not isinstance(flags, list) or "UP" not in flags or "LOWER_UP" not in flags:
+    raise SystemExit("trusted host interface must be UP and LOWER_UP during physical capture")
+mac = record.get("address")
+if not isinstance(mac, str) or mac != mac.lower() or not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+    raise SystemExit("trusted host interface must expose a canonical six-octet Ethernet MAC")
+octets = bytes(int(part, 16) for part in mac.split(":"))
+if octets[0] & 1 or octets in (b"\x00" * 6, b"\xff" * 6):
+    raise SystemExit("trusted host interface MAC must be unicast and nonzero")
+print(f"{record['ifindex']}|{mac}")
+'
+}
+HOST_INTERFACE_IDENTITY=$(capture_host_link_identity) || { echo "ERROR: cannot snapshot physical link identity on $LAN_IF" >&2; exit 1; }
+IFS='|' read -r HOST_INTERFACE_IFINDEX HOST_INTERFACE_MAC <<<"$HOST_INTERFACE_IDENTITY"
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR=$(mktemp -d -m 0700 "/var/tmp/s5m-dns-ingress-$(date +%Y%m%d-%H%M%S)-XXXXXX")
@@ -112,8 +135,10 @@ CURRENT_CONTAINER_IDENTITY=$(docker inspect -f '{{.Id}}|{{.State.Pid}}|{{.State.
 [[ "$CURRENT_CONTAINER_IDENTITY" == "$CONTAINER_IDENTITY" ]] || { echo "ERROR: Agent container restarted during capture; discard captures and retry" >&2; exit 1; }
 HOST_INTERFACE_ADDRESSES_END=$(capture_stable_host_addresses) || { echo "ERROR: cannot recheck stable global addresses on $LAN_IF" >&2; exit 1; }
 [[ "$HOST_INTERFACE_ADDRESSES" == "$HOST_INTERFACE_ADDRESSES_END" ]] || { echo "ERROR: trusted host interface addresses changed during capture; discard evidence and recapture" >&2; exit 1; }
-printf '{"version":3,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"container_started_at":"%s","host_interface":"%s","host_interface_addresses":%s,"started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
-  "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$CONTAINER_STARTED_AT" "$LAN_IF" "$HOST_INTERFACE_ADDRESSES" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
+HOST_INTERFACE_IDENTITY_END=$(capture_host_link_identity) || { echo "ERROR: cannot recheck physical link identity on $LAN_IF" >&2; exit 1; }
+[[ "$HOST_INTERFACE_IDENTITY" == "$HOST_INTERFACE_IDENTITY_END" ]] || { echo "ERROR: trusted host interface ifindex/MAC changed during capture; discard evidence and recapture" >&2; exit 1; }
+printf '{"version":4,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"container_started_at":"%s","host_interface":"%s","host_interface_addresses":%s,"host_interface_ifindex":%s,"host_interface_mac":"%s","started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container-pcap":"container-ingress.pcap"}\n' \
+  "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$CONTAINER_STARTED_AT" "$LAN_IF" "$HOST_INTERFACE_ADDRESSES" "$HOST_INTERFACE_IFINDEX" "$HOST_INTERFACE_MAC" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
 chmod 0600 "$OUT_DIR/capture-manifest.json.tmp"
 mv "$OUT_DIR/capture-manifest.json.tmp" "$OUT_DIR/capture-manifest.json"
 tcpdump -nn -tttt -r "$HOST_PCAP" >"$HOST_LOG" 2>&1 || true

@@ -38,12 +38,12 @@ host controller 的职责是：
 3. 对每个配置的 client CIDR，仅允许从指定物理接口进入、目标为精确 ingress IP、协议为 UDP/TCP、目标端口为 6055 的流量；对同一 ingress IP 的其他来源/接口/端口流量执行 drop；
 4. read-back 比较完整 owned table，拒绝额外 chain、set、object 或任何未识别规则；
 5. 仅当 systemd timer 的 is-enabled 输出精确为 enabled 且 timer active 时，才报告持久化 firewall readiness；
-6. 读取 host 专属 root-only HMAC key 和物理验收 evidence，核对 evidence v3 签名、配置 SHA256、CIDR 覆盖、capture 时间窗、当前 Agent immutable container ID、运行时 PID、Docker State.StartedAt 和 routed Docker network ID；
+6. 读取 host 专属 root-only HMAC key 和物理验收 evidence，核对 evidence v4 签名、宿主机接口 ifindex/MAC、配置 SHA256、CIDR 覆盖、capture 时间窗、当前 Agent immutable container ID、运行时 PID、Docker State.StartedAt 和 routed Docker network ID；
 7. 每 30 秒刷新 attestation；物理 evidence 最长有效 7 天，配置、容器、网络或 endpoint 身份变化会使旧 evidence 失效。
 
 firewall_ready 表示 live nftables allowlist 已精确应用；firewall_persistent 表示 systemd timer 会持久刷新。source_ip_preserved、udp_ready 和 tcp_ready 只有在真实 LAN 客户端的 UDP 与 TCP 数据包同时出现在宿主机物理接口和 Agent network namespace，且两侧源/目的地址与端口完全一致后才可为 true。单机 Docker namespace lab、宿主机本地探测、期望配置、socket 存在或手工设置布尔值都不能生成物理证明。
 
-物理 evidence v3 由 scripts/lab/smartdns-dns-ingress/physical-ingress-verify.py 根据双端 pcap、capture manifest v3 和实际客户端 probe JSONL 生成；签名同时绑定 Agent container ID、PID 与 Docker State.StartedAt。Agent 容器每次重启都会使旧证明失效，即使 Docker container ID、network ID 和 ingress IP 保持不变，也必须重新抓包验收。证据使用该主机安装时创建的 evidence.key 签名。不得跨主机复制 key/evidence，不得手工编辑 evidence JSON。
+物理 evidence v4 由 scripts/lab/smartdns-dns-ingress/physical-ingress-verify.py 根据双端 pcap、capture manifest v4 和实际客户端 probe JSONL 生成；签名同时绑定宿主机物理接口 ifindex/MAC、Agent container ID、PID 与 Docker State.StartedAt。接口 ifindex、MAC 或稳定全局地址变化后必须重新抓包验收。Agent 容器每次重启都会使旧证明失效，即使 Docker container ID、network ID 和 ingress IP 保持不变，也必须重新抓包验收。证据使用该主机安装时创建的 evidence.key 签名。不得跨主机复制 key/evidence，不得手工编辑 evidence JSON。
 
 ## Routed Docker ingress 生命周期
 
@@ -63,7 +63,7 @@ network-lifecycle.py 是独立的 root-only helper，与 nftables controller 共
 
 ## Agent 与 Master 的二次验证
 
-Agent 不把 Master 合同中的 Ready=true 当成证据。每次读取 host attestation 时，除 root ownership、文件类型/权限和 90 秒新鲜度外，还会解析容器 PID 1 的 `/proc/1/stat` starttime 与系统 `/proc/stat` btime，并要求 attestation 文件 mtime 不早于当前容器 PID namespace 的启动时刻。因此容器重启后，旧 attestation 会在 Agent 读取阶段立即被拒绝，不必等待 30 秒 host timer；只有 host controller 在当前容器实例启动后重新 reconcile，且重新验证物理 evidence v3、CIDR、防火墙和 Docker runtime identity 后，Agent 才能继续。每次 per-client 联合配置事务在任何文件/服务 mutation 前，重新读取 root-owned 新鲜 host attestation，要求 source-IP、firewall、持久化、UDP/TCP 物理证明为真，并将 ingress IP、CIDR 集合与 Master contract 精确比较；随后独立枚举 Agent namespace 的活动非 loopback 接口。候选配置启动后、写入事务 committed marker 前再次读取 attestation 和 interface state；若期间 proof 过期或地址消失，事务必须回滚。
+Agent 不把 Master 合同中的 Ready=true 当成证据。每次读取 host attestation 时，除 root ownership、文件类型/权限和 90 秒新鲜度外，还会解析容器 PID 1 的 `/proc/1/stat` starttime 与系统 `/proc/stat` btime，并要求 attestation 文件 mtime 不早于当前容器 PID namespace 的启动时刻。因此容器重启后，旧 attestation 会在 Agent 读取阶段立即被拒绝，不必等待 30 秒 host timer；只有 host controller 在当前容器实例启动后重新 reconcile，且重新验证物理 evidence v4、宿主机接口身份、CIDR、防火墙和 Docker runtime identity 后，Agent 才能继续。每次 per-client 联合配置事务在任何文件/服务 mutation 前，重新读取 root-owned 新鲜 host attestation，要求 source-IP、firewall、持久化、UDP/TCP 物理证明为真，并将 ingress IP、CIDR 集合与 Master contract 精确比较；随后独立枚举 Agent namespace 的活动非 loopback 接口。候选配置启动后、写入事务 committed marker 前再次读取 attestation 和 interface state；若期间 proof 过期或地址消失，事务必须回滚。
 
 Agent 还会检查 SmartDNS 6055 UDP/TCP socket inode 确实由同一个 SmartDNS PID 持有，并只允许绑定合同中的精确 ingress IP，不允许 wildcard。s6 service 在启动前验证持久化 per-client 配置，并运行期间定期复查；attestation 过期或地址丢失时停止 SmartDNS child process。shared-mode 使用原有 validator/runtime，不因 per-client 功能放宽全局校验。
 

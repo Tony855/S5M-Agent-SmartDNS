@@ -16,6 +16,7 @@ EVIDENCE_KEY = Path(os.environ.get("S5M_INGRESS_EVIDENCE_KEY", "/etc/s5m-agent-i
 LOCK = Path(os.environ.get("S5M_INGRESS_LOCK", "/run/s5m-agent-ingress/controller.lock"))
 TABLE = "s5m_agent_ingress"
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+MAC_RE = re.compile(r"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 class ConfigError(ValueError): pass
 
@@ -50,6 +51,17 @@ def _address(value: object, field: str):
         raise ConfigError(f"{field} must be a unicast non-link-local address")
     if str(ip) != value: raise ConfigError(f"{field} must use canonical address notation")
     return ip
+
+
+def validate_ethernet_address(value: object, field: str = "interface MAC") -> str:
+    """Accept only a canonical, unicast Ethernet address for physical-link identity."""
+    if not isinstance(value, str) or not MAC_RE.fullmatch(value):
+        raise ConfigError(f"{field} must be a canonical lowercase six-octet MAC address")
+    octets = bytes(int(part, 16) for part in value.split(":"))
+    if octets[0] & 1 or octets == b"\x00" * 6 or octets == b"\xff" * 6:
+        raise ConfigError(f"{field} must be a unicast, nonzero Ethernet address")
+    return value
+
 
 def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
     raw = _secure_regular(path, require_root=require_root)
@@ -113,7 +125,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         "version", "verified_at", "config_sha256", "client_cidrs", "ipv4_address",
         "ipv6_address", "coverage", "verified_client_sources", "source_ip_preserved",
         "udp_ready", "tcp_ready", "host_pcap_sha256", "container_pcap_sha256",
-        "probe_results_sha256", "capture_manifest_sha256", "host_interface_addresses", "container", "container_id", "container_pid", "container_started_at", "network", "network_id", "evidence_hmac_sha256",
+        "probe_results_sha256", "capture_manifest_sha256", "host_interface_addresses", "host_interface_ifindex", "host_interface_mac", "container", "container_id", "container_pid", "container_started_at", "network", "network_id", "evidence_hmac_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
         return False
@@ -136,7 +148,7 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
         return False
     if not isinstance(evidence["network_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", evidence["network_id"]):
         return False
-    if type(evidence["version"]) is not int or evidence["version"] != 3:
+    if type(evidence["version"]) is not int or evidence["version"] != 4:
         return False
     if type(evidence["verified_at"]) is not int:
         return False
@@ -155,6 +167,12 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     if not isinstance(host_addresses, list) or not host_addresses or any(not isinstance(value, str) for value in host_addresses):
         return False
     if host_addresses != sorted(set(host_addresses)):
+        return False
+    if type(evidence["host_interface_ifindex"]) is not int or evidence["host_interface_ifindex"] <= 0:
+        return False
+    try:
+        validate_ethernet_address(evidence["host_interface_mac"], "physical evidence host interface MAC")
+    except ConfigError:
         return False
     try:
         parsed_host_addresses = [ipaddress.ip_address(value) for value in host_addresses if isinstance(value, str)]
@@ -193,7 +211,13 @@ def physical_evidence_payload_valid(evidence: object, config_raw: bytes, cfg: di
     return True
 
 
-def interface_state_matches(cfg: dict, output: str, expected_addresses: list[str] | None = None) -> bool:
+def interface_state_matches(
+    cfg: dict,
+    output: str,
+    expected_addresses: list[str] | None = None,
+    expected_ifindex: int | None = None,
+    expected_mac: str | None = None,
+) -> bool:
     try:
         records = json.loads(output)
     except (TypeError, json.JSONDecodeError):
@@ -201,6 +225,21 @@ def interface_state_matches(cfg: dict, output: str, expected_addresses: list[str
     if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
         return False
     record = records[0]
+    if expected_ifindex is not None and (
+        type(expected_ifindex) is not int
+        or expected_ifindex <= 0
+        or type(record.get("ifindex")) is not int
+        or record.get("ifindex") != expected_ifindex
+    ):
+        return False
+    if expected_mac is not None:
+        try:
+            expected_mac = validate_ethernet_address(expected_mac, "expected host interface MAC")
+            observed_mac = validate_ethernet_address(record.get("address"), "observed host interface MAC")
+        except ConfigError:
+            return False
+        if observed_mac != expected_mac:
+            return False
     if (
         record.get("ifname") != cfg["interface"]
         or not isinstance(record.get("flags"), list)
@@ -264,7 +303,13 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
         )
     except (OSError, subprocess.CalledProcessError):
         return False
-    if not interface_state_matches(cfg, interface.stdout, evidence["host_interface_addresses"]):
+    if not interface_state_matches(
+        cfg,
+        interface.stdout,
+        evidence["host_interface_addresses"],
+        evidence["host_interface_ifindex"],
+        evidence["host_interface_mac"],
+    ):
         return False
     # A signed packet capture is tied to the Docker container that was actually
     # observed. Do not keep source-preservation readiness after redeploy has

@@ -18,7 +18,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "host-ingress"))
-from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature, physical_evidence_network_matches_current, interface_state_matches
+from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature, physical_evidence_network_matches_current, interface_state_matches, validate_ethernet_address
 
 
 def secure_read(path, require_root=True, max_bytes=2 * 1024 * 1024 * 1024):
@@ -254,12 +254,18 @@ def validate_capture_host_interface(manifest: dict, cfg: dict) -> None:
         raise ValueError("capture manifest stable host-interface address snapshot is invalid")
     if addresses != sorted(set(addresses)):
         raise ValueError("capture manifest stable host-interface address snapshot is not canonical")
+    if type(manifest.get("host_interface_ifindex")) is not int or manifest["host_interface_ifindex"] <= 0:
+        raise ValueError("capture manifest host-interface ifindex is invalid")
+    try:
+        validate_ethernet_address(manifest.get("host_interface_mac"), "capture manifest host-interface MAC")
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     try:
         result = subprocess.run(["ip", "-j", "addr", "show", "dev", cfg["interface"]], check=True, capture_output=True, text=True)
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise ValueError(f"cannot inspect current trusted host interface addresses: {exc}") from exc
-    if not interface_state_matches(cfg, result.stdout, addresses):
-        raise ValueError("trusted host interface stable global addresses changed since packet capture; recapture physical ingress")
+        raise ValueError(f"cannot inspect current trusted host interface identity: {exc}") from exc
+    if not interface_state_matches(cfg, result.stdout, addresses, manifest["host_interface_ifindex"], manifest["host_interface_mac"]):
+        raise ValueError("trusted host interface identity or stable global addresses changed since packet capture; recapture physical ingress")
 
 
 def validate_capture_container(manifest: dict, cfg: dict) -> None:
@@ -318,11 +324,17 @@ def main():
     container_pcap_raw = secure_read(args.container_pcap, require_root=True)
     probe_results_raw = secure_read(args.probe_results, require_root=False, max_bytes=8 * 1024 * 1024)
     manifest = json.loads(manifest_raw)
-    manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "container_started_at", "host_interface", "host_interface_addresses", "started_at", "finished_at", "host_pcap", "container_pcap"}
-    if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 3:
+    manifest_keys = {"version", "container", "container_id", "network", "network_id", "container_pid", "container_started_at", "host_interface", "host_interface_addresses", "host_interface_ifindex", "host_interface_mac", "started_at", "finished_at", "host_pcap", "container_pcap"}
+    if not isinstance(manifest, dict) or set(manifest) != manifest_keys or type(manifest.get("version")) is not int or manifest["version"] != 4:
         raise ValueError("capture manifest schema is invalid")
     if manifest["host_interface"] == "" or type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or type(manifest["container_pid"]) is not int or manifest["container_pid"] <= 0:
         raise ValueError("capture manifest fields are invalid")
+    if type(manifest["host_interface_ifindex"]) is not int or manifest["host_interface_ifindex"] <= 0:
+        raise ValueError("capture manifest host-interface ifindex is invalid")
+    try:
+        validate_ethernet_address(manifest["host_interface_mac"], "capture manifest host-interface MAC")
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     if not isinstance(manifest["container_started_at"], str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?Z", manifest["container_started_at"]):
         raise ValueError("capture manifest container start timestamp is invalid")
     if manifest["host_pcap"] != args.host_pcap.name or manifest["container_pcap"] != args.container_pcap.name:
@@ -400,7 +412,7 @@ def main():
     verified_sources = sorted({source for sources in complete_sources.values() for source in sources})
     now = int(time.time())
     evidence = {
-        "version": 3,
+        "version": 4,
         "verified_at": now,
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
         "client_cidrs": sorted(str(net) for net in cfg["networks"]),
@@ -409,6 +421,8 @@ def main():
         "coverage": [{"cidr": cidr, "transports": ["tcp", "udp"]} for cidr in sorted(coverage)],
         "verified_client_sources": verified_sources,
         "host_interface_addresses": manifest["host_interface_addresses"],
+        "host_interface_ifindex": manifest["host_interface_ifindex"],
+        "host_interface_mac": manifest["host_interface_mac"],
         "source_ip_preserved": True,
         "udp_ready": True,
         "tcp_ready": True,

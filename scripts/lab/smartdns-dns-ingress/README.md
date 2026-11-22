@@ -45,7 +45,7 @@ before enabling SmartDNS per-client mode.
    Replace eth0 with the physical LAN interface that receives client traffic.
    The helper captures port 6055 on the physical interface and inside the Agent
    namespace. Its root-owned capture manifest records container identity,
-   interface, stable global host-interface addresses, container PID plus Docker StartedAt runtime identity and time window (capture manifest v3). The
+   interface, stable global host-interface addresses, container PID plus Docker StartedAt runtime identity and time window (capture manifest v4). The
    capture helper rejects address changes during the capture; the verifier
    compares the exact stable address set with the live NIC before signing. A
    changed host next-hop address invalidates old physical evidence.
@@ -70,7 +70,7 @@ before enabling SmartDNS per-client mode.
    Every configured IPv4 and IPv6 CIDR must have both UDP and TCP tuples in both pcaps,
    with identical source/destination addresses and ports. The verifier writes
    physical-evidence.json atomically, root-owned mode 0600, bound to the exact
-   version-3 evidence binds the host config hash, stable host-interface address set, immutable container ID, runtime PID and Docker StartedAt, plus the routed
+   version-4 evidence binds the host config hash, stable host-interface address set, host interface ifindex/MAC, immutable container ID, runtime PID and Docker StartedAt, plus the routed
    network ID. Evidence expires after seven days and is invalidated by
    config/host-address/container/network changes. Temporary, tentative,
    deprecated and DAD-failed NIC addresses are excluded from the route/evidence

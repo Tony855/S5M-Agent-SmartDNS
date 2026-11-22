@@ -74,13 +74,14 @@ class ControllerTests(unittest.TestCase):
         }
         raw = b'{"version":1,"interface":"eth1"}\n'
         evidence = {
-            "version": 3, "verified_at": 1000,
+            "version": 4, "verified_at": 1000,
             "config_sha256": hashlib.sha256(raw).hexdigest(),
             "client_cidrs": ["192.168.50.0/24"],
             "ipv4_address": "172.31.10.2", "ipv6_address": None,
             "coverage": [{"cidr": "192.168.50.0/24", "transports": ["tcp", "udp"]}],
             "verified_client_sources": ["192.168.50.10"],
             "host_interface_addresses": ["192.168.1.2"],
+            "host_interface_ifindex": 7, "host_interface_mac": "02:00:00:00:00:01",
             "source_ip_preserved": True, "udp_ready": True, "tcp_ready": True,
             "host_pcap_sha256": "a" * 64, "container_pcap_sha256": "b" * 64,
             "probe_results_sha256": "c" * 64, "capture_manifest_sha256": "e" * 64,
@@ -103,6 +104,12 @@ class ControllerTests(unittest.TestCase):
         wrong = dict(evidence); wrong["config_sha256"] = "d" * 64
         wrong["evidence_hmac_sha256"] = mod.physical_evidence_signature(wrong, key)
         self.assertFalse(mod.physical_evidence_payload_valid(wrong, raw, cfg, now=1001, evidence_key=key))
+        invalid_ifindex = dict(evidence); invalid_ifindex["host_interface_ifindex"] = True
+        invalid_ifindex["evidence_hmac_sha256"] = mod.physical_evidence_signature(invalid_ifindex, key)
+        self.assertFalse(mod.physical_evidence_payload_valid(invalid_ifindex, raw, cfg, now=1001, evidence_key=key))
+        invalid_mac = dict(evidence); invalid_mac["host_interface_mac"] = "01:00:00:00:00:01"
+        invalid_mac["evidence_hmac_sha256"] = mod.physical_evidence_signature(invalid_mac, key)
+        self.assertFalse(mod.physical_evidence_payload_valid(invalid_mac, raw, cfg, now=1001, evidence_key=key))
         incomplete = dict(evidence); incomplete["udp_ready"] = False
         incomplete["evidence_hmac_sha256"] = mod.physical_evidence_signature(incomplete, key)
         self.assertFalse(mod.physical_evidence_payload_valid(incomplete, raw, cfg, now=1001, evidence_key=key))
@@ -341,7 +348,31 @@ class ControllerTests(unittest.TestCase):
                 snapshot[0]["addr_info"].append(duplicate)
                 self.assertFalse(mod.interface_state_matches(cfg, json.dumps(snapshot)))
 
-    def test_firewall_persistence_requires_permanent_timer_enablement(self):
+    def test_interface_attestation_binds_physical_link_identity(self):
+        self.write(self.valid())
+        cfg = mod.load_config(self.path, require_root=False)
+        snapshot = json.dumps([{
+            "ifname": "eth1", "ifindex": 7, "address": "02:00:00:00:00:01",
+            "flags": ["BROADCAST", "MULTICAST", "UP", "LOWER_UP"],
+            "addr_info": [
+                {"family": "inet", "local": "192.168.1.2", "scope": "global"},
+                {"family": "inet6", "local": "2001:db8:1::2", "scope": "global"},
+            ],
+        }])
+        self.assertTrue(mod.interface_state_matches(
+            cfg, snapshot, ["192.168.1.2", "2001:db8:1::2"], 7, "02:00:00:00:00:01"
+        ))
+        self.assertFalse(mod.interface_state_matches(
+            cfg, snapshot, ["192.168.1.2", "2001:db8:1::2"], 8, "02:00:00:00:00:01"
+        ))
+        self.assertFalse(mod.interface_state_matches(
+            cfg, snapshot, ["192.168.1.2", "2001:db8:1::2"], 7, "02:00:00:00:00:02"
+        ))
+        self.assertFalse(mod.interface_state_matches(
+            cfg, snapshot, ["192.168.1.2", "2001:db8:1::2"], 7, "01:00:00:00:00:01"
+        ))
+
+    def test_firewall_persistence_requires_permanent_timer_enablement):
         self.assertTrue(mod.systemd_unit_is_persistently_enabled("enabled\n", 0))
         for state in ("enabled-runtime", "static", "indirect", "generated", "transient",
                       "linked", "linked-runtime", "disabled", "masked", ""):

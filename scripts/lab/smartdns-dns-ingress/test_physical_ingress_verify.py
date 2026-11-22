@@ -129,9 +129,14 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         })
 
     def test_capture_requires_unchanged_stable_host_interface_addresses(self):
-        manifest = {"host_interface_addresses": ["192.168.1.2"]}
+        manifest = {
+            "host_interface_addresses": ["192.168.1.2"],
+            "host_interface_ifindex": 7,
+            "host_interface_mac": "02:00:00:00:00:01",
+        }
         cfg = {"interface": "eth1", "networks": [VERIFY.ipaddress.ip_network("192.168.50.0/24")]}
-        current = [{"ifname": "eth1", "flags": ["UP", "LOWER_UP"], "addr_info": [
+        current = [{"ifname": "eth1", "ifindex": 7, "address": "02:00:00:00:00:01",
+            "flags": ["UP", "LOWER_UP"], "addr_info": [
             {"family": "inet", "local": "192.168.1.2", "scope": "global"},
             {"family": "inet", "local": "192.168.1.3", "scope": "global", "flags": ["temporary"]},
         ]}]
@@ -139,7 +144,17 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
             VERIFY.validate_capture_host_interface(manifest, cfg)
         current[0]["addr_info"][0]["local"] = "192.168.1.9"
         with mock.patch.object(VERIFY.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(current))):
-            with self.assertRaisesRegex(ValueError, "changed since packet capture"):
+            with self.assertRaisesRegex(ValueError, "identity or stable global addresses changed"):
+                VERIFY.validate_capture_host_interface(manifest, cfg)
+        current[0]["addr_info"][0]["local"] = "192.168.1.2"
+        current[0]["address"] = "02:00:00:00:00:02"
+        with mock.patch.object(VERIFY.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(current))):
+            with self.assertRaisesRegex(ValueError, "identity or stable global addresses changed"):
+                VERIFY.validate_capture_host_interface(manifest, cfg)
+        current[0]["address"] = "02:00:00:00:00:01"
+        current[0]["ifindex"] = 8
+        with mock.patch.object(VERIFY.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(current))):
+            with self.assertRaisesRegex(ValueError, "identity or stable global addresses changed"):
                 VERIFY.validate_capture_host_interface(manifest, cfg)
 
     def test_capture_must_match_current_container_id_pid_and_ingress_ip(self):
