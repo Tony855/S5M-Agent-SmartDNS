@@ -373,6 +373,48 @@ def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network
     container = containers[0]
     if network.get("Id") != evidence.get("network_id") or network.get("Name") != evidence.get("network"):
         return False
+
+    # Docker's trusted_host_interfaces option routes the whole bridge subnet,
+    # not just the Agent endpoint. A second container attached after initial
+    # provisioning would therefore create another directly reachable endpoint
+    # outside this DNS-only source-CIDR firewall. Re-check exclusivity on every
+    # evidence refresh and bind the network's endpoint record to the exact
+    # container identity/address captured in the signed manifest.
+    container_id = evidence.get("container_id")
+    container_name = evidence.get("container")
+    endpoints = network.get("Containers")
+    if (
+        not isinstance(container_id, str)
+        or not isinstance(container_name, str)
+        or not isinstance(endpoints, dict)
+        or set(endpoints) != {container_id}
+    ):
+        return False
+    endpoint = endpoints.get(container_id)
+    if (
+        not isinstance(endpoint, dict)
+        or str(endpoint.get("Name", "")).lstrip("/") != container_name
+    ):
+        return False
+    for family, field in ((4, "IPv4Address"), (6, "IPv6Address")):
+        expected_address = next(
+            (str(address) for address in cfg.get("addresses", []) if address.version == family),
+            None,
+        )
+        observed_address = endpoint.get(field, "")
+        if expected_address is None:
+            if observed_address not in ("", None):
+                return False
+            continue
+        if not isinstance(observed_address, str) or not observed_address:
+            return False
+        try:
+            parsed_endpoint = ipaddress.ip_interface(observed_address).ip
+        except ValueError:
+            return False
+        if parsed_endpoint.version != family or str(parsed_endpoint) != expected_address:
+            return False
+
     if network.get("Driver") != "bridge":
         return False
     labels = network.get("Labels")
