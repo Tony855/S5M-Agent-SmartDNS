@@ -371,6 +371,11 @@ def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network
         return False
     network = networks[0]
     container = containers[0]
+    if (
+        container.get("Id") != evidence.get("container_id")
+        or str(container.get("Name", "")).lstrip("/") != evidence.get("container")
+    ):
+        return False
     if network.get("Id") != evidence.get("network_id") or network.get("Name") != evidence.get("network"):
         return False
 
