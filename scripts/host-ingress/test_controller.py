@@ -157,10 +157,21 @@ class ControllerTests(unittest.TestCase):
                 "com.docker.network.bridge.trusted_host_interfaces": "eth1",
             },
             "IPAM": {"Config": [{"Subnet": "172.31.10.0/24", "Gateway": "172.31.10.1"}]},
+            "Containers": {
+                "a" * 64: {
+                    "Name": "s5m-agent",
+                    "IPv4Address": "172.31.10.2/24",
+                    "IPv6Address": "",
+                }
+            },
         }
-        container = {"NetworkSettings": {"Networks": {
-            "s5m-agent-ingress": {"NetworkID": "a" * 64, "IPAddress": "172.31.10.2", "GlobalIPv6Address": ""}
-        }}}
+        container = {
+            "Id": "a" * 64,
+            "Name": "/s5m-agent",
+            "NetworkSettings": {"Networks": {
+                "s5m-agent-ingress": {"NetworkID": "a" * 64, "IPAddress": "172.31.10.2", "GlobalIPv6Address": ""}
+            }},
+        }
         self.assertTrue(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([network]), json.dumps([container])))
         changed_id = dict(network); changed_id["Id"] = "b" * 64
         self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([changed_id]), json.dumps([container])))
@@ -177,6 +188,38 @@ class ControllerTests(unittest.TestCase):
         extra_same_family = json.loads(json.dumps(network))
         extra_same_family["IPAM"]["Config"].append({"Subnet": "172.32.10.0/24", "Gateway": "172.32.10.1"})
         self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([extra_same_family]), json.dumps([container])))
+
+        # Routed bridge mode exposes every attached endpoint through the
+        # trusted host interface. A rogue sidecar must invalidate the proof,
+        # even when the Agent endpoint itself is unchanged.
+        extra_endpoint = json.loads(json.dumps(network))
+        extra_endpoint["Containers"]["b" * 64] = {
+            "Name": "unexpected-sidecar",
+            "IPv4Address": "172.31.10.3/24",
+            "IPv6Address": "",
+        }
+        self.assertFalse(mod.physical_evidence_network_matches_current(
+            evidence, cfg, json.dumps([extra_endpoint]), json.dumps([container])
+        ))
+        wrong_endpoint_name = json.loads(json.dumps(network))
+        wrong_endpoint_name["Containers"]["a" * 64]["Name"] = "renamed-agent"
+        self.assertFalse(mod.physical_evidence_network_matches_current(
+            evidence, cfg, json.dumps([wrong_endpoint_name]), json.dumps([container])
+        ))
+        wrong_endpoint_address = json.loads(json.dumps(network))
+        wrong_endpoint_address["Containers"]["a" * 64]["IPv4Address"] = "172.31.10.99/24"
+        self.assertFalse(mod.physical_evidence_network_matches_current(
+            evidence, cfg, json.dumps([wrong_endpoint_address]), json.dumps([container])
+        ))
+        missing_endpoint = json.loads(json.dumps(network))
+        missing_endpoint["Containers"] = {}
+        self.assertFalse(mod.physical_evidence_network_matches_current(
+            evidence, cfg, json.dumps([missing_endpoint]), json.dumps([container])
+        ))
+        replaced_container = dict(container, Id="b" * 64)
+        self.assertFalse(mod.physical_evidence_network_matches_current(
+            evidence, cfg, json.dumps([network]), json.dumps([replaced_container])
+        ))
     def test_systemd_preserves_attestation_directory_after_oneshot_exit(self):
         unit = pathlib.Path(__file__).with_name("s5m-agent-ingress.service").read_text()
         self.assertIn("RuntimeDirectory=s5m-agent-ingress", unit)
