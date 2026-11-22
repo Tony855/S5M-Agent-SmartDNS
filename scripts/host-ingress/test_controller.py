@@ -147,7 +147,10 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, missing_runtime_identity))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, "not-json"))
     def test_physical_evidence_is_bound_to_current_routed_docker_network(self):
-        evidence = {"network": "s5m-agent-ingress", "network_id": "a" * 64}
+        evidence = {
+            "network": "s5m-agent-ingress", "network_id": "a" * 64,
+            "container": "s5m-agent", "container_id": "a" * 64,
+        }
         cfg = {"interface": "eth1", "addresses": [ipaddress.ip_address("172.31.10.2")]}
         network = {
             "Id": "a" * 64, "Name": "s5m-agent-ingress", "Driver": "bridge",
