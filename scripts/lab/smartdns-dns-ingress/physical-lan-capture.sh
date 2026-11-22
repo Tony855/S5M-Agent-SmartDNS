@@ -137,7 +137,7 @@ HOST_INTERFACE_ADDRESSES_END=$(capture_stable_host_addresses) || { echo "ERROR: 
 [[ "$HOST_INTERFACE_ADDRESSES" == "$HOST_INTERFACE_ADDRESSES_END" ]] || { echo "ERROR: trusted host interface addresses changed during capture; discard evidence and recapture" >&2; exit 1; }
 HOST_INTERFACE_IDENTITY_END=$(capture_host_link_identity) || { echo "ERROR: cannot recheck physical link identity on $LAN_IF" >&2; exit 1; }
 [[ "$HOST_INTERFACE_IDENTITY" == "$HOST_INTERFACE_IDENTITY_END" ]] || { echo "ERROR: trusted host interface ifindex/MAC changed during capture; discard evidence and recapture" >&2; exit 1; }
-printf '{"version":4,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"container_started_at":"%s","host_interface":"%s","host_interface_addresses":%s,"host_interface_ifindex":%s,"host_interface_mac":"%s","started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container-pcap":"container-ingress.pcap"}\n' \
+printf '{"version":4,"container":"%s","container_id":"%s","network":"%s","network_id":"%s","container_pid":%s,"container_started_at":"%s","host_interface":"%s","host_interface_addresses":%s,"host_interface_ifindex":%s,"host_interface_mac":"%s","started_at":%s,"finished_at":%s,"host_pcap":"host-lan.pcap","container_pcap":"container-ingress.pcap"}\n' \
   "$CONTAINER" "$CONTAINER_ID" "$NETWORK" "$NETWORK_ID" "$PID" "$CONTAINER_STARTED_AT" "$LAN_IF" "$HOST_INTERFACE_ADDRESSES" "$HOST_INTERFACE_IFINDEX" "$HOST_INTERFACE_MAC" "$STARTED_AT" "$FINISHED_AT" >"$OUT_DIR/capture-manifest.json.tmp"
 chmod 0600 "$OUT_DIR/capture-manifest.json.tmp"
 mv "$OUT_DIR/capture-manifest.json.tmp" "$OUT_DIR/capture-manifest.json"

@@ -372,7 +372,7 @@ class ControllerTests(unittest.TestCase):
             cfg, snapshot, ["192.168.1.2", "2001:db8:1::2"], 7, "01:00:00:00:00:01"
         ))
 
-    def test_firewall_persistence_requires_permanent_timer_enablement):
+    def test_firewall_persistence_requires_permanent_timer_enablement(self):
         self.assertTrue(mod.systemd_unit_is_persistently_enabled("enabled\n", 0))
         for state in ("enabled-runtime", "static", "indirect", "generated", "transient",
                       "linked", "linked-runtime", "disabled", "masked", ""):
