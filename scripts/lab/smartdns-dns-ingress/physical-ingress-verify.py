@@ -18,7 +18,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "host-ingress"))
-from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature, physical_evidence_network_matches_current, interface_state_matches, validate_ethernet_address
+from controller import load_config, _secure_regular, EVIDENCE_KEY, read_evidence_key, physical_evidence_signature, physical_evidence_network_matches_current, physical_evidence_container_matches_current, interface_state_matches, validate_ethernet_address
 
 
 def secure_read(path, require_root=True, max_bytes=2 * 1024 * 1024 * 1024):
@@ -285,6 +285,8 @@ def validate_capture_container(manifest: dict, cfg: dict) -> None:
         or state.get("StartedAt") != manifest["container_started_at"]
     ):
         raise ValueError("Agent container restarted or stopped after capture; recapture physical ingress")
+    if not physical_evidence_container_matches_current(manifest, result.stdout):
+        raise ValueError("Agent host ingress attestation must be exposed through exactly one read-only bind mount with no nested overrides")
     observed=set()
     for endpoint in (item.get("NetworkSettings",{}).get("Networks") or {}).values():
         for field in ("IPAddress","GlobalIPv6Address"):

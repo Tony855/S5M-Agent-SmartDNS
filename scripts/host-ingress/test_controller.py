@@ -123,9 +123,13 @@ class ControllerTests(unittest.TestCase):
             "container": "s5m-agent", "container_id": "a" * 64,
             "container_pid": 123, "container_started_at": "2026-11-20T02:00:00.000000000Z",
         }
+        attestation_mount = [{
+            "Type": "bind", "Source": str(mod.ATTEST.parent),
+            "Destination": "/run/s5m-agent-ingress", "Mode": "ro", "RW": False,
+        }]
         current = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {
             "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:00:00.000000000Z",
-        }}])
+        }, "Mounts": attestation_mount}])
         replaced = json.dumps([{"Id": "b" * 64, "Name": "/s5m-agent", "State": {
             "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:00:00.000000000Z",
         }}])
@@ -146,6 +150,25 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, pid_reused))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, missing_runtime_identity))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, "not-json"))
+
+        writable_mount = json.loads(current)
+        writable_mount[0]["Mounts"][0]["RW"] = True
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(writable_mount)))
+        wrong_source = json.loads(current)
+        wrong_source[0]["Mounts"][0]["Source"] = "/tmp/attestation"
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(wrong_source)))
+        wrong_type = json.loads(current)
+        wrong_type[0]["Mounts"][0]["Type"] = "volume"
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(wrong_type)))
+        nested_writable = json.loads(current)
+        nested_writable[0]["Mounts"].append({
+            "Type": "bind", "Source": "/tmp/forged-ingress.json",
+            "Destination": "/run/s5m-agent-ingress/ingress.json", "RW": True,
+        })
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(nested_writable)))
+        duplicate_mount = json.loads(current)
+        duplicate_mount[0]["Mounts"].append(dict(duplicate_mount[0]["Mounts"][0]))
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(duplicate_mount)))
     def test_physical_evidence_is_bound_to_current_routed_docker_network(self):
         evidence = {
             "network": "s5m-agent-ingress", "network_id": "a" * 64,

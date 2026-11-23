@@ -333,6 +333,43 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
     return physical_evidence_network_matches_current(evidence, cfg, network.stdout, current.stdout)
 
 
+def physical_evidence_container_has_readonly_attestation_mount(current: dict) -> bool:
+    """Require the host attestation directory to be a single read-only bind mount.
+
+    The Agent container runs as root. File ownership/mode alone therefore do
+    not protect this host-authored JSON from a writable bind mount. Reject
+    nested mounts too, because one could shadow ingress.json with a writable
+    file even when the parent directory mount is read-only.
+    """
+    mounts = current.get("Mounts")
+    if not isinstance(mounts, list):
+        return False
+    expected_destination = "/run/s5m-agent-ingress"
+    expected_source = os.path.normpath(str(ATTEST.parent))
+    exact_mounts = []
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            return False
+        destination = mount.get("Destination")
+        if not isinstance(destination, str) or not destination.startswith("/"):
+            return False
+        normalized_destination = os.path.normpath(destination)
+        if normalized_destination == expected_destination:
+            exact_mounts.append(mount)
+        elif normalized_destination.startswith(expected_destination + os.sep):
+            return False
+    if len(exact_mounts) != 1:
+        return False
+    mount = exact_mounts[0]
+    source = mount.get("Source")
+    return (
+        mount.get("Type") == "bind"
+        and isinstance(source, str)
+        and os.path.normpath(source) == expected_source
+        and mount.get("RW") is False
+    )
+
+
 def physical_evidence_container_matches_current(evidence: dict, inspect_output: str) -> bool:
     try:
         containers = json.loads(inspect_output)
@@ -356,6 +393,7 @@ def physical_evidence_container_matches_current(evidence: dict, inspect_output: 
         and type(state.get("Pid")) is int
         and state.get("Pid") == expected_pid
         and state.get("StartedAt") == expected_started_at
+        and physical_evidence_container_has_readonly_attestation_mount(current)
     )
 
 

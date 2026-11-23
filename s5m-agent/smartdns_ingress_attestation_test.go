@@ -26,6 +26,13 @@ func writeHostIngressAttestationFixture(t *testing.T, path string, attestation s
 	if err := os.Chmod(path, mode); err != nil { t.Fatal(err) }
 }
 
+func allowReadOnlyAttestationMountForTest(t *testing.T) {
+	t.Helper()
+	previous := smartDNSAttestationMountReadOnly
+	smartDNSAttestationMountReadOnly = func(int) (bool, error) { return true, nil }
+	t.Cleanup(func() { smartDNSAttestationMountReadOnly = previous })
+}
+
 func TestParseSmartDNSContainerInitStartTime(t *testing.T) {
 	fields := make([]string, 20)
 	for i := range fields {
@@ -65,6 +72,7 @@ func TestValidateSmartDNSHostIngressFileFreshForContainer(t *testing.T) {
 }
 
 func TestReadSmartDNSHostIngressAttestationAcceptsFreshRootOwnedFile(t *testing.T) {
+	allowReadOnlyAttestationMountForTest(t)
 	path := filepath.Join(t.TempDir(), "ingress.json")
 	want := validHostIngressAttestationFixture()
 	writeHostIngressAttestationFixture(t, path, want, 0600)
@@ -76,6 +84,7 @@ func TestReadSmartDNSHostIngressAttestationAcceptsFreshRootOwnedFile(t *testing.
 }
 
 func TestReadSmartDNSHostIngressAttestationRejectsSymlinkAndWritableFile(t *testing.T) {
+	allowReadOnlyAttestationMountForTest(t)
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.json")
 	writeHostIngressAttestationFixture(t, target, validHostIngressAttestationFixture(), 0600)
@@ -88,6 +97,18 @@ func TestReadSmartDNSHostIngressAttestationRejectsSymlinkAndWritableFile(t *test
 	writeHostIngressAttestationFixture(t, writable, validHostIngressAttestationFixture(), 0666)
 	if _, err := readSmartDNSHostIngressAttestationFromPathWithOwner(writable, false); err == nil {
 		t.Fatal("group/world writable host attestation accepted")
+	}
+}
+
+func TestReadSmartDNSHostIngressAttestationRejectsWritableMount(t *testing.T) {
+	previous := smartDNSAttestationMountReadOnly
+	smartDNSAttestationMountReadOnly = func(int) (bool, error) { return false, nil }
+	t.Cleanup(func() { smartDNSAttestationMountReadOnly = previous })
+
+	path := filepath.Join(t.TempDir(), "ingress.json")
+	writeHostIngressAttestationFixture(t, path, validHostIngressAttestationFixture(), 0600)
+	if _, err := readSmartDNSHostIngressAttestationFromPathWithOwner(path, false); err == nil || !strings.Contains(err.Error(), "mounted read-only") {
+		t.Fatalf("writable host attestation mount was accepted: %v", err)
 	}
 }
 
@@ -106,6 +127,7 @@ func TestValidateSmartDNSHostIngressAttestationRejectsStaleAndOverlappingCIDRs(t
 
 
 func TestReadSmartDNSHostIngressAttestationEnforcesRootOwnership(t *testing.T) {
+	allowReadOnlyAttestationMountForTest(t)
 	path := filepath.Join(t.TempDir(), "ingress.json")
 	writeHostIngressAttestationFixture(t, path, validHostIngressAttestationFixture(), 0600)
 	_, err := readSmartDNSHostIngressAttestationFromPath(path)

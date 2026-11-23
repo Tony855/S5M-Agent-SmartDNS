@@ -20,6 +20,20 @@ var smartDNSHostIngressInterfacePattern = regexp.MustCompile("^[A-Za-z0-9_.:-]{1
 
 const smartDNSLinuxUserHz = 100
 
+// A root-owned 0600 file is not trustworthy when the Agent itself runs as
+// root and the Docker bind mount is writable. Inspect the opened descriptor's
+// mount flags so a deployment that omits :ro cannot turn host JSON booleans
+// into self-asserted readiness.
+func smartDNSAttestationFileSystemReadOnly(fd int) (bool, error) {
+	var filesystem syscall.Statfs_t
+	if err := syscall.Fstatfs(fd, &filesystem); err != nil {
+		return false, fmt.Errorf("inspect host ingress attestation mount: %w", err)
+	}
+	return filesystem.Flags&syscall.ST_RDONLY != 0, nil
+}
+
+var smartDNSAttestationMountReadOnly = smartDNSAttestationFileSystemReadOnly
+
 // parseSmartDNSContainerInitStartTime derives PID 1's start time from the
 // Linux procfs ABI. Docker restarts retain a container ID and may retain its
 // network ID/IP, so an attestation written before this PID namespace existed
@@ -110,6 +124,13 @@ func readSmartDNSHostIngressAttestationFromPathWithOwner(path string, requireRoo
 	if err != nil { return attestation, fmt.Errorf("stat host ingress attestation: %w", err) }
 	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 8<<10 {
 		return attestation, fmt.Errorf("host ingress attestation must be a non-empty regular file no larger than 8 KiB")
+	}
+	readOnly, mountErr := smartDNSAttestationMountReadOnly(fd)
+	if mountErr != nil {
+		return attestation, fmt.Errorf("verify host ingress attestation mount: %w", mountErr)
+	}
+	if !readOnly {
+		return attestation, fmt.Errorf("host ingress attestation must be mounted read-only from the Docker host")
 	}
 	if info.Mode().Perm()&0022 != 0 {
 		return attestation, fmt.Errorf("host ingress attestation must not be group/world writable")
