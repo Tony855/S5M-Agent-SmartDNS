@@ -341,6 +341,21 @@ def physical_evidence_container_has_readonly_attestation_mount(current: dict) ->
     nested mounts too, because one could shadow ingress.json with a writable
     file even when the parent directory mount is read-only.
     """
+    host_config = current.get("HostConfig")
+    if not isinstance(host_config, dict) or host_config.get("Privileged") is not False:
+        return False
+    cap_add = host_config.get("CapAdd")
+    if cap_add is None:
+        cap_add = []
+    if not isinstance(cap_add, list):
+        return False
+    for capability in cap_add:
+        if not isinstance(capability, str):
+            return False
+        normalized_capability = capability.upper().removeprefix("CAP_")
+        if normalized_capability in ("SYS_ADMIN", "ALL"):
+            return False
+
     mounts = current.get("Mounts")
     if not isinstance(mounts, list):
         return False

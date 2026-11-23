@@ -129,7 +129,7 @@ class ControllerTests(unittest.TestCase):
         }]
         current = json.dumps([{"Id": "a" * 64, "Name": "/s5m-agent", "State": {
             "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:00:00.000000000Z",
-        }, "Mounts": attestation_mount}])
+        }, "HostConfig": {"Privileged": False, "CapAdd": ["NET_ADMIN"]}, "Mounts": attestation_mount}])
         replaced = json.dumps([{"Id": "b" * 64, "Name": "/s5m-agent", "State": {
             "Running": True, "Pid": 123, "StartedAt": "2026-11-20T02:00:00.000000000Z",
         }}])
@@ -169,6 +169,15 @@ class ControllerTests(unittest.TestCase):
         duplicate_mount = json.loads(current)
         duplicate_mount[0]["Mounts"].append(dict(duplicate_mount[0]["Mounts"][0]))
         self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(duplicate_mount)))
+        privileged = json.loads(current)
+        privileged[0]["HostConfig"]["Privileged"] = True
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(privileged)))
+        sys_admin = json.loads(current)
+        sys_admin[0]["HostConfig"]["CapAdd"] = ["NET_ADMIN", "SYS_ADMIN"]
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(sys_admin)))
+        cap_all = json.loads(current)
+        cap_all[0]["HostConfig"]["CapAdd"] = ["ALL"]
+        self.assertFalse(mod.physical_evidence_container_matches_current(evidence, json.dumps(cap_all)))
     def test_physical_evidence_is_bound_to_current_routed_docker_network(self):
         evidence = {
             "network": "s5m-agent-ingress", "network_id": "a" * 64,
