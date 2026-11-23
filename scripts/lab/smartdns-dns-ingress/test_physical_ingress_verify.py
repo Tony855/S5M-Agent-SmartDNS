@@ -185,6 +185,7 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
         manifest={"container":"s5m-agent","container_id":"a"*64,"network":"ingress","network_id":"b"*64,"container_pid":123,"container_started_at":"2026-11-20T02:00:00.000000000Z"}
         cfg={"interface":"eth1","addresses":[VERIFY.ipaddress.ip_address("172.31.0.10")]}
         inspected={"Id":"a"*64,"State":{"Running":True,"Pid":124,"StartedAt":"2026-11-20T02:10:00.000000000Z"},
+            "Mounts":[{"Type":"bind","Source":"/run/s5m-agent-ingress","Destination":"/run/s5m-agent-ingress","Mode":"ro","RW":False}],
             "NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.2","GlobalIPv6Address":""}}}}
         fake=SimpleNamespace(stdout=json.dumps([inspected]))
         with mock.patch.object(VERIFY.subprocess,"run",return_value=fake):

@@ -29,7 +29,7 @@ func smartDNSAttestationFileSystemReadOnly(fd int) (bool, error) {
 	if err := syscall.Fstatfs(fd, &filesystem); err != nil {
 		return false, fmt.Errorf("inspect host ingress attestation mount: %w", err)
 	}
-	return filesystem.Flags&syscall.ST_RDONLY != 0, nil
+	return filesystem.Flags&syscall.MS_RDONLY != 0, nil
 }
 
 var smartDNSAttestationMountReadOnly = smartDNSAttestationFileSystemReadOnly
