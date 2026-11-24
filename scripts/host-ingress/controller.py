@@ -475,6 +475,17 @@ def physical_evidence_network_matches_current(evidence: dict, cfg: dict, network
 
     if network.get("Driver") != "bridge":
         return False
+    # Docker bridge inspect flags are part of the routed-ingress contract.
+    # A network that becomes internal, attachable, an ingress overlay, or
+    # changes IPv6 mode is not the topology that was physically packet-probed.
+    if (
+        network.get("Scope") != "local"
+        or network.get("Internal") is not False
+        or network.get("Attachable") is not False
+        or network.get("Ingress") is not False
+        or network.get("EnableIPv6") is not any(address.version == 6 for address in cfg.get("addresses", []))
+    ):
+        return False
     labels = network.get("Labels")
     if not isinstance(labels, dict) or labels.get("com.s5m.managed") != "s5m-agent-dns-ingress":
         return False
