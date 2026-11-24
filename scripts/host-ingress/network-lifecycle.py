@@ -169,6 +169,16 @@ def expected_subnets(cfg):
 def validate_existing(net,cfg):
     if labels(net).get(OWNER)!=VALUE: raise LifecycleError("network name already exists but is not owned by S5M ingress lifecycle")
     if net.get("Driver")!="bridge": raise LifecycleError("managed network driver drift")
+    # Docker's network-level routing flags are security-relevant state, not
+    # defaults to assume. Refuse reuse when the live topology differs.
+    if (
+        net.get("Scope") != "local"
+        or net.get("Internal") is not False
+        or net.get("Attachable") is not False
+        or net.get("Ingress") is not False
+        or net.get("EnableIPv6") is not (6 in cfg["_networks"])
+    ):
+        raise LifecycleError("managed network scope/internal/attachable/ingress/IPv6 flags drifted from the routed ingress contract")
     ipam_state=net.get("IPAM")
     if not isinstance(ipam_state,dict):
         raise LifecycleError("managed network IPAM state is missing")
