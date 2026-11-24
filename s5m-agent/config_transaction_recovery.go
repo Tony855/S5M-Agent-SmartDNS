@@ -91,11 +91,19 @@ func validateConfigTransactionRecoveryShape(data []byte) error {
 		if len(snapshot) != 2 {
 			return fmt.Errorf("%s 快照必须包含且仅包含 data/existed", key)
 		}
-		for _, member := range []string{"data", "existed"} {
-			raw, ok := snapshot[member]
-			if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-				return fmt.Errorf("%s 快照缺少有效字段 %q", key, member)
-			}
+		dataRaw, dataOK := snapshot["data"]
+		existedRaw, existedOK := snapshot["existed"]
+		if !dataOK || !existedOK || bytes.Equal(bytes.TrimSpace(existedRaw), []byte("null")) {
+			return fmt.Errorf("%s 快照缺少有效字段 data/existed", key)
+		}
+		var existed bool
+		if err := json.Unmarshal(existedRaw, &existed); err != nil {
+			return fmt.Errorf("%s 快照 existed 必须是布尔值: %w", key, err)
+		}
+		// The writer emits nil []byte as JSON null only for a snapshot whose
+		// source file did not exist. Existing empty files are encoded as "".
+		if bytes.Equal(bytes.TrimSpace(dataRaw), []byte("null")) && existed {
+			return fmt.Errorf("%s 已存在快照的 data 不得为 null", key)
 		}
 	}
 	return nil
