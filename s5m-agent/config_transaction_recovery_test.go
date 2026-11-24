@@ -464,3 +464,31 @@ func TestReadConfigTransactionRecoveryRecordRejectsIncompleteSnapshots(t *testin
 		})
 	}
 }
+
+func TestReadConfigTransactionRecoveryRecordRejectsDuplicateJSONKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	cases := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "duplicate top-level version",
+			data: `{"version":1,"version":1,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+		},
+		{
+			name: "duplicate nested existed",
+			data: `{"version":1,"phase":"prepared","smartdns":{"data":"","existed":false,"existed":true},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(configTransactionRecoveryPath(), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readConfigTransactionRecoveryRecord(); err == nil {
+				t.Fatal("recovery journal with duplicate JSON keys must be rejected")
+			}
+		})
+	}
+}
