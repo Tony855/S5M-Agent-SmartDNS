@@ -197,9 +197,10 @@ func procSocketTableHasExactListener(data []byte, ipv6 bool, port int, expectedA
 	return len(procSocketTableExactListenerInodes(data, ipv6, port, expectedAddress, requireTCPListen)) > 0
 }
 
-// procProcessOwnsSocketInodes requires both exact ingress sockets to belong to
-// the same SmartDNS process. A different process binding 6055 must never make
-// the Agent attest that SmartDNS itself is listening on the routed address.
+// procProcessOwnsSocketInodes requires one SmartDNS PID to own every exact
+// UDP and TCP listener inode for the contract address. Merely finding one
+// SmartDNS socket of each protocol is insufficient: SO_REUSEPORT or another
+// process sharing the same address/port must not be hidden by a partial match.
 func procProcessOwnsSocketInodes(procRoot string, pid int, udpInodes, tcpInodes map[string]bool) (bool, error) {
 	if pid <= 0 || len(udpInodes) == 0 || len(tcpInodes) == 0 {
 		return false, nil
@@ -209,7 +210,7 @@ func procProcessOwnsSocketInodes(procRoot string, pid int, udpInodes, tcpInodes 
 	if err != nil {
 		return false, fmt.Errorf("read process file descriptors: %w", err)
 	}
-	udpOwned, tcpOwned := false, false
+	udpOwned, tcpOwned := make(map[string]bool), make(map[string]bool)
 	for _, entry := range entries {
 		target, err := os.Readlink(filepath.Join(fdDir, entry.Name()))
 		if err != nil {
@@ -223,14 +224,11 @@ func procProcessOwnsSocketInodes(procRoot string, pid int, udpInodes, tcpInodes 
 		}
 		inode := strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")
 		if udpInodes[inode] {
-			udpOwned = true
+			udpOwned[inode] = true
 		}
 		if tcpInodes[inode] {
-			tcpOwned = true
-		}
-		if udpOwned && tcpOwned {
-			return true, nil
+			tcpOwned[inode] = true
 		}
 	}
-	return false, nil
+	return len(udpOwned) == len(udpInodes) && len(tcpOwned) == len(tcpInodes), nil
 }
