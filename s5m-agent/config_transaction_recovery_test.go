@@ -444,10 +444,11 @@ func TestReadConfigTransactionRecoveryRecordRejectsIncompleteSnapshots(t *testin
 		{name: "missing SmartDNS snapshot", data: `{"version":1,"phase":"prepared","mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
 		{name: "null SmartDNS snapshot", data: `{"version":1,"phase":"prepared","smartdns":null,"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
 		{name: "missing snapshot existed", data: `{"version":1,"phase":"prepared","smartdns":{"data":""},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
-		{name: "null snapshot data", data: `{"version":1,"phase":"prepared","smartdns":{"data":null,"existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "null data for existing snapshot", data: `{"version":1,"phase":"prepared","smartdns":{"data":null,"existed":true},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
 		{name: "snapshot not object", data: `{"version":1,"phase":"prepared","smartdns":[],"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
 		{name: "null version", data: `{"version":null,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
 		{name: "valid control", data: valid},
+		{name: "null data for absent snapshot", data: `{"version":1,"phase":"prepared","smartdns":{"data":null,"existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
