@@ -431,3 +431,35 @@ func TestReadConfigTransactionRecoveryRecordRejectsMultipleJSONValues(t *testing
 		t.Fatal("recovery journal with multiple JSON values must be rejected")
 	}
 }
+
+
+func TestReadConfigTransactionRecoveryRecordRejectsIncompleteSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	valid := `{"version":1,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`
+	cases := []struct {
+		name string
+		data string
+	}{
+		{name: "missing SmartDNS snapshot", data: `{"version":1,"phase":"prepared","mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "null SmartDNS snapshot", data: `{"version":1,"phase":"prepared","smartdns":null,"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "missing snapshot existed", data: `{"version":1,"phase":"prepared","smartdns":{"data":""},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "null snapshot data", data: `{"version":1,"phase":"prepared","smartdns":{"data":null,"existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "snapshot not object", data: `{"version":1,"phase":"prepared","smartdns":[],"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "null version", data: `{"version":null,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "valid control", data: valid},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(configTransactionRecoveryPath(), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := readConfigTransactionRecoveryRecord()
+			if tc.name == "valid control" {
+				if err != nil { t.Fatalf("valid journal rejected: %v", err) }
+			} else if err == nil {
+				t.Fatal("incomplete recovery journal must be rejected")
+			}
+		})
+	}
+}
