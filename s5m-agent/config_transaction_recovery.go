@@ -67,11 +67,50 @@ func removeConfigTransactionRecoveryRecord() error {
 	return dir.Sync()
 }
 
+// validateConfigTransactionRecoveryShape requires every journal and snapshot
+// member emitted by the writer. encoding/json otherwise accepts missing/null
+// struct members as zero values, which could turn corruption into file deletion.
+func validateConfigTransactionRecoveryShape(data []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return err
+	}
+	if len(root) != 6 {
+		return fmt.Errorf("顶层必须包含且仅包含六个字段")
+	}
+	for _, key := range []string{"version", "phase", "smartdns", "mihomo", "managed_routes", "controller"} {
+		if raw, ok := root[key]; !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("缺少必需字段 %q", key)
+		}
+	}
+	for _, key := range []string{"smartdns", "mihomo", "managed_routes", "controller"} {
+		var snapshot map[string]json.RawMessage
+		if err := json.Unmarshal(root[key], &snapshot); err != nil {
+			return fmt.Errorf("%s 快照必须是对象: %w", key, err)
+		}
+		if len(snapshot) != 2 {
+			return fmt.Errorf("%s 快照必须包含且仅包含 data/existed", key)
+		}
+		for _, member := range []string{"data", "existed"} {
+			raw, ok := snapshot[member]
+			if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				return fmt.Errorf("%s 快照缺少有效字段 %q", key, member)
+			}
+		}
+	}
+	return nil
+}
+
 func readConfigTransactionRecoveryRecord() (configTransactionRecoveryRecord, error) {
 	var record configTransactionRecoveryRecord
 	data, err := readTransactionFileNoFollow(configTransactionRecoveryPath(), configTransactionRecoveryMaxBytes)
 	if err != nil {
 		return record, err
+	}
+	// A zero-value snapshot means "the file did not previously exist". Do not
+	// let omitted or null JSON members silently become that destructive state.
+	if err := validateConfigTransactionRecoveryShape(data); err != nil {
+		return record, fmt.Errorf("联合配置事务恢复记录结构无效: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
