@@ -164,7 +164,8 @@ class PhysicalIngressVerifierTests(unittest.TestCase):
             "HostConfig":{"Privileged":False,"CapAdd":["NET_ADMIN"]},
             "Mounts":[{"Type":"bind","Source":"/run/s5m-agent-ingress","Destination":"/run/s5m-agent-ingress","Mode":"ro","RW":False}],
             "NetworkSettings":{"Networks":{"ingress":{"NetworkID":"b"*64,"IPAddress":"172.31.0.10","GlobalIPv6Address":""}}}}
-        network={"Id":"b"*64,"Name":"ingress","Driver":"bridge","Labels":{"com.s5m.managed":"s5m-agent-dns-ingress"},
+        network={"Id":"b"*64,"Name":"ingress","Driver":"bridge","Scope":"local","Internal":False,
+            "Attachable":False,"Ingress":False,"EnableIPv6":False,"Labels":{"com.s5m.managed":"s5m-agent-dns-ingress"},
             "Options":{"com.docker.network.bridge.gateway_mode_ipv4":"routed","com.docker.network.bridge.trusted_host_interfaces":"eth1"},
             "IPAM":{"Config":[{"Subnet":"172.31.0.0/24","Gateway":"172.31.0.1"}]},
             "Containers":{"a"*64:{"Name":"s5m-agent","IPv4Address":"172.31.0.10/24","IPv6Address":""}}}
