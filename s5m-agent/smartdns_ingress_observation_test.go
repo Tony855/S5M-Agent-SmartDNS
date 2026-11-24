@@ -181,6 +181,38 @@ func TestSmartDNSAddressSocketsBoundRequiresOneProcessToOwnExactUDPAndTCP(t *tes
 	if err != nil || bound {
 		t.Fatalf("split ownership by unrelated PIDs must not satisfy SmartDNS readiness: bound=%v err=%v", bound, err)
 	}
+
+	// A SmartDNS PID owning one UDP and one TCP socket must not hide a second
+	// SO_REUSEPORT listener owned by another process on the same exact endpoint.
+	udpWithReusePort := "sl local_address rem_address st tx_queue\n" +
+		" 0: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n" +
+		" 1: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12347\n"
+	tcpWithReusePort := "sl local_address rem_address st tx_queue\n" +
+		" 0: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n" +
+		" 1: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12348\n"
+	if err := os.WriteFile(filepath.Join(netDir, "udp"), []byte(udpWithReusePort), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(netDir, "tcp"), []byte(tcpWithReusePort), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12347]", filepath.Join(otherFDDir, "3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12348]", filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	bound, err = smartDNSAddressSocketsBoundWithProcRoot(procRoot, "127.0.0.1", 6053, true, []int{1234, 5678})
+	if err != nil || bound {
+		t.Fatalf("foreign UDP/TCP reuseport sockets must invalidate exact SmartDNS ownership: bound=%v err=%v", bound, err)
+	}
+
 	if _, err := smartDNSAddressSocketsBoundWithProcRoot(procRoot, "0.0.0.0", 6053, true, []int{1234}); err == nil {
 		t.Fatal("loopback listener verification must reject wildcard addresses")
 	}
