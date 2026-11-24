@@ -406,3 +406,28 @@ func TestRecoverInterruptedPerClientTransactionUsesIngressAwareHealthProbe(t *te
 		t.Fatalf("journal should be removed only after successful per-client recovery: %v", err)
 	}
 }
+
+
+func TestReadConfigTransactionRecoveryRecordRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	journal := []byte(`{"version":1,"phase":"prepared","unexpected_runtime_override":true}`)
+	if err := os.WriteFile(configTransactionRecoveryPath(), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readConfigTransactionRecoveryRecord(); err == nil {
+		t.Fatal("recovery journal with unknown fields must be rejected")
+	}
+}
+
+func TestReadConfigTransactionRecoveryRecordRejectsMultipleJSONValues(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	journal := []byte(`{"version":1,"phase":"prepared"} {"version":1,"phase":"committed"}`)
+	if err := os.WriteFile(configTransactionRecoveryPath(), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readConfigTransactionRecoveryRecord(); err == nil {
+		t.Fatal("recovery journal with multiple JSON values must be rejected")
+	}
+}
