@@ -456,7 +456,7 @@ func TestReadConfigTransactionRecoveryRecordRejectsIncompleteSnapshots(t *testin
 				t.Fatal(err)
 			}
 			_, err := readConfigTransactionRecoveryRecord()
-			if tc.name == "valid control" {
+			if tc.name == "valid control" || tc.name == "null data for absent snapshot" {
 				if err != nil { t.Fatalf("valid journal rejected: %v", err) }
 			} else if err == nil {
 				t.Fatal("incomplete recovery journal must be rejected")
