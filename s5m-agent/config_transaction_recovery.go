@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,8 +73,16 @@ func readConfigTransactionRecoveryRecord() (configTransactionRecoveryRecord, err
 	if err != nil {
 		return record, err
 	}
-	if err := json.Unmarshal(data, &record); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&record); err != nil {
 		return record, fmt.Errorf("解析联合配置事务恢复记录失败: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return record, fmt.Errorf("联合配置事务恢复记录包含多个 JSON 值")
+		}
+		return record, fmt.Errorf("联合配置事务恢复记录尾部数据无效: %w", err)
 	}
 	if record.Version != 1 || (record.Phase != "prepared" && record.Phase != "committed") {
 		return record, fmt.Errorf("联合配置事务恢复记录版本或阶段无效")
