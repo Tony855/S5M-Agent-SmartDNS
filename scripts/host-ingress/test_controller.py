@@ -186,6 +186,8 @@ class ControllerTests(unittest.TestCase):
         cfg = {"interface": "eth1", "addresses": [ipaddress.ip_address("172.31.10.2")]}
         network = {
             "Id": "a" * 64, "Name": "s5m-agent-ingress", "Driver": "bridge",
+            "Scope": "local", "Internal": False, "Attachable": False,
+            "Ingress": False, "EnableIPv6": False,
             "Labels": {"com.s5m.managed": "s5m-agent-dns-ingress"},
             "Options": {
                 "com.docker.network.bridge.gateway_mode_ipv4": "routed",
@@ -208,6 +210,19 @@ class ControllerTests(unittest.TestCase):
             }},
         }
         self.assertTrue(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([network]), json.dumps([container])))
+        for field, value in (
+            ("Scope", "global"),
+            ("Internal", True),
+            ("Attachable", True),
+            ("Ingress", True),
+            ("EnableIPv6", True),
+        ):
+            with self.subTest(network_flag=field):
+                changed_flags = dict(network)
+                changed_flags[field] = value
+                self.assertFalse(mod.physical_evidence_network_matches_current(
+                    evidence, cfg, json.dumps([changed_flags]), json.dumps([container])
+                ))
         changed_id = dict(network); changed_id["Id"] = "b" * 64
         self.assertFalse(mod.physical_evidence_network_matches_current(evidence, cfg, json.dumps([changed_id]), json.dumps([container])))
         changed_mode = dict(network); changed_mode["Options"] = dict(network["Options"], **{"com.docker.network.bridge.gateway_mode_ipv4": "nat"})
