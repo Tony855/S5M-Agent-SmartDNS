@@ -67,10 +67,85 @@ func removeConfigTransactionRecoveryRecord() error {
 	return dir.Sync()
 }
 
+// rejectDuplicateJSONKeys rejects ambiguous object members before decoding a
+// recovery journal into structs. encoding/json otherwise accepts duplicate
+// keys and silently keeps the last value, which is unsafe for rollback state.
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var consume func() error
+	consume = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delim, isDelim := token.(json.Delim)
+		if !isDelim {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("JSON object member name is not a string")
+				}
+				if _, duplicate := seen[key]; duplicate {
+					return fmt.Errorf("duplicate JSON object member %q", key)
+				}
+				seen[key] = struct{}{}
+				if err := consume(); err != nil {
+					return err
+				}
+			}
+			end, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if end != json.Delim('}') {
+				return fmt.Errorf("unterminated JSON object")
+			}
+		case '[':
+			for decoder.More() {
+				if err := consume(); err != nil {
+					return err
+				}
+			}
+			end, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if end != json.Delim(']') {
+				return fmt.Errorf("unterminated JSON array")
+			}
+		default:
+			return fmt.Errorf("unexpected JSON delimiter %q", delim)
+		}
+		return nil
+	}
+	if err := consume(); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	return nil
+}
+
 // validateConfigTransactionRecoveryShape requires every journal and snapshot
 // member emitted by the writer. encoding/json otherwise accepts missing/null
 // struct members as zero values, which could turn corruption into file deletion.
 func validateConfigTransactionRecoveryShape(data []byte) error {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return fmt.Errorf("恢复记录包含重复或无效 JSON 成员: %w", err)
+	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
 		return err
