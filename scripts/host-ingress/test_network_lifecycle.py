@@ -49,6 +49,21 @@ class ConfigTests(unittest.TestCase):
         path.write_text(json.dumps(firewall)); os.chmod(path,0o600)
         with self.assertRaises(nl.LifecycleError): nl.validate_firewall_contract(cfg,path)
 
+    def test_duplicate_json_members_rejected_in_network_and_firewall_contracts(self):
+        td=tempfile.TemporaryDirectory(); self.addCleanup(td.cleanup)
+        network_path=Path(td.name)/"network.json"
+        network_path.write_text('{"version":1,"version":1}')
+        os.chmod(network_path,0o600)
+        with self.assertRaises(nl.LifecycleError):
+            nl.read_config(network_path,require_root=False)
+
+        firewall_path=Path(td.name)/"firewall.json"
+        firewall_path.write_text('{"version":1,"interface":"eth1","ipv4_address":"172.31.10.2","ipv4_address":"172.31.10.99","ipv6_address":"2001:db8:31::2","client_cidrs":["192.168.50.0/24","2001:db8:50::/64"]}')
+        os.chmod(firewall_path,0o600)
+        cfg=nl.read_config(self.write(valid_config()),require_root=False)
+        with self.assertRaises(nl.LifecycleError):
+            nl.validate_firewall_contract(cfg,firewall_path,require_root=False)
+
     def test_unknown_key_rejected(self):
         cfg=valid_config(); cfg["extra"]=True
         with self.assertRaises(nl.LifecycleError): nl.read_config(self.write(cfg), require_root=False)
