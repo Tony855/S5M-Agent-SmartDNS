@@ -493,6 +493,7 @@ func TestReadConfigTransactionRecoveryRecordRejectsDuplicateJSONKeys(t *testing.
 	}
 }
 
+
 // JSON member names are compared after escape decoding. Otherwise an attacker
 // could spell the same schema key in two different JSON encodings and rely on
 // downstream decoders' last-key-wins behavior.
@@ -505,11 +506,11 @@ func TestReadConfigTransactionRecoveryRecordRejectsEscapedDuplicateJSONKeys(t *t
 	}{
 		{
 			name: "escaped top-level alias",
-			data: `{"version":1,"vers\\u0069on":1,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+			data: `{"version":1,"vers\u0069on":1,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
 		},
 		{
 			name: "escaped nested alias",
-			data: `{"version":1,"phase":"prepared","smartdns":{"data":"","existed":false,"ex\\u0069sted":true},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+			data: `{"version":1,"phase":"prepared","smartdns":{"data":"","existed":false,"ex\u0069sted":true},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
 		},
 	}
 	for _, tc := range cases {
@@ -528,7 +529,7 @@ func TestRejectDuplicateJSONKeysChecksNestedObjectsWithoutCrossObjectCollisions(
 	if err := rejectDuplicateJSONKeys([]byte(`{"items":[{"name":"one"},{"name":"two"}]}`)); err != nil {
 		t.Fatalf("same member name in separate objects should be accepted: %v", err)
 	}
-	if err := rejectDuplicateJSONKeys([]byte(`{"items":[{"name":"one","na\\u006de":"two"}]}`)); err == nil {
+	if err := rejectDuplicateJSONKeys([]byte(`{"items":[{"name":"one","na\u006de":"two"}]}`)); err == nil {
 		t.Fatal("escaped duplicate member in nested array object must be rejected")
 	}
 }
