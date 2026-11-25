@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,14 +67,144 @@ func removeConfigTransactionRecoveryRecord() error {
 	return dir.Sync()
 }
 
+// rejectDuplicateJSONKeys rejects ambiguous object members before decoding a
+// recovery journal into structs. encoding/json otherwise accepts duplicate
+// keys and silently keeps the last value, which is unsafe for rollback state.
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var consume func() error
+	consume = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delim, isDelim := token.(json.Delim)
+		if !isDelim {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("JSON object member name is not a string")
+				}
+				if _, duplicate := seen[key]; duplicate {
+					return fmt.Errorf("duplicate JSON object member %q", key)
+				}
+				seen[key] = struct{}{}
+				if err := consume(); err != nil {
+					return err
+				}
+			}
+			end, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if end != json.Delim('}') {
+				return fmt.Errorf("unterminated JSON object")
+			}
+		case '[':
+			for decoder.More() {
+				if err := consume(); err != nil {
+					return err
+				}
+			}
+			end, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if end != json.Delim(']') {
+				return fmt.Errorf("unterminated JSON array")
+			}
+		default:
+			return fmt.Errorf("unexpected JSON delimiter %q", delim)
+		}
+		return nil
+	}
+	if err := consume(); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	return nil
+}
+
+// validateConfigTransactionRecoveryShape requires every journal and snapshot
+// member emitted by the writer. encoding/json otherwise accepts missing/null
+// struct members as zero values, which could turn corruption into file deletion.
+func validateConfigTransactionRecoveryShape(data []byte) error {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return fmt.Errorf("恢复记录包含重复或无效 JSON 成员: %w", err)
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return err
+	}
+	if len(root) != 6 {
+		return fmt.Errorf("顶层必须包含且仅包含六个字段")
+	}
+	for _, key := range []string{"version", "phase", "smartdns", "mihomo", "managed_routes", "controller"} {
+		if raw, ok := root[key]; !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("缺少必需字段 %q", key)
+		}
+	}
+	for _, key := range []string{"smartdns", "mihomo", "managed_routes", "controller"} {
+		var snapshot map[string]json.RawMessage
+		if err := json.Unmarshal(root[key], &snapshot); err != nil {
+			return fmt.Errorf("%s 快照必须是对象: %w", key, err)
+		}
+		if len(snapshot) != 2 {
+			return fmt.Errorf("%s 快照必须包含且仅包含 data/existed", key)
+		}
+		dataRaw, dataOK := snapshot["data"]
+		existedRaw, existedOK := snapshot["existed"]
+		if !dataOK || !existedOK || bytes.Equal(bytes.TrimSpace(existedRaw), []byte("null")) {
+			return fmt.Errorf("%s 快照缺少有效字段 data/existed", key)
+		}
+		var existed bool
+		if err := json.Unmarshal(existedRaw, &existed); err != nil {
+			return fmt.Errorf("%s 快照 existed 必须是布尔值: %w", key, err)
+		}
+		// The writer emits nil []byte as JSON null only for a snapshot whose
+		// source file did not exist. Existing empty files are encoded as "".
+		if bytes.Equal(bytes.TrimSpace(dataRaw), []byte("null")) && existed {
+			return fmt.Errorf("%s 已存在快照的 data 不得为 null", key)
+		}
+	}
+	return nil
+}
+
 func readConfigTransactionRecoveryRecord() (configTransactionRecoveryRecord, error) {
 	var record configTransactionRecoveryRecord
 	data, err := readTransactionFileNoFollow(configTransactionRecoveryPath(), configTransactionRecoveryMaxBytes)
 	if err != nil {
 		return record, err
 	}
-	if err := json.Unmarshal(data, &record); err != nil {
+	// A zero-value snapshot means "the file did not previously exist". Do not
+	// let omitted or null JSON members silently become that destructive state.
+	if err := validateConfigTransactionRecoveryShape(data); err != nil {
+		return record, fmt.Errorf("联合配置事务恢复记录结构无效: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&record); err != nil {
 		return record, fmt.Errorf("解析联合配置事务恢复记录失败: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return record, fmt.Errorf("联合配置事务恢复记录包含多个 JSON 值")
+		}
+		return record, fmt.Errorf("联合配置事务恢复记录尾部数据无效: %w", err)
 	}
 	if record.Version != 1 || (record.Phase != "prepared" && record.Phase != "committed") {
 		return record, fmt.Errorf("联合配置事务恢复记录版本或阶段无效")
@@ -156,7 +288,19 @@ func recoverInterruptedConfigTransactionWithRuntimeChecks(checkRuntime bool) err
 				if err := transactionRestartSmartDNS(); err != nil {
 					return fmt.Errorf("重启恢复后的 SmartDNS 失败，恢复记录保留: %w", err)
 				}
-				if !transactionWaitSmartDNSHealthy(5 * time.Second) {
+				if hasPerClientSmartDNSDirectives(record.SmartDNS.Data) {
+					// A recovered per-client config has no shared default group;
+					// the loopback shared-mode probe cannot prove it healthy. Reuse
+					// the same fresh host attestation and CIDR-aware probe as the
+					// normal per-client transaction rollback path.
+					attestation, attestationErr := transactionReadSmartDNSHostIngressAttestation()
+					if attestationErr != nil {
+						return fmt.Errorf("读取启动恢复后的 per-client ingress 证明失败，恢复记录保留: %w", attestationErr)
+					}
+					if !transactionWaitSmartDNSPerClientHealthy(record.SmartDNS.Data, attestation, 5*time.Second) {
+						return fmt.Errorf("恢复后的 per-client SmartDNS 未通过 CIDR/UDP/TCP 健康检查，恢复记录保留")
+					}
+				} else if !transactionWaitSmartDNSHealthy(5 * time.Second) {
 					return fmt.Errorf("恢复后的 SmartDNS 未通过 UDP/TCP DNS 健康检查，恢复记录保留")
 				}
 			} else if !record.SmartDNS.Existed {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,7 @@ type smartDNSIngressObservation struct {
 	Interfaces []string
 	IPv4       []string
 	IPv6       []string
+	AddressInterfaces map[string]string
 	UDP        bool
 	TCP        bool
 }
@@ -35,7 +37,7 @@ func defaultSmartDNSIngressObservationDependencies() smartDNSIngressObservationD
 // Agent network namespace. It intentionally does not attest host firewall
 // persistence, source-IP preservation, routed reachability, or proxy egress.
 func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependencies) (smartDNSIngressObservation, error) {
-	var observed smartDNSIngressObservation
+	observed := smartDNSIngressObservation{AddressInterfaces: make(map[string]string)}
 	if deps.interfaces == nil || deps.readFile == nil {
 		return observed, fmt.Errorf("ingress observation dependencies are unavailable")
 	}
@@ -52,23 +54,8 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 		if err != nil {
 			return observed, fmt.Errorf("read addresses for interface %s: %w", iface.Name, err)
 		}
-		var ifaceAddresses []string
-		for _, address := range addresses {
-			ip, _, err := net.ParseCIDR(address.String())
-			if err != nil || ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
-				continue
-			}
-			value := ip.String()
-			addressSet[value] = true
-			ifaceAddresses = append(ifaceAddresses, value)
-			if ip.To4() != nil {
-				observed.IPv4 = append(observed.IPv4, value)
-			} else {
-				observed.IPv6 = append(observed.IPv6, value)
-			}
-		}
-		if len(ifaceAddresses) > 0 {
-			observed.Interfaces = append(observed.Interfaces, iface.Name)
+		if err := appendSmartDNSIngressInterfaceAddresses(&observed, iface, addresses, addressSet); err != nil {
+			return observed, fmt.Errorf("validate Agent interface %s addresses: %w", iface.Name, err)
 		}
 	}
 	if len(addressSet) == 0 {
@@ -90,6 +77,42 @@ func collectSmartDNSIngressObservation(deps smartDNSIngressObservationDependenci
 	return observed, nil
 }
 
+
+ // appendSmartDNSIngressInterfaceAddresses records only global-unicast addresses,
+ // because those are the only addresses eligible for a host ingress contract.
+ // A duplicate global address on a second interface makes routing ambiguous and
+ // must fail closed rather than letting the last interface silently win.
+func appendSmartDNSIngressInterfaceAddresses(
+	observed *smartDNSIngressObservation,
+	iface net.Interface,
+	addresses []net.Addr,
+	addressSet map[string]bool,
+) error {
+	var ifaceAddresses []string
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err != nil || ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		value := ip.String()
+		if addressSet[value] {
+			return fmt.Errorf("global address %s is assigned more than once in the Agent network namespace", value)
+		}
+		addressSet[value] = true
+		observed.AddressInterfaces[value] = iface.Name
+		ifaceAddresses = append(ifaceAddresses, value)
+		if ip.To4() != nil {
+			observed.IPv4 = append(observed.IPv4, value)
+		} else {
+			observed.IPv6 = append(observed.IPv6, value)
+		}
+	}
+	if len(ifaceAddresses) > 0 {
+		observed.Interfaces = append(observed.Interfaces, iface.Name)
+	}
+	return nil
+}
+
 func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddresses map[string]bool, requireTCPListen bool) bool {
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines[1:] {
@@ -103,7 +126,7 @@ func procSocketTableHasListener(data []byte, ipv6 bool, port int, interfaceAddre
 		if err != nil || int(parsedPort) != port { continue }
 		address, err := decodeProcSocketAddress(local[0], ipv6)
 		if err != nil { continue }
-		if !address.IsUnspecified() && interfaceAddresses[address.String()] {
+		if address.IsUnspecified() || interfaceAddresses[address.String()] {
 			return true
 		}
 	}
@@ -126,4 +149,86 @@ func decodeProcSocketAddress(raw string, ipv6 bool) (net.IP, error) {
 		decoded[i], decoded[j] = decoded[j], decoded[i]
 	}
 	return net.IP(decoded), nil
+}
+
+
+// procSocketTableHasExactListener is stricter than the diagnostic observer:
+// wildcard binds are never accepted as proof for a contract-specific address.
+func procSocketTableExactListenerInodes(data []byte, ipv6 bool, port int, expectedAddress string, requireTCPListen bool) map[string]bool {
+	inodes := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n")[1:] {
+		fields := strings.Fields(line)
+		// /proc/net/{udp,tcp} exposes the owning socket inode in field 10.
+		if len(fields) < 10 {
+			continue
+		}
+		if requireTCPListen {
+			if fields[3] != "0A" {
+				continue
+			}
+		} else if fields[3] != "07" {
+			continue
+		}
+		local := strings.Split(fields[1], ":")
+		if len(local) != 2 {
+			continue
+		}
+		parsedPort, err := strconv.ParseInt(local[1], 16, 32)
+		if err != nil || int(parsedPort) != port {
+			continue
+		}
+		address, err := decodeProcSocketAddress(local[0], ipv6)
+		if err != nil || address.IsUnspecified() || address.String() != expectedAddress {
+			continue
+		}
+		inode := fields[9]
+		if inode == "0" {
+			continue
+		}
+		if _, err := strconv.ParseUint(inode, 10, 64); err != nil {
+			continue
+		}
+		inodes[inode] = true
+	}
+	return inodes
+}
+
+func procSocketTableHasExactListener(data []byte, ipv6 bool, port int, expectedAddress string, requireTCPListen bool) bool {
+	return len(procSocketTableExactListenerInodes(data, ipv6, port, expectedAddress, requireTCPListen)) > 0
+}
+
+// procProcessOwnsSocketInodes requires one SmartDNS PID to own every exact
+// UDP and TCP listener inode for the contract address. Merely finding one
+// SmartDNS socket of each protocol is insufficient: SO_REUSEPORT or another
+// process sharing the same address/port must not be hidden by a partial match.
+func procProcessOwnsSocketInodes(procRoot string, pid int, udpInodes, tcpInodes map[string]bool) (bool, error) {
+	if pid <= 0 || len(udpInodes) == 0 || len(tcpInodes) == 0 {
+		return false, nil
+	}
+	fdDir := filepath.Join(procRoot, strconv.Itoa(pid), "fd")
+	entries, err := os.ReadDir(fdDir)
+	if err != nil {
+		return false, fmt.Errorf("read process file descriptors: %w", err)
+	}
+	udpOwned, tcpOwned := make(map[string]bool), make(map[string]bool)
+	for _, entry := range entries {
+		target, err := os.Readlink(filepath.Join(fdDir, entry.Name()))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // descriptor closed while the table was being inspected
+			}
+			return false, fmt.Errorf("inspect process file descriptor: %w", err)
+		}
+		if !strings.HasPrefix(target, "socket:[") || !strings.HasSuffix(target, "]") {
+			continue
+		}
+		inode := strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")
+		if udpInodes[inode] {
+			udpOwned[inode] = true
+		}
+		if tcpInodes[inode] {
+			tcpOwned[inode] = true
+		}
+	}
+	return len(udpOwned) == len(udpInodes) && len(tcpOwned) == len(tcpInodes), nil
 }

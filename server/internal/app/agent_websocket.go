@@ -694,16 +694,35 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 	if status["smartdns_control_supported"] != true {
 		return fmt.Errorf("目标节点已安装 SmartDNS，但 Agent 版本过旧，请先升级 Agent")
 	}
-	if enabled && status["smartdns_domestic_listener"] != true {
+	perClient := false
+	if rawRouting := strings.TrimSpace(settings["smartdns_routing_config"]); rawRouting != "" {
+		var routing SmartDNSRoutingConfig
+		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
+			return fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+		}
+		perClient = strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient)
+	}
+	if enabled && !perClient && status["smartdns_domestic_listener"] != true {
 		return fmt.Errorf("目标节点 SmartDNS 未配置完整的 UDP/TCP china-dot 6054 国内监听，不能启用")
 	}
 	config := strings.TrimSpace(settings["smartdns_config_"+machineCode])
-	if enabled && config == "" {
+	if enabled && config == "" && !perClient {
 		return fmt.Errorf("该节点尚无已保存的 SmartDNS 配置，请先读取并保存 SmartDNS 配置")
 	}
 	if len(config) > 8<<10 { return fmt.Errorf("SmartDNS 配置超过 Agent 允许的 8 KiB 限制") }
+	var ingressContract *SmartDNSAgentIngressContract
+	if enabled && perClient {
+		ingressContract, err = a.smartDNSIngressProvisioningContractForMachine(machineCode)
+		if err != nil { return err }
+		if ingressContract == nil { return fmt.Errorf("per-client SmartDNS 启用缺少 ingress contract") }
+	}
 	// Build routing for the requested state without persisting it before ACK.
-	generated, err := a.buildConfigForMachineWithSmartDNSOverride(machineCode, &enabled)
+	var generated string
+	if perClient {
+		generated, err = a.buildConfigForMachineWithSmartDNSOverrideAndPerClient(machineCode, &enabled, true)
+	} else {
+		generated, err = a.buildConfigForMachineWithSmartDNSOverride(machineCode, &enabled)
+	}
 	if err != nil { return fmt.Errorf("生成目标 SmartDNS 状态的节点配置失败: %w", err) }
 	nodeConfig, err := a.store.GetNodeConfig(machineCode)
 	if err != nil { return fmt.Errorf("读取节点配置失败: %w", err) }
@@ -716,13 +735,39 @@ func (a *App) queueAgentSmartDNSEnabled(machineCode string, enabled bool) error 
 	}
 	normalized, err := normalizeAgentProxyConfig(yml)
 	if err != nil { return fmt.Errorf("校验节点 Mihomo 配置失败: %w", err) }
-	yml, err = applyAgentRuntimeDNS(normalized, enabled, enabled)
+	yml = normalized
+	if enabled && perClient {
+		var routing SmartDNSRoutingConfig
+		if err := json.Unmarshal([]byte(settings["smartdns_routing_config"]), &routing); err != nil {
+			return fmt.Errorf("解析 per-client SmartDNS 路由设置失败: %w", err)
+		}
+		proxies, err := a.store.ListProxies()
+		if err != nil { return fmt.Errorf("读取 per-client 代理列表失败: %w", err) }
+		refs := make([]SmartDNSProxyRef, 0, len(proxies))
+		for _, proxy := range proxies {
+			owner := strings.TrimSpace(proxy.MachineCode)
+			if owner == "__GLOBAL__" || owner == machineCode {
+				refs = append(refs, SmartDNSProxyRef{Name: proxy.Name, Enabled: proxy.Enabled})
+			}
+		}
+		var mappings []SmartDNSClientRuntimeMapping
+		yml, config, mappings, err = buildSmartDNSPerClientRuntimeConfigsWithIngress(yml, routing, refs, ingressContract.IPv4Address, ingressContract.IPv6Address)
+		if err != nil { return fmt.Errorf("生成 per-client SmartDNS 启用配置失败: %w", err) }
+		if len(mappings) != len(ingressContract.ClientCIDRs) {
+			return fmt.Errorf("per-client 代理映射与 ingress CIDR 数量不一致")
+		}
+		ingressContract.Mappings = smartDNSAgentIngressMappingsFromRuntime(mappings)
+	}
+	yml, err = applyAgentRuntimeDNS(yml, enabled, enabled)
 	if err != nil { return fmt.Errorf("生成 SmartDNS 切换 DNS 配置失败: %w", err) }
 	commandID, err := newAgentCommandID()
 	if err != nil { return err }
 	command := map[string]any{
 		"id": commandID, "type": "set_smartdns_enabled", "enabled": enabled,
 		"config": config, "mihomo_config": yml,
+	}
+	if ingressContract != nil {
+		command["ingress_contract"] = ingressContract
 	}
 	payload, err := json.Marshal(command)
 	if err != nil { return fmt.Errorf("生成 SmartDNS 启停命令失败: %w", err) }
@@ -743,6 +788,13 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if !regexp.MustCompile("^[A-Za-z0-9_-]{1,64}$").MatchString(machineCode) {
 		return fmt.Errorf("机器码格式无效")
 	}
+	ingressContract, err := a.smartDNSIngressContractForMachine(machineCode)
+	if err != nil {
+		return err
+	}
+	if ingressContract != nil {
+		return fmt.Errorf("per-client SmartDNS 配置必须通过主控生成的 Mihomo/SmartDNS 联合配置同步，不能单独排队")
+	}
 	if strings.TrimSpace(config) == "" || len(config) > 8<<10 {
 		return fmt.Errorf("SmartDNS 配置不能为空且不能超过 8 KiB（Agent 安全限制）")
 	}
@@ -750,7 +802,10 @@ func (a *App) queueAgentSmartDNSConfig(machineCode, config string) error {
 	if err != nil {
 		return err
 	}
-	command := map[string]string{"id": commandID, "type": "configure_smartdns", "config": config}
+	command := map[string]any{"id": commandID, "type": "configure_smartdns", "config": config}
+	if ingressContract != nil {
+		command["ingress_contract"] = ingressContract
+	}
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return fmt.Errorf("生成 SmartDNS 配置命令失败")
@@ -1158,6 +1213,30 @@ func (a *App) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // sendAgentWSConfig returns only the configuration assigned to the authenticated machine.
 func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, clientHash, clientSmartDNSHash string) error {
+	ingressContract, readinessErr := a.smartDNSIngressContractForMachine(machineCode)
+	usedProvisioningContract := false
+	if readinessErr != nil {
+		// config.request is also the recovery channel after an Agent restart.
+		// Fall back only to the host-provisioning gate; the Agent's joint
+		// transaction must still bind the exact SmartDNS sockets and pass DNS
+		// probes before committing. Host source-IP/firewall/CIDR gates stay intact.
+		provisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
+		if provisionErr != nil {
+			return fmt.Errorf("per-client runtime readiness failed (%v); host ingress provisioning gate also failed: %w", readinessErr, provisionErr)
+		}
+		if provisioning == nil {
+			return readinessErr
+		}
+		ingressContract = provisioning
+		usedProvisioningContract = true
+	}
+	if ingressContract != nil {
+		settings, settingsErr := a.store.GetSettings()
+		if settingsErr != nil { return settingsErr }
+		if strings.EqualFold(strings.TrimSpace(settings["smartdns_enabled_"+machineCode]), "false") {
+			return fmt.Errorf("该 Agent 已显式禁用 SmartDNS，拒绝发布 per-client 配置")
+		}
+	}
 	nodeConfig, err := a.store.GetNodeConfig(machineCode)
 	if err != nil {
 		return err
@@ -1170,7 +1249,11 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		yml = nodeConfig.YAML
 	}
 	if strings.TrimSpace(yml) == "" {
-		yml, err = a.BuildConfigForMachine(machineCode)
+		if ingressContract != nil {
+			yml, err = a.buildConfigForMachineWithSmartDNSOverrideAndPerClient(machineCode, nil, true)
+		} else {
+			yml, err = a.BuildConfigForMachine(machineCode)
+		}
 		if err != nil {
 			return err
 		}
@@ -1210,38 +1293,65 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 		}
 	}
 
-	// Per-client DNS configuration must not be published until this exact Agent
-	// has a fresh, complete ingress attestation. The API still keeps per-client
-	// mode disabled by default; this guard also protects internal/legacy writes
-	// and the staged runtime publisher when it is enabled.
-	routingRaw, routingErr := a.store.GetSetting("smartdns_routing_config")
-	if routingErr != nil && routingErr != sql.ErrNoRows {
-		return fmt.Errorf("读取 SmartDNS 路由模式失败: %w", routingErr)
-	}
-	if routingErr == nil && strings.TrimSpace(routingRaw) != "" {
+	generatedPerClientSmartDNS := ""
+	if ingressContract != nil {
+		rawRouting, readErr := a.store.GetSetting("smartdns_routing_config")
+		if readErr != nil {
+			return fmt.Errorf("读取 per-client SmartDNS 路由设置失败: %w", readErr)
+		}
 		var routing SmartDNSRoutingConfig
-		if err := json.Unmarshal([]byte(routingRaw), &routing); err != nil {
-			return fmt.Errorf("SmartDNS 路由设置 JSON 无效: %w", err)
+		if err := json.Unmarshal([]byte(rawRouting), &routing); err != nil {
+			return fmt.Errorf("解析 per-client SmartDNS 路由设置失败: %w", err)
 		}
-		if strings.EqualFold(strings.TrimSpace(routing.Mode), SmartDNSProxyModePerClient) {
-			settings, err := a.store.GetSettings()
-			if err != nil {
-				return fmt.Errorf("读取 Agent DNS ingress 就绪状态失败: %w", err)
-			}
-			if err := validateSmartDNSIngressReadiness(settings, machineCode, routing, time.Now()); err != nil {
-				return fmt.Errorf("Agent DNS ingress 尚未通过生产就绪校验，拒绝发布 per-client 配置: %w", err)
+		proxies, err := a.store.ListProxies()
+		if err != nil {
+			return fmt.Errorf("读取 per-client 代理列表失败: %w", err)
+		}
+		refs := make([]SmartDNSProxyRef, 0, len(proxies))
+		for _, proxy := range proxies {
+			owner := strings.TrimSpace(proxy.MachineCode)
+			if owner == "__GLOBAL__" || owner == machineCode {
+				refs = append(refs, SmartDNSProxyRef{Name: proxy.Name, Enabled: proxy.Enabled})
 			}
 		}
+		var mappings []SmartDNSClientRuntimeMapping
+		yml, generatedPerClientSmartDNS, mappings, err = buildSmartDNSPerClientRuntimeConfigsWithIngress(yml, routing, refs, ingressContract.IPv4Address, ingressContract.IPv6Address)
+		if err != nil {
+			return fmt.Errorf("生成 per-client Mihomo/SmartDNS 联合运行配置失败: %w", err)
+		}
+		if len(mappings) != len(ingressContract.ClientCIDRs) {
+			return fmt.Errorf("per-client 路由映射与已验收 ingress CIDR 数量不一致")
+		}
+		ingressContract.Mappings = smartDNSAgentIngressMappingsFromRuntime(mappings)
 	}
 
 	// SmartDNS is a runtime capability, not part of the saved node configuration.
-	// Apply it only to the outgoing payload so health loss immediately falls back
-	// to the original configured nameservers on the next config request.
+	// Healthy runtimes use the full listener-ready contract. If the runtime is
+	// unhealthy, the host-only provisioning contract above lets this transaction
+	// repair it without relaxing the physical ingress readiness gate.
 	domesticListener, domesticReported := a.agentSmartDNSDomesticListenerStatus(machineCode)
-	if domesticReported {
-		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode), domesticListener)
+	smartDNSHealthy := a.agentHasHealthySmartDNS(machineCode)
+	if ingressContract != nil && !smartDNSHealthy && !usedProvisioningContract {
+		// A fresh host attestation is still mandatory, but an unhealthy local
+		// resolver must be repairable through this same WebSocket config path.
+		// Do not use the full listener-ready contract until the Agent reports
+		// healthy again; its transaction verifies the candidate before commit.
+		provisioning, provisionErr := a.smartDNSIngressProvisioningContractForMachine(machineCode)
+		if provisionErr != nil {
+			return fmt.Errorf("per-client SmartDNS runtime is unhealthy and host ingress provisioning is not ready: %w", provisionErr)
+		}
+		if provisioning == nil {
+			return fmt.Errorf("per-client SmartDNS mode changed while preparing runtime recovery; retry config sync")
+		}
+		ingressContract = provisioning
+		usedProvisioningContract = true
+	}
+	if ingressContract != nil {
+		yml, err = applyAgentRuntimeDNS(yml, true, true)
+	} else if domesticReported {
+		yml, err = applyAgentRuntimeDNS(yml, smartDNSHealthy, domesticListener)
 	} else {
-		yml, err = applyAgentRuntimeDNS(yml, a.agentHasHealthySmartDNS(machineCode))
+		yml, err = applyAgentRuntimeDNS(yml, smartDNSHealthy)
 	}
 	if err != nil {
 		return err
@@ -1258,6 +1368,9 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	if smartDNSErr == sql.ErrNoRows {
 		smartDNSYAML = ""
 	}
+	if ingressContract != nil {
+		smartDNSYAML = generatedPerClientSmartDNS
+	}
 	if len(smartDNSYAML) > 8<<10 {
 		return fmt.Errorf("主控端 SmartDNS 配置超过 8 KiB 限制")
 	}
@@ -1269,7 +1382,7 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	if err := a.store.UpdateSettings(map[string]string{"agent_lastseen_" + machineCode: strconv.FormatInt(time.Now().Unix(), 10)}); err != nil {
 		return err
 	}
-	if clientHash == hash && (smartDNSHash == "" || clientSmartDNSHash == smartDNSHash) {
+	if ingressContract == nil && clientHash == hash && (smartDNSHash == "" || clientSmartDNSHash == smartDNSHash) {
 		if err := writeAgentWSJSON(conn, machineCode, map[string]any{
 			"type": "config.unchanged", "id": requestID, "sha256": hash,
 			"smartdns_sha256": smartDNSHash,
@@ -1283,6 +1396,12 @@ func (a *App) sendAgentWSConfig(conn *websocket.Conn, machineCode, requestID, cl
 	if smartDNSHash != "" {
 		payload["smartdns_sha256"] = smartDNSHash
 		payload["smartdns_yaml"] = smartDNSYAML
+	}
+	if ingressContract != nil {
+		if strings.TrimSpace(smartDNSYAML) == "" {
+			return fmt.Errorf("per-client ingress 已就绪，但缺少主控托管的 SmartDNS 配置；拒绝只发布 Mihomo 配置")
+		}
+		payload["ingress_contract"] = ingressContract
 	}
 	if err := writeAgentWSJSON(conn, machineCode, payload); err != nil {
 		return fmt.Errorf("发送配置失败: %w", err)

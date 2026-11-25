@@ -7,6 +7,8 @@ on:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
       - "scripts/deploy-agent.sh"
+      - "scripts/tests/deploy-agent-rollback.sh"
+      - "scripts/tests/deploy-agent-dns-ingress-guard.sh"
       - "scripts/deploy-s5m-agent.sh"
       - "scripts/s5m-deploy.sh"
       - "scripts/tests/data-dir-safety.sh"
@@ -24,6 +26,8 @@ on:
       - "scripts/install.sh"
       - "scripts/install-server.sh"
       - "scripts/deploy-agent.sh"
+      - "scripts/tests/deploy-agent-rollback.sh"
+      - "scripts/tests/deploy-agent-dns-ingress-guard.sh"
       - "scripts/deploy-s5m-agent.sh"
       - "scripts/s5m-deploy.sh"
       - "scripts/tests/data-dir-safety.sh"
@@ -149,8 +153,10 @@ jobs:
         run: bash scripts/tests/verify-workflow-action-pins.sh
       - name: Test persistent data directory path safety
         run: bash scripts/tests/data-dir-safety.sh
-      - name: Test Agent deployment rollback fault paths
-        run: bash scripts/tests/deploy-agent-rollback.sh
+      - name: Test Agent deployment rollback and DNS ingress fail-closed paths
+        run: |
+          bash scripts/tests/deploy-agent-rollback.sh
+          bash scripts/tests/deploy-agent-dns-ingress-guard.sh
 
       - name: Test no-SmartDNS image selection and pull failure paths
         run: bash scripts/tests/deploy-s5m-agent-image-selection.sh

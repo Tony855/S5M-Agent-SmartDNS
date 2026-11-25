@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,16 +19,23 @@ func readySmartDNSIngressSettings(now time.Time, cidrs ...string) map[string]str
 		"dns_ingress_udp_ready": true,
 		"dns_ingress_tcp_ready": true,
 		"dns_ingress_smartdns_listener_ready": true,
-		"dns_ingress_smartdns_ipv4_bound": true,
-		"dns_ingress_smartdns_ipv4_bind_address": "192.0.2.1",
-		"dns_ingress_smartdns_ipv6_bound": true,
-		"dns_ingress_smartdns_ipv6_bind_address": "2001:db8::1",
 		"dns_ingress_interface": "eth0",
 		"dns_ingress_client_cidrs": cidrs,
-		"dns_ingress_ipv4_ready": true,
-		"dns_ingress_ipv4_address": "192.0.2.1",
-		"dns_ingress_ipv6_ready": true,
-		"dns_ingress_ipv6_address": "2001:db8::1",
+	}
+	for _, cidr := range cidrs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil { continue }
+		if prefix.Addr().Is4() {
+			status["dns_ingress_smartdns_ipv4_bound"] = true
+			status["dns_ingress_smartdns_ipv4_bind_address"] = "192.0.2.1"
+			status["dns_ingress_ipv4_ready"] = true
+			status["dns_ingress_ipv4_address"] = "192.0.2.1"
+		} else {
+			status["dns_ingress_smartdns_ipv6_bound"] = true
+			status["dns_ingress_smartdns_ipv6_bind_address"] = "2001:db8::1"
+			status["dns_ingress_ipv6_ready"] = true
+			status["dns_ingress_ipv6_address"] = "2001:db8::1"
+		}
 	}
 	raw, _ := json.Marshal(status)
 	return map[string]string{
@@ -80,8 +88,6 @@ func TestValidateSmartDNSIngressReadinessChecksOnlyMappedAddressFamilies(t *test
 		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
 	}}
 	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
-	raw := strings.Replace(settings["agent_status_node-a"], `,"dns_ingress_ipv6_ready":true,"dns_ingress_ipv6_address":"2001:db8::1","dns_ingress_smartdns_ipv6_bound":true,"dns_ingress_smartdns_ipv6_bind_address":"2001:db8::1"`, "", 1)
-	settings["agent_status_node-a"] = raw
 	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err != nil {
 		t.Fatalf("IPv4-only route should not require an IPv6 ingress address: %v", err)
 	}
@@ -129,46 +135,208 @@ func TestValidateSmartDNSIngressReadinessRequiresExactFirewallCIDRSet(t *testing
 	}
 }
 
-func TestValidateSmartDNSIngressReadinessRejectsReservedCIDRsAndLinkLocalIngressAddresses(t *testing.T) {
+
+func TestValidateSmartDNSIngressReadinessRejectsDefaultAndMappedCIDRs(t *testing.T) {
 	now := time.Unix(1794560000, 0)
-	proxies := []string{"192.168.50.0/24"}
-	for _, cidr := range []string{"0.0.0.0/0", "::/0", "127.0.0.0/8", "169.254.0.0/16", "fe80::/10", "224.0.0.0/4", "::ffff:192.0.2.0/120"} {
-		t.Run("cidr-"+cidr, func(t *testing.T) {
-			settings := readySmartDNSIngressSettings(now, proxies...)
+	for _, cidr := range []string{"0.0.0.0/0", "::/0", "::ffff:192.0.2.0/120"} {
+		t.Run(cidr, func(t *testing.T) {
 			routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
 				{ClientCIDR: cidr, ProxyName: "proxy-a"},
 			}}
+			settings := readySmartDNSIngressSettings(now, cidr)
 			if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
-				t.Fatalf("unsafe client CIDR %q passed ingress readiness", cidr)
+				t.Fatalf("unsafe CIDR %s accepted by production readiness gate", cidr)
 			}
 		})
 	}
-	t.Run("link-local IPv4 ingress", func(t *testing.T) {
-		settings := readySmartDNSIngressSettings(now, proxies...)
-		settings["agent_status_node-a"] = strings.ReplaceAll(
-			settings["agent_status_node-a"],
-			"192.0.2.1",
-			"169.254.10.1",
-		)
-		routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
-			{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
-		}}
-		if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
-			t.Fatal("link-local IPv4 ingress address passed readiness")
-		}
-	})
-	t.Run("link-local IPv6 ingress", func(t *testing.T) {
-		settings := readySmartDNSIngressSettings(now, "2001:db8:50::/64")
-		settings["agent_status_node-a"] = strings.ReplaceAll(
-			settings["agent_status_node-a"],
-			"2001:db8::1",
-			"fe80::1",
-		)
-		routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
-			{ClientCIDR: "2001:db8:50::/64", ProxyName: "proxy-a"},
-		}}
-		if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
-			t.Fatal("link-local IPv6 ingress address passed readiness")
-		}
-	})
+}
+
+
+func TestValidateSmartDNSIngressReadinessRejectsLinkLocalAddresses(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv4_address"] = "169.254.10.1"
+	status["dns_ingress_smartdns_ipv4_bind_address"] = "169.254.10.1"
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("link-local ingress address accepted")
+	}
+}
+
+
+func TestValidateSmartDNSIngressReadinessRejectsNonRoutableClientCIDRs(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	for _, cidr := range []string{"127.0.0.0/8", "169.254.0.0/16", "fe80::/64", "::1/128"} {
+		t.Run(cidr, func(t *testing.T) {
+			routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+				{ClientCIDR: cidr, ProxyName: "proxy-a"},
+			}}
+			settings := readySmartDNSIngressSettings(now, cidr)
+			if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+				t.Fatalf("non-routable client CIDR %s accepted", cidr)
+			}
+		})
+	}
+}
+
+
+func TestBuildSmartDNSAgentIngressContractFromFreshReadiness(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-v4"},
+		{ClientCIDR: "2001:db8:50::/64", ProxyName: "proxy-v6"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24", "2001:db8:50::/64")
+	contract, err := buildSmartDNSAgentIngressContract(settings, "node-a", routing, now)
+	if err != nil { t.Fatalf("build ingress contract: %v", err) }
+	if contract.Version != 1 || !contract.Ready || contract.IPv4Address != "192.0.2.1" || contract.IPv6Address != "2001:db8::1" {
+		t.Fatalf("unexpected ingress contract: %#v", contract)
+	}
+	if len(contract.ClientCIDRs) != 2 || contract.ClientCIDRs[0] != "192.168.50.0/24" || contract.ClientCIDRs[1] != "2001:db8:50::/64" {
+		t.Fatalf("unexpected contract CIDR set: %#v", contract.ClientCIDRs)
+	}
+}
+
+func TestBuildSmartDNSAgentIngressContractRejectsStaleOrIncompleteStatus(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-v4"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	delete(settings, "agent_status_node-a")
+	if _, err := buildSmartDNSAgentIngressContract(settings, "node-a", routing, now); err == nil {
+		t.Fatal("contract builder accepted missing Agent readiness status")
+	}
+}
+
+
+func TestValidateSmartDNSIngressReadinessRejectsIPv4MappedIPv6Addresses(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv4_address"] = "::ffff:192.0.2.1"
+	status["dns_ingress_smartdns_ipv4_bind_address"] = "::ffff:192.0.2.1"
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("IPv4-mapped IPv6 ingress address accepted as IPv4")
+	}
+}
+
+
+func TestSmartDNSIngressProvisioningAllowsFirstBindButPublicationRequiresRuntimeReady(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ready"] = false
+	status["dns_ingress_smartdns_listener_ready"] = false
+	status["dns_ingress_smartdns_ipv4_bound"] = false
+	status["dns_ingress_smartdns_ipv4_bind_address"] = ""
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressProvisioning(settings, "node-a", routing, now); err != nil {
+		t.Fatalf("valid host-side provisioning state rejected before first SmartDNS bind: %v", err)
+	}
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("runtime publication gate accepted an Agent before SmartDNS ingress bind")
+	}
+	contract, err := buildSmartDNSAgentIngressProvisioningContract(settings, "node-a", routing, now)
+	if err != nil || !contract.Ready || contract.IPv4Address != "192.0.2.1" {
+		t.Fatalf("provisioning contract = %#v, err=%v", contract, err)
+	}
+}
+
+
+func TestValidateSmartDNSIngressReadinessRejectsReservedCIDRsAndLinkLocalIngressAddresses(t *testing.T) {
+ now:=time.Unix(1794560000,0)
+ for _,cidr:=range []string{"0.0.0.0/0","::/0","127.0.0.0/8","169.254.0.0/16","fe80::/10","224.0.0.0/4","::ffff:192.0.2.0/120"} {
+  t.Run("cidr-"+cidr,func(t *testing.T){
+   settings:=readySmartDNSIngressSettings(now,"192.168.50.0/24")
+   routing:=SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:cidr,ProxyName:"proxy-a"}}}
+   if err:=validateSmartDNSIngressReadiness(settings,"node-a",routing,now);err==nil { t.Fatalf("unsafe CIDR %q passed readiness",cidr) }
+  })
+ }
+ for _,tc:=range []struct{address string;cidr string}{{"169.254.10.1","192.168.50.0/24"},{"fe80::1","2001:db8:50::/64"}} {
+  t.Run("ingress-"+tc.address,func(t *testing.T){
+   settings:=readySmartDNSIngressSettings(now,tc.cidr)
+   var status map[string]any
+   if err:=json.Unmarshal([]byte(settings["agent_status_node-a"]),&status);err!=nil {t.Fatal(err)}
+   if strings.Contains(tc.address,":") {status["dns_ingress_ipv6_address"]=tc.address;status["dns_ingress_smartdns_ipv6_bind_address"]=tc.address} else {status["dns_ingress_ipv4_address"]=tc.address;status["dns_ingress_smartdns_ipv4_bind_address"]=tc.address}
+   raw,err:=json.Marshal(status);if err!=nil {t.Fatal(err)}
+   settings["agent_status_node-a"]=string(raw)
+   routing:=SmartDNSRoutingConfig{Mode:SmartDNSProxyModePerClient,Clients:[]SmartDNSClientRoute{{ClientCIDR:tc.cidr,ProxyName:"proxy-a"}}}
+   if err:=validateSmartDNSIngressReadiness(settings,"node-a",routing,now);err==nil {t.Fatal("link-local ingress address accepted")}
+  })
+ }
+}
+
+func TestValidateSmartDNSIngressReadinessRejectsIngressInsideClientCIDRAndExtraFamily(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.0.2.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.0.2.0/24")
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("ingress address inside client CIDR was accepted")
+	}
+
+	routing = SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings = readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv6_address"] = "2001:db8::1"
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("extra unmapped IPv6 ingress address was accepted")
+	}
+}
+
+func TestValidateSmartDNSIngressReadinessRejectsNonCanonicalIngressAddress(t *testing.T) {
+	now := time.Unix(1794560000, 0)
+	routing := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a"},
+	}}
+	settings := readySmartDNSIngressSettings(now, "192.168.50.0/24")
+	var status map[string]any
+	if err := json.Unmarshal([]byte(settings["agent_status_node-a"]), &status); err != nil { t.Fatal(err) }
+	status["dns_ingress_ipv4_address"] = " 192.0.2.1 "
+	raw, err := json.Marshal(status)
+	if err != nil { t.Fatal(err) }
+	settings["agent_status_node-a"] = string(raw)
+	if err := validateSmartDNSIngressReadiness(settings, "node-a", routing, now); err == nil {
+		t.Fatal("non-canonical ingress address was accepted")
+	}
+}
+
+func TestSmartDNSAgentIngressMappingsFromRuntimePreservesExactAssignments(t *testing.T) {
+	got := smartDNSAgentIngressMappingsFromRuntime([]SmartDNSClientRuntimeMapping{{
+		ClientCIDR: "192.168.50.0/24", ProxyName: "proxy-a",
+		ListenerName: "s5m-smartdns-16000", ListenerAddress: "127.0.0.1", ListenerPort: 16000,
+	}})
+	if len(got) != 1 || got[0].ClientCIDR != "192.168.50.0/24" ||
+		got[0].ProxyName != "proxy-a" || got[0].ListenerName != "s5m-smartdns-16000" ||
+		got[0].ListenerAddress != "127.0.0.1" || got[0].ListenerPort != 16000 {
+		t.Fatalf("runtime mapping was not preserved in the Agent contract: %#v", got)
+	}
 }

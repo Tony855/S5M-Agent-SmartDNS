@@ -346,3 +346,190 @@ func TestRecoverInterruptedConfigTransactionRetainsJournalIfResidualSmartDNSCann
 		t.Fatalf("recovery journal must remain for retry: %v", err)
 	}
 }
+
+
+func TestRecoverInterruptedPerClientTransactionUsesIngressAwareHealthProbe(t *testing.T) {
+	dir, _ := setupConfigTransactionFixture(t)
+	oldDisabledPath := smartDNSDisabledPath
+	smartDNSDisabledPath = filepath.Join(dir, "smartdns.disabled")
+	t.Cleanup(func() { smartDNSDisabledPath = oldDisabledPath })
+
+	oldConfig := []byte("proxy-server socks5://127.0.0.1:15000 -name s5m-smartdns-15000\\n")
+	writeRecoveryFixtureFile(t, filepath.Join(dir, "smartdns.conf"), []byte("uncommitted-smartdns"))
+	restartCalls, perClientProbeCalls := 0, 0
+	transactionRestartSmartDNS = func() error { restartCalls++; return nil }
+	transactionReloadMihomo = func() error { return nil }
+	transactionWaitSmartDNSHealthy = func(time.Duration) bool {
+		t.Fatal("per-client recovery must not use the shared loopback health probe")
+		return false
+	}
+	transactionReadSmartDNSHostIngressAttestation = func() (smartDNSHostIngressAttestation, error) {
+		return smartDNSHostIngressAttestation{
+			Version: 1, UpdatedAt: time.Now().Unix(), Interface: "eth1",
+			IPv4Address: "172.31.10.2", ClientCIDRs: []string{"192.168.50.0/24"},
+			SourceIPPreserved: true, FirewallReady: true, FirewallPersistent: true,
+			UDPReady: true, TCPReady: true,
+		}, nil
+	}
+	transactionWaitSmartDNSPerClientHealthy = func(data []byte, attestation smartDNSHostIngressAttestation, timeout time.Duration) bool {
+		perClientProbeCalls++
+		if !bytes.Equal(data, oldConfig) {
+			t.Fatalf("recovery probe received %q, want restored config %q", data, oldConfig)
+		}
+		if attestation.IPv4Address != "172.31.10.2" || timeout != 5*time.Second {
+			t.Fatalf("recovery probe received wrong attestation/timeout: %#v %s", attestation, timeout)
+		}
+		return true
+	}
+
+	record := configTransactionRecoveryRecord{
+		Version: 1, Phase: "prepared",
+		SmartDNS: transactionRecoveryFile{Data: oldConfig, Existed: true},
+		Mihomo: transactionRecoveryFile{Data: []byte("old-mihomo"), Existed: true},
+		ManagedRoutes: transactionRecoveryFile{Data: []byte("old-routes"), Existed: true},
+		Controller: transactionRecoveryFile{Data: []byte("old-controller"), Existed: true},
+	}
+	if err := writeConfigTransactionRecoveryRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverInterruptedConfigTransaction(); err != nil {
+		t.Fatalf("recover per-client transaction: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "smartdns.conf"))
+	if err != nil || !bytes.Equal(got, oldConfig) {
+		t.Fatalf("recovered per-client SmartDNS config = %q, err=%v; want %q", got, err, oldConfig)
+	}
+	if restartCalls != 1 || perClientProbeCalls != 1 {
+		t.Fatalf("per-client recovery must restart and run the contract-aware probe: restarts=%d probes=%d", restartCalls, perClientProbeCalls)
+	}
+	if _, err := os.Lstat(configTransactionRecoveryPath()); !os.IsNotExist(err) {
+		t.Fatalf("journal should be removed only after successful per-client recovery: %v", err)
+	}
+}
+
+
+func TestReadConfigTransactionRecoveryRecordRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	journal := []byte(`{"version":1,"phase":"prepared","unexpected_runtime_override":true}`)
+	if err := os.WriteFile(configTransactionRecoveryPath(), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readConfigTransactionRecoveryRecord(); err == nil {
+		t.Fatal("recovery journal with unknown fields must be rejected")
+	}
+}
+
+func TestReadConfigTransactionRecoveryRecordRejectsMultipleJSONValues(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	journal := []byte(`{"version":1,"phase":"prepared"} {"version":1,"phase":"committed"}`)
+	if err := os.WriteFile(configTransactionRecoveryPath(), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readConfigTransactionRecoveryRecord(); err == nil {
+		t.Fatal("recovery journal with multiple JSON values must be rejected")
+	}
+}
+
+
+func TestReadConfigTransactionRecoveryRecordRejectsIncompleteSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	valid := `{"version":1,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`
+	cases := []struct {
+		name string
+		data string
+	}{
+		{name: "missing SmartDNS snapshot", data: `{"version":1,"phase":"prepared","mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "null SmartDNS snapshot", data: `{"version":1,"phase":"prepared","smartdns":null,"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "missing snapshot existed", data: `{"version":1,"phase":"prepared","smartdns":{"data":""},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "null data for existing snapshot", data: `{"version":1,"phase":"prepared","smartdns":{"data":null,"existed":true},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "snapshot not object", data: `{"version":1,"phase":"prepared","smartdns":[],"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "null version", data: `{"version":null,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+		{name: "valid control", data: valid},
+		{name: "null data for absent snapshot", data: `{"version":1,"phase":"prepared","smartdns":{"data":null,"existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(configTransactionRecoveryPath(), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := readConfigTransactionRecoveryRecord()
+			if tc.name == "valid control" || tc.name == "null data for absent snapshot" {
+				if err != nil { t.Fatalf("valid journal rejected: %v", err) }
+			} else if err == nil {
+				t.Fatal("incomplete recovery journal must be rejected")
+			}
+		})
+	}
+}
+
+func TestReadConfigTransactionRecoveryRecordRejectsDuplicateJSONKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	cases := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "duplicate top-level version",
+			data: `{"version":1,"version":1,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+		},
+		{
+			name: "duplicate nested existed",
+			data: `{"version":1,"phase":"prepared","smartdns":{"data":"","existed":false,"existed":true},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(configTransactionRecoveryPath(), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readConfigTransactionRecoveryRecord(); err == nil {
+				t.Fatal("recovery journal with duplicate JSON keys must be rejected")
+			}
+		})
+	}
+}
+
+
+// JSON member names are compared after escape decoding. Otherwise an attacker
+// could spell the same schema key in two different JSON encodings and rely on
+// downstream decoders' last-key-wins behavior.
+func TestReadConfigTransactionRecoveryRecordRejectsEscapedDuplicateJSONKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIHOMO_HOME", dir)
+	cases := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "escaped top-level alias",
+			data: `{"version":1,"vers\u0069on":1,"phase":"prepared","smartdns":{"data":"","existed":false},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+		},
+		{
+			name: "escaped nested alias",
+			data: `{"version":1,"phase":"prepared","smartdns":{"data":"","existed":false,"ex\u0069sted":true},"mihomo":{"data":"","existed":false},"managed_routes":{"data":"","existed":false},"controller":{"data":"","existed":false}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(configTransactionRecoveryPath(), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readConfigTransactionRecoveryRecord(); err == nil {
+				t.Fatal("recovery journal with escaped duplicate JSON keys must be rejected")
+			}
+		})
+	}
+}
+
+func TestRejectDuplicateJSONKeysChecksNestedObjectsWithoutCrossObjectCollisions(t *testing.T) {
+	if err := rejectDuplicateJSONKeys([]byte(`{"items":[{"name":"one"},{"name":"two"}]}`)); err != nil {
+		t.Fatalf("same member name in separate objects should be accepted: %v", err)
+	}
+	if err := rejectDuplicateJSONKeys([]byte(`{"items":[{"name":"one","na\u006de":"two"}]}`)); err == nil {
+		t.Fatal("escaped duplicate member in nested array object must be rejected")
+	}
+}

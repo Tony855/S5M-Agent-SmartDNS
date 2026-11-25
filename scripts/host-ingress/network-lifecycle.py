@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""Provision the dedicated routed Docker bridge for S5M Agent DNS ingress.
+
+Run only on the Docker host as root. This helper never runs in the Agent
+container and never changes host routes. Host-published 6055 ports are
+ephemeral and loopback-only; remote clients use direct routed ingress.
+"""
+from __future__ import annotations
+import argparse, importlib.util, fcntl, ipaddress, json, os, re, stat, subprocess, sys
+from contextlib import contextmanager
+from pathlib import Path
+
+LOCK = Path(os.environ.get("S5M_INGRESS_LOCK", "/run/s5m-agent-ingress/controller.lock"))
+
+OWNER = "com.s5m.managed"
+VALUE = "s5m-agent-dns-ingress"
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+
+class LifecycleError(RuntimeError): pass
+
+def secure_read(path: Path, max_bytes: int, *, require_root: bool = True) -> bytes:
+    if require_root:
+        current=Path("/")
+        for part in path.absolute().parts[1:-1]:
+            current=current/part
+            parent_st=current.lstat()
+            if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid!=0 or parent_st.st_mode & 0o022:
+                raise LifecycleError(f"config parent {current} must be root-owned and non-writable")
+    expected_owner=0 if require_root else os.geteuid()
+    st=path.lstat()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid!=expected_owner or st.st_mode & 0o077 or st.st_size>max_bytes:
+        raise LifecycleError(f"{path} must be an appropriately owned regular file, mode 0600 or stricter, and <= {max_bytes} bytes")
+    flags=os.O_RDONLY | getattr(os,"O_NOFOLLOW",0) | getattr(os,"O_CLOEXEC",0)
+    fd=os.open(path,flags)
+    try:
+        opened=os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid!=expected_owner or opened.st_mode & 0o077 or opened.st_size>max_bytes:
+            raise LifecycleError(f"{path} changed while opening")
+        chunks=[]; total=0
+        while True:
+            chunk=os.read(fd,min(4096,max_bytes+1-total))
+            if not chunk: break
+            chunks.append(chunk); total+=len(chunk)
+            if total>max_bytes: raise LifecycleError(f"{path} exceeds {max_bytes} bytes")
+        return b"".join(chunks)
+    finally: os.close(fd)
+
+def read_config(path: Path, *, require_root: bool = True) -> dict:
+    raw=secure_read(path,8192,require_root=require_root)
+    try: cfg = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as e: raise LifecycleError("config must be valid UTF-8 JSON") from e
+    keys = {"version","network","container","interface","ipv4_subnet","ipv4_gateway","ipv4_address","ipv6_subnet","ipv6_gateway","ipv6_address","client_cidrs"}
+    if not isinstance(cfg,dict) or set(cfg) != keys or type(cfg["version"]) is not int or cfg["version"] != 1:
+        raise LifecycleError("invalid config schema/version")
+    for key in ("network","container"):
+        if not isinstance(cfg[key],str) or not NAME_RE.fullmatch(cfg[key]): raise LifecycleError(f"invalid {key}")
+    if not isinstance(cfg["interface"],str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}",cfg["interface"]):
+        raise LifecycleError("invalid trusted host interface")
+    values={}
+    for family in (4,6):
+        suffix=f"ipv{family}"
+        fields=[cfg[f"{suffix}_{x}"] for x in ("subnet","gateway","address")]
+        if family == 4 and any(x is None for x in fields): raise LifecycleError("IPv4 subnet, gateway and address are required")
+        if family == 6 and not all(x is None for x in fields) and any(x is None for x in fields): raise LifecycleError("IPv6 fields must be all present or all null")
+        if all(x is None for x in fields): continue
+        try:
+            net=ipaddress.ip_network(fields[0],strict=True); gw=ipaddress.ip_address(fields[1]); addr=ipaddress.ip_address(fields[2])
+        except ValueError as e: raise LifecycleError(f"invalid {suffix} network/gateway/address") from e
+        if net.version != family or gw.version != family or addr.version != family or gw not in net or addr not in net:
+            raise LifecycleError(f"{suffix} family/range mismatch")
+        if any(x.is_unspecified or x.is_loopback or x.is_link_local or x.is_multicast for x in (gw,addr)):
+            raise LifecycleError(f"{suffix} gateway/address must be routable unicast")
+        if gw == addr or gw == net.network_address or addr == net.network_address or (family == 4 and (gw == net.broadcast_address or addr == net.broadcast_address)):
+            raise LifecycleError(f"{suffix} gateway/address conflicts with network boundary")
+        if family == 4 and net.prefixlen > 30:
+            raise LifecycleError("IPv4 Docker bridge subnet must be /30 or larger")
+        if family == 6 and net.prefixlen > 120:
+            raise LifecycleError("IPv6 Docker bridge subnet must be /120 or larger")
+        values[family]=(net,gw,addr)
+    if 4 not in values: raise LifecycleError("IPv4 ingress is mandatory")
+    if len(values)==2 and values[4][0].overlaps(values[6][0]): raise LifecycleError("overlapping address families")
+    cidr_values=cfg["client_cidrs"]
+    if not isinstance(cidr_values,list) or not cidr_values or len(cidr_values)>128:
+        raise LifecycleError("client_cidrs must contain 1..128 entries")
+    client_networks=[]
+    for value in cidr_values:
+        if not isinstance(value,str): raise LifecycleError("each client CIDR must be a string")
+        try: net=ipaddress.ip_network(value,strict=True)
+        except ValueError as e: raise LifecycleError(f"invalid or non-canonical client CIDR: {value}") from e
+        if net.prefixlen==0 or net.is_loopback or net.is_link_local or net.is_multicast or net.is_unspecified or net.is_reserved or getattr(net.network_address,"ipv4_mapped",None):
+            raise LifecycleError(f"client CIDR is not an allowed unicast network: {value}")
+        client_networks.append(net)
+    if len(set(client_networks))!=len(client_networks): raise LifecycleError("duplicate client CIDR")
+    for i,left in enumerate(client_networks):
+        for right in client_networks[i+1:]:
+            if left.version==right.version and left.overlaps(right): raise LifecycleError("overlapping client CIDRs")
+    if {n.version for n in client_networks}!=set(values):
+        raise LifecycleError("client CIDR families must exactly match configured ingress address families")
+    for client_net in client_networks:
+        for ingress_net,_,_ in values.values():
+            if client_net.version==ingress_net.version and client_net.overlaps(ingress_net):
+                raise LifecycleError("client CIDRs must not overlap the routed Docker ingress subnet")
+    cfg["_networks"]=values
+    cfg["_client_networks"]=client_networks
+    return cfg
+
+def run(args, *, check=True):
+    p=subprocess.run(args,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if check and p.returncode: raise LifecycleError(f"command failed ({p.returncode}): {' '.join(args)}: {p.stderr.strip()}")
+    return p
+
+
+@contextmanager
+def host_ingress_lock():
+    LOCK.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    parent_st = LOCK.parent.lstat()
+    if not stat.S_ISDIR(parent_st.st_mode) or parent_st.st_uid != 0 or parent_st.st_mode & 0o022:
+        raise LifecycleError("host ingress lock directory must be root-owned and not group/world writable")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(LOCK, flags, 0o600)
+    try:
+        lock_st = os.fstat(fd)
+        if not stat.S_ISREG(lock_st.st_mode) or lock_st.st_uid != 0 or lock_st.st_mode & 0o022:
+            raise LifecycleError("host ingress lock must be a root-owned regular file and not group/world writable")
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "r+") as lock:
+            fd = -1
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def verify_live_firewall(firewall_config_path: Path) -> None:
+    controller = Path(__file__).with_name("controller.py")
+    if not controller.is_file() or controller.is_symlink():
+        raise LifecycleError("restricted host firewall controller is missing; refusing routed Docker ingress")
+    run([sys.executable, str(controller), "verify", "--config", str(firewall_config_path)])
+
+def validate_firewall_contract(cfg: dict, path: Path, *, require_root: bool = True) -> None:
+    raw=secure_read(path,16384,require_root=require_root)
+    try: fw=json.loads(raw)
+    except (UnicodeDecodeError,json.JSONDecodeError) as e: raise LifecycleError("firewall config must be valid UTF-8 JSON") from e
+    required={"version","interface","ipv4_address","ipv6_address","client_cidrs"}
+    if not isinstance(fw,dict) or set(fw)!=required or type(fw["version"]) is not int or fw["version"]!=1:
+        raise LifecycleError("firewall config schema/version mismatch")
+    expected4=str(cfg["_networks"][4][2])
+    expected6=str(cfg["_networks"][6][2]) if 6 in cfg["_networks"] else None
+    cidrs=sorted(str(net) for net in cfg["_client_networks"])
+    if fw["interface"]!=cfg["interface"] or fw["ipv4_address"]!=expected4 or fw["ipv6_address"]!=expected6:
+        raise LifecycleError("firewall config interface/ingress addresses do not match routed Docker network config")
+    if not isinstance(fw["client_cidrs"],list) or sorted(fw["client_cidrs"])!=cidrs:
+        raise LifecycleError("firewall config client CIDRs do not exactly match routed Docker network config")
+
+def inspect_network(name):
+    p=run(["docker","network","inspect",name],check=False)
+    if p.returncode: return None
+    try: data=json.loads(p.stdout)[0]
+    except Exception as e: raise LifecycleError(f"cannot parse Docker network inspect: {e}") from e
+    return data
+
+def labels(network):
+    return network.get("Labels") or {}
+
+def expected_subnets(cfg):
+    return {f: (str(v[0]),str(v[1])) for f,v in cfg["_networks"].items()}
+
+def validate_existing(net,cfg):
+    if labels(net).get(OWNER)!=VALUE: raise LifecycleError("network name already exists but is not owned by S5M ingress lifecycle")
+    if net.get("Driver")!="bridge": raise LifecycleError("managed network driver drift")
+    # Docker's network-level routing flags are security-relevant state, not
+    # defaults to assume. Refuse reuse when the live topology differs.
+    if (
+        net.get("Scope") != "local"
+        or net.get("Internal") is not False
+        or net.get("Attachable") is not False
+        or net.get("Ingress") is not False
+        or net.get("EnableIPv6") is not (6 in cfg["_networks"])
+    ):
+        raise LifecycleError("managed network scope/internal/attachable/ingress/IPv6 flags drifted from the routed ingress contract")
+    ipam_state=net.get("IPAM")
+    if not isinstance(ipam_state,dict):
+        raise LifecycleError("managed network IPAM state is missing")
+    ipam=ipam_state.get("Config")
+    expected=expected_subnets(cfg)
+    if not isinstance(ipam,list) or len(ipam)!=len(expected):
+        raise LifecycleError("managed network must contain exactly one IPAM subnet per configured address family")
+    actual={}
+    for item in ipam:
+        if not isinstance(item,dict):
+            raise LifecycleError("managed network has malformed IPAM config")
+        try:
+            n=ipaddress.ip_network(item.get("Subnet",""),strict=True)
+            gateway=ipaddress.ip_address(item.get("Gateway",""))
+        except (TypeError,ValueError):
+            raise LifecycleError("managed network has malformed IPAM config")
+        if n.version!=gateway.version or gateway not in n:
+            raise LifecycleError("managed network has an invalid IPAM gateway")
+        if n.version in actual:
+            raise LifecycleError("managed network contains duplicate IPAM subnets for one address family")
+        actual[n.version]=(str(n),str(gateway))
+    if actual!=expected: raise LifecycleError("managed network subnet/gateway drift; refusing destructive repair")
+    opts=net.get("Options")
+    required={"com.docker.network.bridge.gateway_mode_ipv4":"routed",
+              "com.docker.network.bridge.trusted_host_interfaces":cfg["interface"]}
+    if 6 in cfg["_networks"]: required["com.docker.network.bridge.gateway_mode_ipv6"]="routed"
+    # The routed source-preservation proof is valid only for the exact options
+    # created by this lifecycle. Unknown bridge options can change NAT,
+    # isolation, host binding or interface semantics; accepting a required
+    # subset would let an unreviewed option ride along with a valid attestation.
+    if not isinstance(opts, dict) or opts != required:
+        raise LifecycleError("managed network options must exactly match the routed ingress contract")
+    return net
+
+def create_network(cfg):
+    args=["docker","network","create","--driver","bridge","--label",f"{OWNER}={VALUE}",
+          "--opt","com.docker.network.bridge.gateway_mode_ipv4=routed",
+          "--opt",f"com.docker.network.bridge.trusted_host_interfaces={cfg['interface']}"]
+    if 6 in cfg["_networks"]: args += ["--ipv6","--opt","com.docker.network.bridge.gateway_mode_ipv6=routed"]
+    for f,(net,gw,addr) in cfg["_networks"].items():
+        args += ["--subnet",str(net),"--gateway",str(gw)]
+    args += [cfg["network"]]
+    run(args)
+
+def host_next_hops(cfg):
+    result=run(["ip","-j","addr","show","dev",cfg["interface"]])
+    try: devices=json.loads(result.stdout)
+    except json.JSONDecodeError as e: raise LifecycleError("cannot parse host interface addresses") from e
+    candidates={4:[],6:[]}
+    for device in devices:
+        for item in device.get("addr_info",[]):
+            if item.get("scope")!="global": continue
+            flags={flag for flag in item.get("flags",[]) if isinstance(flag,str)} if isinstance(item.get("flags",[]),list) else set()
+            if item.get("temporary") is True or flags.intersection({"temporary","tentative","dadfailed","deprecated"}): continue
+            try: address=ipaddress.ip_address(item.get("local",""))
+            except ValueError: continue
+            if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or getattr(address,"ipv4_mapped",None):
+                continue
+            candidates[address.version].append(str(address))
+    next_hops={}
+    for family in cfg["_networks"]:
+        if not candidates[family]:
+            raise LifecycleError(f"trusted ingress interface {cfg['interface']} has no global IPv{family} address for the upstream router static route")
+        next_hops[family]=sorted(candidates[family], key=lambda value: int(ipaddress.ip_address(value)))[0]
+    return next_hops
+
+def inspect_container(name):
+    p=run(["docker","inspect",name])
+    try: return json.loads(p.stdout)[0]
+    except Exception as e: raise LifecycleError(f"cannot inspect container: {e}") from e
+
+def validate_dns_port_bindings(container: dict, cfg: dict) -> None:
+    networks=container.get("NetworkSettings",{}).get("Networks") or {}
+    routed_attached=cfg["network"] in networks
+    ports=container.get("NetworkSettings",{}).get("Ports") or {}
+    for proto in ("udp","tcp"):
+        entries=ports.get(f"6055/{proto}") or []
+        ipv4_loopback=[x for x in entries if x.get("HostIp")=="127.0.0.1" and str(x.get("HostPort","")).isdigit() and 1<=int(x["HostPort"])<=65535]
+        if len(ipv4_loopback)!=1:
+            raise LifecycleError(f"DNS 6055/{proto} must have exactly one IPv4 host mapping bound to 127.0.0.1 with an allocated ephemeral port; found {entries!r}")
+        allowed=[*ipv4_loopback]
+        if 6 in cfg["_networks"]:
+            ipv6_loopback=[x for x in entries if x.get("HostIp")=="::1" and str(x.get("HostPort","")).isdigit() and 1<=int(x["HostPort"])<=65535]
+            if len(ipv6_loopback)!=1:
+                raise LifecycleError(f"DNS 6055/{proto} must have exactly one IPv6 host mapping bound to ::1 with an allocated ephemeral port; found {entries!r}")
+            allowed.extend(ipv6_loopback)
+        if routed_attached:
+            routed_v4=[x for x in entries if x.get("HostIp")=="0.0.0.0" and x.get("HostPort","") in ("",None)]
+            if len(routed_v4)!=1:
+                raise LifecycleError(f"routed IPv4 DNS 6055/{proto} mapping must have an empty host port; found {entries!r}")
+            allowed.extend(routed_v4)
+            if 6 in cfg["_networks"]:
+                routed_v6=[x for x in entries if x.get("HostIp")=="::" and x.get("HostPort","") in ("",None)]
+                if len(routed_v6)!=1:
+                    raise LifecycleError(f"routed IPv6 DNS 6055/{proto} mapping must have an empty host port; refuse public IPv6 exposure")
+                allowed.extend(routed_v6)
+        if len(entries)!=len(allowed):
+            raise LifecycleError(f"DNS 6055/{proto} contains an unexpected or public host binding: {entries!r}")
+
+def container_networks(name):
+    return inspect_container(name)["NetworkSettings"]["Networks"]
+
+def default_routes(container):
+    v4=run(["docker","exec",container,"ip","-4","route","show","default"]).stdout.strip().splitlines()
+    v6=run(["docker","exec",container,"ip","-6","route","show","default"],check=False).stdout.strip().splitlines()
+    return v4,v6
+
+def default_bridge_interfaces(container, bridge, families):
+    """Resolve the container interface that owns each Docker default-bridge IP.
+
+    A matching gateway alone is insufficient: a stale or malicious route can
+    use the same next hop on a different interface. Bind the route check to the
+    interface that actually owns Docker's default-bridge endpoint address.
+    """
+    expected = {}
+    for family in families:
+        if family not in (4, 6) or family in expected:
+            raise LifecycleError("invalid or duplicate default-bridge address family")
+        field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+        raw = bridge.get(field) if isinstance(bridge, dict) else None
+        try:
+            address = ipaddress.ip_address(raw)
+        except (TypeError, ValueError):
+            raise LifecycleError(f"default bridge has no valid IPv{family} endpoint address")
+        if address.version != family or address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast:
+            raise LifecycleError(f"default bridge IPv{family} endpoint address is unusable")
+        expected[family] = str(address)
+    if not expected:
+        raise LifecycleError("no default-bridge address families were requested")
+
+    # The production Agent image is Alpine/BusyBox and does not ship
+    # iproute2's JSON output mode. Use portable one-line output supported by
+    # both BusyBox ip and iproute2.
+    link_result = run(["docker", "exec", container, "ip", "-o", "link", "show"])
+    address_result = run(["docker", "exec", container, "ip", "-o", "addr", "show"])
+
+    active_interfaces = set()
+    for line in link_result.stdout.splitlines():
+        match = re.match(r"^\d+:\s+([^:]+):\s+<([^>]*)>", line.strip())
+        if not match:
+            raise LifecycleError("Agent interface link snapshot is malformed")
+        name = match.group(1).split("@", 1)[0]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", name) or name in active_interfaces:
+            raise LifecycleError("Agent interface link snapshot contains an invalid or duplicate interface")
+        flags = set(match.group(2).split(","))
+        if "UP" in flags:
+            active_interfaces.add(name)
+
+    matches = {family: set() for family in expected}
+    for line in address_result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        name = fields[1].rstrip(":").split("@", 1)[0]
+        family_name = fields[2]
+        if name not in active_interfaces or family_name not in ("inet", "inet6"):
+            continue
+        if "scope" not in fields:
+            continue
+        scope_index = fields.index("scope")
+        if scope_index + 1 >= len(fields) or fields[scope_index + 1] != "global":
+            continue
+        try:
+            address = ipaddress.ip_address(fields[3].split("/", 1)[0])
+        except ValueError:
+            continue
+        for family, expected_address in expected.items():
+            if address.version == family and str(address) == expected_address:
+                matches[family].add(name)
+
+    resolved = {}
+    for family, interfaces in matches.items():
+        if len(interfaces) != 1:
+            raise LifecycleError(f"default bridge IPv{family} endpoint must belong to exactly one active Agent interface")
+        resolved[family] = next(iter(interfaces))
+    return resolved
+
+
+def preserves_single_default_route(routes, gateway, expected_interface):
+    """Require one default route with the exact Docker gateway and bridge device.
+
+    Checking only the gateway can accept a route through the routed ingress
+    interface when addresses or route state drift. The device must be the
+    unique active interface owning Docker's default-bridge endpoint address.
+    """
+    entries = [line.strip() for line in routes if line.strip()]
+    if (
+        len(entries) != 1
+        or not isinstance(gateway, str)
+        or not isinstance(expected_interface, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", expected_interface)
+    ):
+        return False
+    fields = entries[0].split()
+    if (
+        not fields
+        or fields[0] != "default"
+        or fields.count("via") != 1
+        or fields.count("dev") != 1
+    ):
+        return False
+    try:
+        expected = ipaddress.ip_address(gateway)
+        via_index = fields.index("via")
+        dev_index = fields.index("dev")
+        if via_index + 1 >= len(fields) or dev_index + 1 >= len(fields):
+            return False
+        observed = ipaddress.ip_address(fields[via_index + 1])
+        observed_interface = fields[dev_index + 1]
+    except (TypeError, ValueError):
+        return False
+    return observed == expected and observed_interface == expected_interface
+
+
+def validate_default_bridge_egress(container, bridge, families):
+    routes = default_routes(container)
+    interfaces = default_bridge_interfaces(container, bridge, families)
+    for family in families:
+        gateway_field = "Gateway" if family == 4 else "IPv6Gateway"
+        gateway = bridge.get(gateway_field) if isinstance(bridge, dict) else None
+        route = routes[0] if family == 4 else routes[1]
+        if not gateway or not preserves_single_default_route(route, gateway, interfaces[family]):
+            raise LifecycleError(
+                f"default IPv{family} egress changed; expected exactly one default route "
+                f"via bridge gateway {gateway} dev {interfaces[family]}, got {route}"
+            )
+
+def routeros_v7_route(subnet, next_hop):
+    family = 6 if ":" in str(subnet) or ":" in str(next_hop) else 4
+    command = "/ipv6 route add" if family == 6 else "/ip route add"
+    return f'{command} dst-address={subnet} gateway={next_hop} comment="S5M-Agent DNS ingress"'
+
+def validate_network_endpoint_state(net, cfg, target, target_attached, previous_container=None):
+    endpoints = net.get("Containers") or {}
+    if not isinstance(endpoints, dict):
+        raise LifecycleError("Docker ingress network endpoint state is malformed")
+    target_id = target.get("Id")
+    if not isinstance(target_id, str) or not target_id:
+        raise LifecycleError("target Agent container ID is unavailable for routed endpoint verification")
+    if target_attached != (target_id in endpoints):
+        raise LifecycleError("Docker network and target container endpoint snapshots disagree")
+
+    allowed_ids = {target_id}
+    previous_attached = False
+    if previous_container:
+        if previous_container == cfg["container"] or not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$", previous_container):
+            raise LifecycleError("previous container name is invalid")
+        previous = inspect_container(previous_container)
+        previous_id = previous.get("Id")
+        if not isinstance(previous_id, str) or not previous_id:
+            raise LifecycleError("previous Agent container ID is unavailable for routed endpoint handoff")
+        if previous_id == target_id:
+            raise LifecycleError("old and new Agent container IDs must be distinct during endpoint handoff")
+        allowed_ids.add(previous_id)
+        previous_networks = previous.get("NetworkSettings", {}).get("Networks") or {}
+        previous_attached = cfg["network"] in previous_networks
+        if previous_attached != (previous_id in endpoints):
+            raise LifecycleError("previous container and Docker network endpoint snapshots disagree")
+        if previous_attached:
+            if target_attached:
+                raise LifecycleError("both old and new Agent containers are attached to the same routed ingress network")
+            if (previous.get("State") or {}).get("Running") is not False:
+                raise LifecycleError("previous Agent container must be stopped before routed endpoint handoff")
+            endpoint = previous_networks[cfg["network"]]
+            for family, (_, _, address) in cfg["_networks"].items():
+                field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+                if endpoint.get(field) != str(address):
+                    raise LifecycleError(f"previous container has an unexpected IPv{family} ingress address")
+            if "bridge" not in previous_networks:
+                raise LifecycleError("previous Agent container must retain the default bridge before ingress handoff")
+            validate_dns_port_bindings(previous, cfg)
+
+    unexpected_ids = set(endpoints) - allowed_ids
+    if unexpected_ids:
+        names = sorted(
+            value.get("Name", "<unknown>")
+            for endpoint_id, value in endpoints.items()
+            if endpoint_id in unexpected_ids and isinstance(value, dict)
+        )
+        raise LifecycleError(f"managed ingress network has unexpected attached containers: {names}")
+    return previous_attached
+
+
+def restore_previous_endpoint(previous_container, cfg):
+    restored = inspect_container(previous_container)
+    if (restored.get("State") or {}).get("Running") is not False:
+        raise LifecycleError("previous Agent container must remain stopped while its routed endpoint is restored")
+    networks = restored.get("NetworkSettings", {}).get("Networks") or {}
+    if cfg["network"] not in networks:
+        args = [
+            "docker", "network", "connect", "--gw-priority", "-1",
+            "--ip", str(cfg["_networks"][4][2]),
+        ]
+        if 6 in cfg["_networks"]:
+            args += ["--ip6", str(cfg["_networks"][6][2])]
+        args += [cfg["network"], previous_container]
+        run(args)
+        restored = inspect_container(previous_container)
+        networks = restored.get("NetworkSettings", {}).get("Networks") or {}
+    if cfg["network"] not in networks or "bridge" not in networks:
+        raise LifecycleError("previous Agent endpoint was not restored to routed and default bridge networks")
+    endpoint = networks[cfg["network"]]
+    for family, (_, _, address) in cfg["_networks"].items():
+        field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+        if endpoint.get(field) != str(address):
+            raise LifecycleError(f"restored previous container IPv{family} ingress address mismatch")
+    validate_dns_port_bindings(restored, cfg)
+    validate_default_bridge_egress(
+        previous_container,
+        networks["bridge"],
+        [4, *([6] if 6 in cfg["_networks"] else [])],
+    )
+
+
+def invalidate_host_attestation():
+    controller_path = Path(__file__).with_name("controller.py")
+    spec = importlib.util.spec_from_file_location("_s5m_agent_ingress_controller", controller_path)
+    if spec is None or spec.loader is None:
+        raise LifecycleError("host ingress controller cannot be loaded to invalidate stale readiness")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.invalidate_attestation(module.ATTEST)
+
+
+def provision(cfg, firewall_config_path=Path("/etc/s5m-agent-ingress/config.json"), previous_container=None):
+    with host_ingress_lock():
+        try:
+            verify_live_firewall(firewall_config_path)
+        except Exception as error:
+            try:
+                invalidate_host_attestation()
+            except Exception as invalidate_error:
+                raise LifecycleError(f"{error}; stale readiness invalidation failed: {invalidate_error}") from error
+            raise
+        _provision_locked(cfg, previous_container)
+
+
+def _provision_locked(cfg, previous_container=None):
+    # Even an idempotent reconcile must not reuse an attestation from a prior
+    # container ID. The verified timer will publish a fresh live-state record.
+    invalidate_host_attestation()
+    if run(["ip", "link", "show", "dev", cfg["interface"]], check=False).returncode:
+        raise LifecycleError(f"trusted ingress interface does not exist: {cfg['interface']}")
+    next_hops = host_next_hops(cfg)
+    help_result = run(["docker", "network", "connect", "--help"], check=False)
+    help_text = help_result.stdout + help_result.stderr
+    if "--gw-priority" not in help_text:
+        raise LifecycleError("Docker CLI must support network connect --gw-priority to preserve default bridge egress")
+    net = inspect_network(cfg["network"])
+    created = False
+    if net is None:
+        create_network(cfg)
+        created = True
+        net = inspect_network(cfg["network"])
+        if net is None:
+            run(["docker", "network", "rm", cfg["network"]], check=False)
+            raise LifecycleError("Docker did not create the requested network")
+
+    try:
+        validate_existing(net, cfg)
+        container = inspect_container(cfg["container"])
+        validate_dns_port_bindings(container, cfg)
+        attached = container.get("NetworkSettings", {}).get("Networks") or {}
+        target_attached = cfg["network"] in attached
+        previous_attached = validate_network_endpoint_state(net, cfg, container, target_attached, previous_container)
+    except Exception:
+        if created:
+            run(["docker", "network", "rm", cfg["network"]], check=False)
+        raise
+
+    if target_attached:
+        actual = attached[cfg["network"]]
+        for family, (_, _, address) in cfg["_networks"].items():
+            field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+            if actual.get(field) != str(address):
+                raise LifecycleError("container already attached with a different ingress address")
+
+    previous_detached = False
+    connected = False
+    try:
+        if not target_attached:
+            # A previous container's HMAC-backed packet proof is not transferable
+            # to a new Docker container ID, even when the IP/CIDRs are unchanged.
+            # Remove the Agent-readable readiness file before changing endpoints.
+            invalidate_host_attestation()
+        if previous_attached:
+            # Arm endpoint restoration before the daemon call: Docker can return
+            # a client-side error after it has already completed the detach.
+            previous_detached = True
+            try:
+                run(["docker", "network", "disconnect", cfg["network"], previous_container])
+            except Exception:
+                if cfg["network"] in container_networks(previous_container):
+                    previous_detached = False
+                    raise
+            if cfg["network"] in container_networks(previous_container):
+                previous_detached = False
+                raise LifecycleError("previous Agent routed endpoint could not be detached")
+
+        if not target_attached:
+            args = [
+                "docker", "network", "connect", "--gw-priority", "-1",
+                "--ip", str(cfg["_networks"][4][2]),
+            ]
+            if 6 in cfg["_networks"]:
+                args += ["--ip6", str(cfg["_networks"][6][2])]
+            args += [cfg["network"], cfg["container"]]
+            try:
+                run(args)
+            except Exception:
+                # Inspect after a failed CLI response; the daemon may have
+                # completed the endpoint attach before the client timed out.
+                if cfg["network"] in container_networks(cfg["container"]):
+                    connected = True
+                raise
+            connected = True
+
+        verified_container = inspect_container(cfg["container"])
+        validate_dns_port_bindings(verified_container, cfg)
+        attached = verified_container.get("NetworkSettings", {}).get("Networks") or {}
+        if "bridge" not in attached or cfg["network"] not in attached:
+            raise LifecycleError("container must retain default bridge plus routed ingress network")
+        for family, (_, _, address) in cfg["_networks"].items():
+            field = "IPAddress" if family == 4 else "GlobalIPv6Address"
+            if attached[cfg["network"]].get(field) != str(address):
+                raise LifecycleError(f"container ingress IPv{family} address mismatch")
+        bridge = attached["bridge"]
+        validate_default_bridge_egress(
+            cfg["container"],
+            bridge,
+            [4, *([6] if 6 in cfg["_networks"] else [])],
+        )
+    except Exception as error:
+        cleanup_errors = []
+        target_is_attached = connected
+        if not target_is_attached and not target_attached:
+            try:
+                target_is_attached = cfg["network"] in container_networks(cfg["container"])
+            except Exception as inspect_error:
+                cleanup_errors.append(f"new endpoint state inspection failed: {inspect_error}")
+        if target_is_attached:
+            try:
+                run(["docker", "network", "disconnect", cfg["network"], cfg["container"]], check=False)
+                if cfg["network"] in container_networks(cfg["container"]):
+                    raise LifecycleError("new endpoint remains attached after rollback disconnect")
+            except Exception as cleanup_error:
+                cleanup_errors.append(f"new endpoint detach failed: {cleanup_error}")
+        if previous_detached:
+            try:
+                restore_previous_endpoint(previous_container, cfg)
+            except Exception as restore_error:
+                cleanup_errors.append(f"previous endpoint restore failed: {restore_error}")
+        if created and not previous_detached:
+            run(["docker", "network", "rm", cfg["network"]], check=False)
+        if cleanup_errors:
+            raise LifecycleError(f"{error}; routed ingress rollback incomplete: {'; '.join(cleanup_errors)}") from error
+        raise
+
+    print(f"ROUTED_INGRESS_NETWORK_ATTACHED network={cfg['network']} container={cfg['container']} default_bridge_egress=preserved")
+    for family, (subnet, _, _) in cfg["_networks"].items():
+        print(f"UPSTREAM_ROUTER_STATIC_ROUTE IPv{family}: route {subnet} via {next_hops[family]} on {cfg['interface']}")
+        print(f"ROUTEROS_V7_COMMAND: {routeros_v7_route(subnet, next_hops[family])}")
+    print("Apply the displayed static routes on the upstream router; this helper does not change router or host routes.")
+    print("Physical LAN source-IP acceptance remains a separate mandatory step.")
+
+def uninstall(cfg):
+    with host_ingress_lock():
+        invalidate_host_attestation()
+        _uninstall_locked(cfg)
+
+
+def _uninstall_locked(cfg):
+    net=inspect_network(cfg["network"])
+    if net is None:
+        print("network already absent"); return
+    validate_existing(net,cfg)
+    attached=net.get("Containers") or {}
+    if attached:
+        ids={v.get("Name") for v in attached.values()}
+        if ids!={cfg["container"]}: raise LifecycleError(f"refusing removal: network has other attached containers: {sorted(str(x) for x in ids)}")
+        run(["docker","network","disconnect",cfg["network"],cfg["container"]])
+    run(["docker","network","rm",cfg["network"]])
+    print(f"REMOVED managed ingress network {cfg['network']}")
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("action",choices=("provision","uninstall")); p.add_argument("--config",type=Path,default=Path("/etc/s5m-agent-ingress/network.json")); p.add_argument("--firewall-config",type=Path,default=Path("/etc/s5m-agent-ingress/config.json")); p.add_argument("--previous-container",default=None)
+    a=p.parse_args()
+    if os.geteuid()!=0: raise LifecycleError("run on Docker host as root")
+    try:
+        cfg=read_config(a.config)
+    except Exception as error:
+        try:
+            invalidate_host_attestation()
+        except Exception as invalidate_error:
+            raise LifecycleError(f"{error}; stale readiness invalidation failed: {invalidate_error}") from error
+        raise
+    if a.action=="provision":
+        validate_firewall_contract(cfg,a.firewall_config)
+        provision(cfg,a.firewall_config,a.previous_container)
+    else:
+        # Cleanup must remain possible after firewall settings change; network
+        # ownership and exact Docker network shape are still independently checked.
+        uninstall(cfg)
+
+if __name__=="__main__":
+    try: main()
+    except Exception as e:
+        print(f"FAIL: {e}",file=sys.stderr); raise SystemExit(1)

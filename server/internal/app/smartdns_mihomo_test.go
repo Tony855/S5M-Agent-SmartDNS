@@ -706,3 +706,38 @@ rules: [MATCH,REJECT]
 		})
 	}
 }
+
+
+func TestBuildSmartDNSPerClientRuntimeConfigsWithIngressRequiresAndUsesAttestedAddresses(t *testing.T) {
+	input := `proxies:
+  - name: node-v4
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+  - name: node-v6
+    type: socks5
+    server: 2001:db8::10
+    port: 1080
+rules: [MATCH,REJECT]
+`
+	cfg := SmartDNSRoutingConfig{Mode: SmartDNSProxyModePerClient, Clients: []SmartDNSClientRoute{
+		{ClientCIDR: "192.168.50.0/24", ProxyName: "node-v4"},
+		{ClientCIDR: "2001:db8:50::/64", ProxyName: "node-v6"},
+	}}
+	proxies := []SmartDNSProxyRef{{Name: "node-v4", Enabled: true}, {Name: "node-v6", Enabled: true}}
+	mihomo, smartdns, mappings, err := buildSmartDNSPerClientRuntimeConfigsWithIngress(input, cfg, proxies, "172.31.0.10", "2001:db8:31::10")
+	if err != nil { t.Fatalf("build ingress runtime: %v", err) }
+	if len(mappings) != 2 || !strings.Contains(mihomo, "s5m-smartdns-") {
+		t.Fatalf("Mihomo listener mappings were not preserved: %#v", mappings)
+	}
+	for _, want := range []string{
+		"bind 172.31.0.10:6055", "bind-tcp 172.31.0.10:6055",
+		"bind [2001:db8:31::10]:6055", "bind-tcp [2001:db8:31::10]:6055",
+		"bind 127.0.0.1:6053", "bind 127.0.0.1:6054 -group china-dot", "bind-tcp 127.0.0.1:6054 -group china-dot", "server-tls 223.5.5.5:853 -host-name dns.alidns.com -tls-host-verify dns.alidns.com -group china-dot -exclude-default-group", "No default upstream",
+	} {
+		if !strings.Contains(smartdns, want) { t.Errorf("generated ingress config missing %q:\\n%s", want, smartdns) }
+	}
+	if _, _, _, err := buildSmartDNSPerClientRuntimeConfigsWithIngress(input, cfg, proxies, "", "2001:db8:31::10"); err == nil {
+		t.Fatal("missing IPv4 ingress address accepted")
+	}
+}

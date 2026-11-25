@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "scripts/lab/smartdns-dns-ingress/**"
+      - "scripts/host-ingress/**"
       - "docs/SMARTDNS-PER-CLIENT-DNS-INGRESS-ADR-CN.md"
       - "s5m-agent/Dockerfile.smartdns"
       - ".github/workflows/smartdns-real-daemon-ingress.yml"
@@ -24,6 +25,10 @@ jobs:
           mkdir -p scripts/lab/smartdns-dns-ingress/.runtime
           docker cp "$id:/out/usr/sbin/smartdns" scripts/lab/smartdns-dns-ingress/.runtime/smartdns
           docker rm "$id"
+      - name: Install nftables for the routed firewall lab
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nftables
       - name: Build isolated SmartDNS test image
         run: docker build --tag s5m-smartdns-routed-lab scripts/lab/smartdns-dns-ingress
       - name: Verify real SmartDNS client-IP group selection over routed ingress

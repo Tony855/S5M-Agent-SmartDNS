@@ -2,6 +2,8 @@ package main
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -44,10 +46,10 @@ func TestProcSocketTableObservesOnlyIngressPortAndCorrectTCPState(t *testing.T) 
 	}
 }
 
-func TestProcSocketTableRejectsWildcardAndUnrelatedAddress(t *testing.T) {
+func TestProcSocketTableAcceptsWildcardBindButNotUnrelatedAddress(t *testing.T) {
 	wildcard := []byte("sl local_address rem_address st tx_queue\n 0: 00000000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
-	if procSocketTableHasListener(wildcard, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
-		t.Fatal("wildcard socket must not be attributed to an explicitly attested interface address")
+	if !procSocketTableHasListener(wildcard, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
+		t.Fatal("wildcard UDP bind should be visible on the interface")
 	}
 	other := []byte("sl local_address rem_address st tx_queue\n 0: 0B0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
 	if procSocketTableHasListener(other, false, 6055, map[string]bool{"192.0.2.10": true}, false) {
@@ -65,10 +67,191 @@ func TestCollectSmartDNSIngressObservationFailsWhenNoNonLoopbackInterfaceExists(
 	}
 }
 
-func TestProcSocketTableRejectsConnectedUDPAndWrongState(t *testing.T) {
-	addresses := map[string]bool{"192.0.2.10": true}
-	connected := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 01010101:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12348\n")
-	if procSocketTableHasListener(connected, false, 6055, addresses, false) {
-		t.Fatal("connected UDP socket must not be reported as an unconnected DNS listener")
+
+func TestProcSocketTableExactListenerRejectsWildcard(t *testing.T) {
+	wildcard := []byte("sl local_address rem_address st tx_queue\n 0: 00000000:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	if procSocketTableHasExactListener(wildcard, false, 6055, "192.0.2.10", false) {
+		t.Fatal("wildcard UDP bind must not satisfy an exact ingress address contract")
+	}
+	exact := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	if !procSocketTableHasExactListener(exact, false, 6055, "192.0.2.10", false) {
+		t.Fatal("exact UDP ingress bind should satisfy the address contract")
+	}
+}
+
+func TestProcSocketTableExactListenerRejectsNonListeningUDPState(t *testing.T) {
+	connectedUDP := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 0100007F:0035 01 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	if procSocketTableHasExactListener(connectedUDP, false, 6055, "192.0.2.10", false) {
+		t.Fatal("connected UDP socket must not satisfy the exact UDP listener readiness contract")
+	}
+	listeningUDP := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12346\n")
+	if !procSocketTableHasExactListener(listeningUDP, false, 6055, "192.0.2.10", false) {
+		t.Fatal("UDP socket in listening state on the exact address should satisfy readiness")
+	}
+}
+
+
+func TestProcSocketTableExactListenerInodesAndSmartDNSProcessOwnership(t *testing.T) {
+	udp := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n")
+	tcp := []byte("sl local_address rem_address st tx_queue\n 0: 0A0200C0:17A7 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n")
+	udpInodes := procSocketTableExactListenerInodes(udp, false, 6055, "192.0.2.10", false)
+	tcpInodes := procSocketTableExactListenerInodes(tcp, false, 6055, "192.0.2.10", true)
+	if !udpInodes["12345"] || !tcpInodes["12346"] {
+		t.Fatalf("exact ingress socket inodes not extracted: UDP=%v TCP=%v", udpInodes, tcpInodes)
+	}
+
+	procRoot := t.TempDir()
+	fdDir := filepath.Join(procRoot, "1234", "fd")
+	if err := os.MkdirAll(fdDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := procProcessOwnsSocketInodes(procRoot, 1234, udpInodes, tcpInodes)
+	if err != nil || !owned {
+		t.Fatalf("SmartDNS process owning both exact sockets should be accepted: owned=%v err=%v", owned, err)
+	}
+
+	if err := os.Remove(filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	owned, err = procProcessOwnsSocketInodes(procRoot, 1234, udpInodes, tcpInodes)
+	if err != nil || owned {
+		t.Fatalf("process owning only UDP must not satisfy ingress readiness: owned=%v err=%v", owned, err)
+	}
+
+	otherFDDir := filepath.Join(procRoot, "5678", "fd")
+	if err := os.MkdirAll(otherFDDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	owned, err = procProcessOwnsSocketInodes(procRoot, 5678, udpInodes, tcpInodes)
+	if err != nil || owned {
+		t.Fatalf("a different process owning only TCP must not satisfy SmartDNS readiness: owned=%v err=%v", owned, err)
+	}
+}
+
+
+func TestSmartDNSAddressSocketsBoundRequiresOneProcessToOwnExactUDPAndTCP(t *testing.T) {
+	procRoot := t.TempDir()
+	netDir := filepath.Join(procRoot, "net")
+	if err := os.MkdirAll(netDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	udp := "sl local_address rem_address st tx_queue\n 0: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n"
+	tcp := "sl local_address rem_address st tx_queue\n 0: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n"
+	if err := os.WriteFile(filepath.Join(netDir, "udp"), []byte(udp), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(netDir, "tcp"), []byte(tcp), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fdDir := filepath.Join(procRoot, "1234", "fd")
+	if err := os.MkdirAll(fdDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := smartDNSAddressSocketsBoundWithProcRoot(procRoot, "127.0.0.1", 6053, true, []int{1234})
+	if err != nil || !bound {
+		t.Fatalf("one SmartDNS PID owning exact loopback UDP/TCP sockets should pass: bound=%v err=%v", bound, err)
+	}
+
+	if err := os.Remove(filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	otherFDDir := filepath.Join(procRoot, "5678", "fd")
+	if err := os.MkdirAll(otherFDDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	bound, err = smartDNSAddressSocketsBoundWithProcRoot(procRoot, "127.0.0.1", 6053, true, []int{1234, 5678})
+	if err != nil || bound {
+		t.Fatalf("split ownership by unrelated PIDs must not satisfy SmartDNS readiness: bound=%v err=%v", bound, err)
+	}
+
+	// A SmartDNS PID owning one UDP and one TCP socket must not hide a second
+	// SO_REUSEPORT listener owned by another process on the same exact endpoint.
+	udpWithReusePort := "sl local_address rem_address st tx_queue\n" +
+		" 0: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12345\n" +
+		" 1: 0100007F:17A5 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 12347\n"
+	tcpWithReusePort := "sl local_address rem_address st tx_queue\n" +
+		" 0: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12346\n" +
+		" 1: 0100007F:17A5 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12348\n"
+	if err := os.WriteFile(filepath.Join(netDir, "udp"), []byte(udpWithReusePort), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(netDir, "tcp"), []byte(tcpWithReusePort), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12346]", filepath.Join(fdDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12347]", filepath.Join(otherFDDir, "3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[12348]", filepath.Join(otherFDDir, "4")); err != nil {
+		t.Fatal(err)
+	}
+	bound, err = smartDNSAddressSocketsBoundWithProcRoot(procRoot, "127.0.0.1", 6053, true, []int{1234, 5678})
+	if err != nil || bound {
+		t.Fatalf("foreign UDP/TCP reuseport sockets must invalidate exact SmartDNS ownership: bound=%v err=%v", bound, err)
+	}
+
+	if _, err := smartDNSAddressSocketsBoundWithProcRoot(procRoot, "0.0.0.0", 6053, true, []int{1234}); err == nil {
+		t.Fatal("loopback listener verification must reject wildcard addresses")
+	}
+}
+
+func TestAppendSmartDNSIngressInterfaceAddressesRejectsDuplicateGlobalAddress(t *testing.T) {
+	ip, network, err := net.ParseCIDR("172.31.0.10/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := &net.IPNet{IP: ip, Mask: network.Mask}
+	observed := smartDNSIngressObservation{AddressInterfaces: make(map[string]string)}
+	addressSet := make(map[string]bool)
+
+	if err := appendSmartDNSIngressInterfaceAddresses(&observed, net.Interface{Name: "eth0"}, []net.Addr{address}, addressSet); err != nil {
+		t.Fatalf("first ingress address assignment rejected: %v", err)
+	}
+	if err := appendSmartDNSIngressInterfaceAddresses(&observed, net.Interface{Name: "eth1"}, []net.Addr{address}, addressSet); err == nil {
+		t.Fatal("the same global ingress address on a second interface must fail closed")
+	}
+	if got := observed.AddressInterfaces["172.31.0.10"]; got != "eth0" {
+		t.Fatalf("duplicate address overwrote its original interface: got %q", got)
+	}
+}
+
+func TestAppendSmartDNSIngressInterfaceAddressesIgnoresRepeatedLinkLocalAddress(t *testing.T) {
+	ip, network, err := net.ParseCIDR("fe80::1/64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := &net.IPNet{IP: ip, Mask: network.Mask}
+	observed := smartDNSIngressObservation{AddressInterfaces: make(map[string]string)}
+	addressSet := make(map[string]bool)
+	for _, name := range []string{"eth0", "eth1"} {
+		if err := appendSmartDNSIngressInterfaceAddresses(&observed, net.Interface{Name: name}, []net.Addr{address}, addressSet); err != nil {
+			t.Fatalf("repeated link-local address should not affect global ingress uniqueness: %v", err)
+		}
+	}
+	if len(observed.AddressInterfaces) != 0 || len(addressSet) != 0 {
+		t.Fatalf("link-local address entered global ingress observation: %#v %#v", observed, addressSet)
 	}
 }
