@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -145,7 +146,20 @@ func readSmartDNSHostIngressAttestationFromPathWithOwner(path string, requireRoo
 	if err := validateSmartDNSHostIngressFileFreshForContainer(info.ModTime(), containerStartTime); err != nil {
 		return attestation, err
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 8<<10))
+	data, err := io.ReadAll(io.LimitReader(file, (8<<10)+1))
+	if err != nil {
+		return attestation, fmt.Errorf("read host ingress attestation: %w", err)
+	}
+	if len(data) == 0 || len(data) > 8<<10 || int64(len(data)) != info.Size() {
+		return attestation, fmt.Errorf("host ingress attestation changed while being read or exceeded 8 KiB")
+	}
+	// encoding/json silently accepts duplicate object members and keeps the
+	// last value. The host attestation is a security contract, so reject
+	// ambiguous encodings before decoding any readiness booleans.
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return attestation, fmt.Errorf("host ingress attestation contains duplicate or invalid JSON members: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&attestation); err != nil {
 		return smartDNSHostIngressAttestation{}, fmt.Errorf("decode host ingress attestation: %w", err)
