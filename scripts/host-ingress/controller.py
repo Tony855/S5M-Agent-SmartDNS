@@ -303,7 +303,7 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
         evidence = strict_json_loads(raw)
         config_raw = _secure_regular(config_path)
         evidence_key = read_evidence_key()
-    except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return False
     if not physical_evidence_payload_valid(evidence, config_raw, cfg, now, evidence_key=evidence_key):
         return False
@@ -700,7 +700,7 @@ def validate_firewall_attestation(cfg: dict, path: Path = ATTEST, now: int | Non
     try:
         raw = _secure_regular(path, max_bytes=8192, require_root=require_root)
         attestation = strict_json_loads(raw)
-    except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError) as e:
+    except (OSError, ValueError) as e:
         raise ConfigError(f"fresh firewall attestation is unavailable: {e}") from e
     required = {
         "version", "updated_at", "interface", "ipv4_address", "ipv6_address",
