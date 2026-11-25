@@ -20,6 +20,17 @@ MAC_RE = re.compile(r"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 class ConfigError(ValueError): pass
 
+def strict_json_loads(data):
+    """Parse JSON while rejecting duplicate object members at every depth."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object member: {key}")
+            result[key] = value
+        return result
+    return json.loads(data, object_pairs_hook=unique_object)
+
 def _secure_regular(path: Path, *, max_bytes: int = 16384, require_root: bool = True) -> bytes:
     if require_root:
         parent_st = path.parent.lstat()
@@ -65,8 +76,8 @@ def validate_ethernet_address(value: object, field: str = "interface MAC") -> st
 
 def load_config(path: Path = CONFIG, *, require_root: bool = True) -> dict:
     raw = _secure_regular(path, require_root=require_root)
-    try: cfg = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as e: raise ConfigError("config must be valid UTF-8 JSON") from e
+    try: cfg = strict_json_loads(raw)
+    except (UnicodeDecodeError, ValueError) as e: raise ConfigError("config must be valid UTF-8 JSON without duplicate members") from e
     if not isinstance(cfg, dict) or set(cfg) != {"version", "interface", "ipv4_address", "ipv6_address", "client_cidrs"}:
         raise ConfigError("config keys must be exactly version, interface, ipv4_address, ipv6_address, client_cidrs")
     if type(cfg["version"]) is not int or cfg["version"] != 1: raise ConfigError("unsupported config version")
@@ -289,7 +300,7 @@ def physical_evidence_valid(path: Path, config_path: Path, cfg: dict, now: int |
         if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
             return False
         raw = _secure_regular(path, max_bytes=16384)
-        evidence = json.loads(raw)
+        evidence = strict_json_loads(raw)
         config_raw = _secure_regular(config_path)
         evidence_key = read_evidence_key()
     except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError):
@@ -688,7 +699,7 @@ def validate_firewall_attestation(cfg: dict, path: Path = ATTEST, now: int | Non
     """Require a fresh controller-written attestation for this exact firewall config."""
     try:
         raw = _secure_regular(path, max_bytes=8192, require_root=require_root)
-        attestation = json.loads(raw)
+        attestation = strict_json_loads(raw)
     except (OSError, ConfigError, UnicodeDecodeError, json.JSONDecodeError) as e:
         raise ConfigError(f"fresh firewall attestation is unavailable: {e}") from e
     required = {
