@@ -151,3 +151,37 @@ func TestValidateSmartDNSHostIngressAttestationRequiresMatchingAddressFamily(t *
 		t.Fatal("IPv4 client CIDR accepted without an IPv4 ingress address")
 	}
 }
+func TestReadSmartDNSHostIngressAttestationRejectsDuplicateJSONMembers(t *testing.T) {
+	allowReadOnlyAttestationMountForTest(t)
+	path := filepath.Join(t.TempDir(), "ingress.json")
+	data, err := json.Marshal(validHostIngressAttestationFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		json string
+	}{
+		{
+			name: "duplicate readiness boolean",
+			json: strings.Replace(string(data), `"source_ip_preserved":true`, `"source_ip_preserved":true,"source_ip_preserved":false`, 1),
+		},
+		{
+			name: "escaped duplicate version alias",
+			json: strings.Replace(string(data), `"version":1`, `"version":1,"vers\u0069on":1`, 1),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.json == string(data) {
+				t.Fatal("test fixture did not insert a duplicate JSON member")
+			}
+			if err := os.WriteFile(path, []byte(tc.json), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readSmartDNSHostIngressAttestationFromPathWithOwner(path, false); err == nil {
+				t.Fatal("ambiguous host ingress attestation JSON was accepted")
+			}
+		})
+	}
+}
