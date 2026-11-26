@@ -18,6 +18,17 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 class LifecycleError(RuntimeError): pass
 
+def strict_json_loads(data):
+    """Parse JSON while rejecting duplicate object members at every depth."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object member: {key}")
+            result[key] = value
+        return result
+    return json.loads(data, object_pairs_hook=unique_object)
+
 def secure_read(path: Path, max_bytes: int, *, require_root: bool = True) -> bytes:
     if require_root:
         current=Path("/")
@@ -47,8 +58,8 @@ def secure_read(path: Path, max_bytes: int, *, require_root: bool = True) -> byt
 
 def read_config(path: Path, *, require_root: bool = True) -> dict:
     raw=secure_read(path,8192,require_root=require_root)
-    try: cfg = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as e: raise LifecycleError("config must be valid UTF-8 JSON") from e
+    try: cfg = strict_json_loads(raw)
+    except (UnicodeDecodeError, ValueError) as e: raise LifecycleError("config must be valid UTF-8 JSON without duplicate members") from e
     keys = {"version","network","container","interface","ipv4_subnet","ipv4_gateway","ipv4_address","ipv6_subnet","ipv6_gateway","ipv6_address","client_cidrs"}
     if not isinstance(cfg,dict) or set(cfg) != keys or type(cfg["version"]) is not int or cfg["version"] != 1:
         raise LifecycleError("invalid config schema/version")
@@ -140,8 +151,8 @@ def verify_live_firewall(firewall_config_path: Path) -> None:
 
 def validate_firewall_contract(cfg: dict, path: Path, *, require_root: bool = True) -> None:
     raw=secure_read(path,16384,require_root=require_root)
-    try: fw=json.loads(raw)
-    except (UnicodeDecodeError,json.JSONDecodeError) as e: raise LifecycleError("firewall config must be valid UTF-8 JSON") from e
+    try: fw=strict_json_loads(raw)
+    except (UnicodeDecodeError,ValueError) as e: raise LifecycleError("firewall config must be valid UTF-8 JSON without duplicate members") from e
     required={"version","interface","ipv4_address","ipv6_address","client_cidrs"}
     if not isinstance(fw,dict) or set(fw)!=required or type(fw["version"]) is not int or fw["version"]!=1:
         raise LifecycleError("firewall config schema/version mismatch")

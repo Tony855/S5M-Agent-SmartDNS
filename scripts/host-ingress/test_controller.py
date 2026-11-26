@@ -30,6 +30,14 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('ip6 daddr 2001:db8:31::2 drop', rules)
         self.assertIn("managed-by:s5m-agent-ingress-v1", rules)
         self.assertNotIn("dport 53", rules)
+    def test_rejects_duplicate_json_members_in_config_and_evidence_parser(self):
+        self.path.write_text('{"version":1,"version":1,"interface":"eth1","ipv4_address":"172.31.10.2","ipv6_address":"2001:db8:31::2","client_cidrs":["192.168.50.0/24","2001:db8:50::/64"]}')
+        self.path.chmod(0o600)
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config(self.path, require_root=False)
+        with self.assertRaises(ValueError):
+            mod.strict_json_loads(b'{"proof":{"ready":true,"ready":false}}')
+
     def test_rejects_boolean_version_and_mapped_ipv6_cidr(self):
         x=self.valid(); x["version"]=True; self.write(x)
         with self.assertRaises(mod.ConfigError): mod.load_config(self.path, require_root=False)
