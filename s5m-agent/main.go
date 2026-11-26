@@ -1397,6 +1397,7 @@ func processAgentCommandWebSocket(cfg Config) error {
 		return fmt.Errorf("WebSocket 连接失败：%w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(3 << 20)
 	_ = conn.SetReadDeadline(time.Now().Add(12 * time.Second))
 	_ = conn.SetWriteDeadline(time.Now().Add(8 * time.Second))
 	var welcome struct {
@@ -1418,7 +1419,7 @@ func processAgentCommandWebSocket(cfg Config) error {
 		Command *agentCommand `json:"command"`
 		Message string        `json:"message"`
 	}
-	if err := conn.ReadJSON(&envelope); err != nil {
+	if err := readAgentWSJSONStrict(conn, &envelope, 90*time.Second); err != nil {
 		return fmt.Errorf("读取 WebSocket 命令失败：%w", err)
 	}
 	if envelope.ID != requestID {
@@ -2439,7 +2440,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			IngressContract *smartDNSPerClientIngressContract `json:"ingress_contract,omitempty"`
 			Message        string `json:"message"`
 		}
-		if err := readAgentWSJSON(conn, &configResponse, 90*time.Second); err != nil {
+		if err := readAgentWSJSONStrict(conn, &configResponse, 90*time.Second); err != nil {
 			return recordAgentConfigSyncFailure(fmt.Errorf("读取配置响应失败：%w", err))
 		}
 		if configResponse.ID != configRequestID {
@@ -2510,7 +2511,7 @@ func runAgentWebSocketSession(cfg Config, bindingGeneration uint64) error {
 			Command *agentCommand `json:"command"`
 			Message string        `json:"message"`
 		}
-		if err := readAgentWSJSON(conn, &commandEnvelope, 90*time.Second); err != nil {
+		if err := readAgentWSJSONStrict(conn, &commandEnvelope, 90*time.Second); err != nil {
 			return fmt.Errorf("读取命令响应失败：%w", err)
 		}
 		if commandEnvelope.ID != commandRequestID {
@@ -2840,6 +2841,46 @@ func readAgentWSJSON(conn *websocket.Conn, target any, timeout time.Duration) er
 		return err
 	}
 	return conn.ReadJSON(target)
+}
+
+// decodeAgentWSJSONStrict rejects duplicate members, unknown fields (including
+// nested contract fields), and trailing JSON values before an instruction can
+// reach the config transaction. The regular decoder remains for non-contract
+// compatibility messages such as the initial welcome frame.
+func decodeAgentWSJSONStrict(data []byte, target any) error {
+	if len(data) == 0 || len(data) > 3<<20 {
+		return fmt.Errorf("WebSocket JSON message is empty or exceeds 3 MiB")
+	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return fmt.Errorf("WebSocket JSON message contains duplicate or invalid members: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode strict WebSocket JSON message: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("WebSocket JSON message contains multiple values")
+		}
+		return fmt.Errorf("WebSocket JSON message contains trailing data: %w", err)
+	}
+	return nil
+}
+
+func readAgentWSJSONStrict(conn *websocket.Conn, target any, timeout time.Duration) error {
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	messageType, data, err := conn.ReadMessage()
+	if err != nil {
+		return err
+	}
+	if messageType != websocket.TextMessage {
+		return fmt.Errorf("WebSocket instruction must use a text frame")
+	}
+	return decodeAgentWSJSONStrict(data, target)
 }
 
 // serveAgentRegistrationPage prevents browsers and intermediary proxies from
