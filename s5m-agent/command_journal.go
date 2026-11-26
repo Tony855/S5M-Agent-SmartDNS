@@ -95,6 +95,7 @@ func decodeAgentCommandJournalStrict(data []byte, target any) error {
 func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	var entry agentCommandJournalEntry
 	path := agentCommandJournalPath()
+	// O_NONBLOCK lets the regular-file check reject a substituted FIFO without hanging.
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if os.IsNotExist(err) {
 		return entry, nil
