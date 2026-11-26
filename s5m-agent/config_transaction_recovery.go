@@ -67,6 +67,23 @@ func removeConfigTransactionRecoveryRecord() error {
 	return dir.Sync()
 }
 
+// isCanonicalAgentJSONMemberName restricts contract keys to the ASCII
+// lowercase snake-case alphabet used by Agent JSON tags. encoding/json also
+// folds some non-ASCII Unicode characters when matching struct fields, so a
+// lowercase-only Unicode check is not sufficient to prevent field aliases.
+func isCanonicalAgentJSONMemberName(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // rejectDuplicateJSONKeys rejects ambiguous object members before decoding a
 // recovery journal into structs. encoding/json otherwise accepts duplicate
 // keys and silently keeps the last value, which is unsafe for rollback state.
@@ -93,6 +110,11 @@ func rejectDuplicateJSONKeys(data []byte) error {
 				key, ok := keyToken.(string)
 				if !ok {
 					return fmt.Errorf("JSON object member name is not a string")
+				}
+				// Require canonical ASCII snake-case tags. This also rejects
+				// Unicode simple-fold aliases such as long-s in "ingress_contract".
+				if !isCanonicalAgentJSONMemberName(key) {
+					return fmt.Errorf("non-canonical JSON object member %q", key)
 				}
 				if _, duplicate := seen[key]; duplicate {
 					return fmt.Errorf("duplicate JSON object member %q", key)

@@ -2705,3 +2705,92 @@ func TestEnsureMihomoRuntimeVersionRollsBackWhenRecoveryHealthFails(t *testing.T
 		t.Fatalf("failed recovery: err=%v restarts=%d health=%d rollbacks=%d", err, restarts, healthChecks, rollbacks)
 	}
 }
+
+func TestDecodeAgentWSJSONStrictRejectsAmbiguousAndUnknownContractFields(t *testing.T) {
+	type configResponse struct {
+		Type            string                              `json:"type"`
+		ID              string                              `json:"id"`
+		IngressContract *smartDNSPerClientIngressContract    `json:"ingress_contract,omitempty"`
+	}
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "duplicate top-level type",
+			data: `{"type":"config.sync","type":"config.unchanged","id":"cfg-1"}`,
+		},
+		{
+			name: "duplicate nested readiness",
+			data: `{"type":"config.sync","id":"cfg-1","ingress_contract":{"version":1,"ready":true,"ready":false,"ipv4_address":"172.31.10.2","ipv6_address":"","client_cidrs":["192.168.50.0/24"],"mappings":[]}}`,
+		},
+		{
+			name: "case-insensitive alias for nested readiness",
+			data: `{"type":"config.sync","id":"cfg-1","ingress_contract":{"version":1,"ready":true,"Ready":false,"ipv4_address":"172.31.10.2","ipv6_address":"","client_cidrs":["192.168.50.0/24"],"mappings":[]}}`,
+		},
+		{
+			name: "Unicode case-fold alias for ingress contract",
+			data: `{"type":"config.sync","id":"cfg-1","ingress_contract":{"version":1,"ready":true,"ipv4_address":"172.31.10.2","ipv6_address":"","client_cidrs":["192.168.50.0/24"],"mappings":[]},"ingre\u017Fs_contract":null}`,
+		},
+		{
+			name: "noncanonical top-level field spelling",
+			data: `{"Type":"config.sync","id":"cfg-1"}`,
+		},
+		{
+			name: "unknown nested contract field",
+			data: `{"type":"config.sync","id":"cfg-1","ingress_contract":{"version":1,"ready":true,"ipv4_address":"172.31.10.2","ipv6_address":"","client_cidrs":["192.168.50.0/24"],"mappings":[],"allow_public_dns":true}}`,
+		},
+		{
+			name: "unknown nested mapping field",
+			data: `{"type":"config.sync","id":"cfg-1","ingress_contract":{"version":1,"ready":true,"ipv4_address":"172.31.10.2","ipv6_address":"","client_cidrs":["192.168.50.0/24"],"mappings":[{"client_cidr":"192.168.50.0/24","proxy_name":"proxy-a","listener_name":"s5m-smartdns-16001","listener_address":"127.0.0.1","listener_port":16001,"public_bind":true}]}}`,
+		},
+		{
+			name: "unknown top-level instruction field",
+			data: `{"type":"config.sync","id":"cfg-1","skip_ingress_attestation":true}`,
+		},
+		{
+			name: "trailing second JSON value",
+			data: `{"type":"config.sync","id":"cfg-1"} {}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var response configResponse
+			if err := decodeAgentWSJSONStrict([]byte(tt.data), &response); err == nil {
+				t.Fatal("strict WebSocket decoder accepted ambiguous or unknown instruction data")
+			}
+		})
+	}
+}
+
+func TestDecodeAgentWSJSONStrictAcceptsContractBoundConfigResponse(t *testing.T) {
+	type configResponse struct {
+		Type            string                           `json:"type"`
+		ID              string                           `json:"id"`
+		IngressContract *smartDNSPerClientIngressContract `json:"ingress_contract,omitempty"`
+	}
+	data := []byte(`{"type":"config.sync","id":"cfg-1","ingress_contract":{"version":1,"ready":true,"ipv4_address":"172.31.10.2","ipv6_address":"","client_cidrs":["192.168.50.0/24"],"mappings":[{"client_cidr":"192.168.50.0/24","proxy_name":"proxy-a","listener_name":"s5m-smartdns-16001","listener_address":"127.0.0.1","listener_port":16001}]}}`)
+	var response configResponse
+	if err := decodeAgentWSJSONStrict(data, &response); err != nil {
+		t.Fatalf("valid contract-bound config response rejected: %v", err)
+	}
+	if response.Type != "config.sync" || response.ID != "cfg-1" || response.IngressContract == nil ||
+		response.IngressContract.Version != smartDNSPerClientIngressContractVersion ||
+		len(response.IngressContract.Mappings) != 1 ||
+		response.IngressContract.Mappings[0].ListenerPort != 16001 {
+		t.Fatalf("strict decoder did not preserve the contract: %+v", response)
+	}
+}
+
+func TestDecodeAgentWSJSONStrictRejectsUnknownCommandInstructionFields(t *testing.T) {
+	var envelope struct {
+		Type    string        `json:"type"`
+		ID      string        `json:"id"`
+		Command *agentCommand `json:"command"`
+	}
+	data := []byte(`{"type":"command.deliver","id":"poll-1","command":{"id":"cmd-1","type":"configure_smartdns","config":"bind 127.0.0.1:6053","unexpected_runtime_override":true}}`)
+	if err := decodeAgentWSJSONStrict(data, &envelope); err == nil {
+		t.Fatal("strict WebSocket decoder accepted an unknown command instruction field")
+	}
+}
+
