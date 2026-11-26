@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -42,6 +43,55 @@ func agentCommandJournalPath() string {
 // readAgentCommandJournal treats the persistent journal as untrusted input:
 // do not follow a volume-provided symlink, allocate based on an untrusted file
 // size, or accept a journal that is readable by other container users.
+// decodeAgentCommandJournalStrict rejects duplicate/case-aliased JSON members,
+// unknown fields and trailing values before a durable command journal is trusted.
+func decodeAgentCommandJournalStrict(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var consume func() error
+	consume = func() error {
+		token, err := decoder.Token()
+		if err != nil { return err }
+		delim, ok := token.(json.Delim)
+		if !ok { return nil }
+		switch delim {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil { return err }
+				key, ok := keyToken.(string)
+				if !ok { return fmt.Errorf("JSON object member name is not a string") }
+				if !isCanonicalAgentJSONMemberName(key) { return fmt.Errorf("non-canonical JSON member %q", key) }
+				if _, exists := seen[key]; exists { return fmt.Errorf("duplicate JSON member %q", key) }
+				seen[key] = struct{}{}
+				if err := consume(); err != nil { return err }
+			}
+			end, err := decoder.Token()
+			if err != nil || end != json.Delim('}') { return fmt.Errorf("invalid JSON object ending") }
+		case '[':
+			for decoder.More() { if err := consume(); err != nil { return err } }
+			end, err := decoder.Token()
+			if err != nil || end != json.Delim(']') { return fmt.Errorf("invalid JSON array ending") }
+		default:
+			return fmt.Errorf("unexpected JSON delimiter %q", delim)
+		}
+		return nil
+	}
+	if err := consume(); err != nil { return err }
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil { return fmt.Errorf("multiple JSON values") }
+		return fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	typed := json.NewDecoder(bytes.NewReader(data))
+	typed.DisallowUnknownFields()
+	if err := typed.Decode(target); err != nil { return err }
+	if err := typed.Decode(new(any)); err != io.EOF {
+		if err == nil { return fmt.Errorf("multiple JSON values") }
+		return fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	return nil
+}
+
 func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	var entry agentCommandJournalEntry
 	path := agentCommandJournalPath()
@@ -75,7 +125,7 @@ func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	if len(data) == 0 || len(data) > agentCommandJournalMaxBytes {
 		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 64 KiB")
 	}
-	if err := json.Unmarshal(data, &entry); err != nil {
+	if err := decodeAgentCommandJournalStrict(data, &entry); err != nil {
 		return entry, fmt.Errorf("Agent 命令执行记录损坏，拒绝覆盖: %w", err)
 	}
 	if strings.TrimSpace(entry.ID) == "" || len(entry.ID) > 256 ||

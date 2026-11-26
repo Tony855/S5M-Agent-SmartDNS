@@ -173,6 +173,26 @@ func TestReadAgentCommandJournalRejectsCorruptAndInvalidEntries(t *testing.T) {
 	}
 }
 
+func TestReadAgentCommandJournalRejectsAmbiguousJSON(t *testing.T) {
+	validHash := strings.Repeat("a", 64)
+	tests := []struct { name, data string }{
+		{name: "duplicate top-level member", data: "{\"id\":\"cmd-a\",\"id\":\"cmd-b\",\"payload_hash\":\""+validHash+"\",\"state\":\"running\"}"},
+		{name: "case alias for top-level member", data: "{\"ID\":\"cmd-a\",\"payload_hash\":\""+validHash+"\",\"state\":\"running\"}"},
+		{name: "Unicode case-fold alias for state", data: "{\"id\":\"cmd-a\",\"payload_hash\":\""+validHash+"\",\"state\":\"running\",\"\\u017Ftate\":\"completed\"}"},
+		{name: "duplicate nested history member", data: "{\"id\":\"cmd-a\",\"payload_hash\":\""+validHash+"\",\"state\":\"running\",\"history\":[{\"id\":\"old\",\"id\":\"other\",\"payload_hash\":\""+validHash+"\"}]}"},
+		{name: "unknown member", data: "{\"id\":\"cmd-a\",\"payload_hash\":\""+validHash+"\",\"state\":\"running\",\"skip_replay_guard\":true}"},
+		{name: "trailing JSON value", data: "{\"id\":\"cmd-a\",\"payload_hash\":\""+validHash+"\",\"state\":\"running\"} {}"},
+		{name: "non-hex historical hash", data: "{\"id\":\"cmd-a\",\"payload_hash\":\""+validHash+"\",\"state\":\"completed\",\"status\":\"success\",\"history\":[{\"id\":\"old\",\"payload_hash\":\""+strings.Repeat("z",64)+"\"}]}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MIHOMO_HOME", t.TempDir())
+			if err := os.WriteFile(agentCommandJournalPath(), []byte(tt.data), 0600); err != nil { t.Fatal(err) }
+			if _, err := readAgentCommandJournal(); err == nil { t.Fatal("ambiguous or invalid journal JSON was accepted") }
+		})
+	}
+}
+
 func TestReadAgentCommandJournalAcceptsValidRunningEntry(t *testing.T) {
 	t.Setenv("MIHOMO_HOME", t.TempDir())
 	entry := agentCommandJournalEntry{
