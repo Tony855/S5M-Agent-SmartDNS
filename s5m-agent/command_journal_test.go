@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -87,6 +88,26 @@ func TestExecuteAgentCommandWithJournalReconcilesInterruptedCommand(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(home, "agent-command-journal.json")); err != nil {
 		t.Fatalf("journal not persisted: %v", err)
+	}
+}
+
+func TestReadAgentCommandJournalRejectsFIFOWithoutBlocking(t *testing.T) {
+	t.Setenv("MIHOMO_HOME", t.TempDir())
+	if err := syscall.Mkfifo(agentCommandJournalPath(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := readAgentCommandJournal()
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("FIFO journal path was accepted")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FIFO journal open blocked; expected immediate rejection")
 	}
 }
 

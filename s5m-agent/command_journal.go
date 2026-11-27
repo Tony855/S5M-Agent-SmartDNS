@@ -95,7 +95,8 @@ func decodeAgentCommandJournalStrict(data []byte, target any) error {
 func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	var entry agentCommandJournalEntry
 	path := agentCommandJournalPath()
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	// O_NONBLOCK lets the regular-file check reject a substituted FIFO without hanging.
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if os.IsNotExist(err) {
 		return entry, nil
 	}
@@ -124,6 +125,16 @@ func readAgentCommandJournal() (agentCommandJournalEntry, error) {
 	}
 	if len(data) == 0 || len(data) > agentCommandJournalMaxBytes {
 		return entry, fmt.Errorf("Agent 命令执行记录为空或超过 64 KiB")
+	}
+	// The path may be replaced or modified by another volume writer while it
+	// is being read. Require the bytes to match the opened inode's stable size
+	// and metadata snapshot before trusting the replay decision.
+	currentInfo, err := file.Stat()
+	if err != nil {
+		return entry, fmt.Errorf("重新检查 Agent 命令执行记录失败: %w", err)
+	}
+	if int64(len(data)) != info.Size() || currentInfo.Size() != info.Size() || !currentInfo.ModTime().Equal(info.ModTime()) {
+		return entry, fmt.Errorf("Agent 命令执行记录在读取期间发生变化，拒绝执行")
 	}
 	if err := decodeAgentCommandJournalStrict(data, &entry); err != nil {
 		return entry, fmt.Errorf("Agent 命令执行记录损坏，拒绝覆盖: %w", err)
