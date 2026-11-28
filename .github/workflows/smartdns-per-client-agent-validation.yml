@@ -3,14 +3,17 @@ name: SmartDNS per-client Agent validation
 on:
   push:
     branches:
+      - main
       - "feat/smartdns-*"
     paths:
       - "s5m-agent/**"
+      - "scripts/host-ingress/**"
       - ".github/workflows/smartdns-per-client-agent-validation.yml"
   pull_request:
     branches: [main]
     paths:
       - "s5m-agent/**"
+      - "scripts/host-ingress/**"
       - ".github/workflows/smartdns-per-client-agent-validation.yml"
 
 permissions:
