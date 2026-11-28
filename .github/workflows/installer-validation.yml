@@ -10,6 +10,7 @@ on:
       - "scripts/tests/deploy-agent-rollback.sh"
       - "scripts/tests/deploy-agent-dns-ingress-guard.sh"
       - "scripts/deploy-s5m-agent.sh"
+      - "scripts/host-ingress/**"
       - "scripts/s5m-deploy.sh"
       - "scripts/tests/data-dir-safety.sh"
       - "scripts/tests/verify-workflow-action-pins.sh"
@@ -29,6 +30,7 @@ on:
       - "scripts/tests/deploy-agent-rollback.sh"
       - "scripts/tests/deploy-agent-dns-ingress-guard.sh"
       - "scripts/deploy-s5m-agent.sh"
+      - "scripts/host-ingress/**"
       - "scripts/s5m-deploy.sh"
       - "scripts/tests/data-dir-safety.sh"
       - "scripts/tests/verify-workflow-action-pins.sh"
@@ -56,6 +58,7 @@ jobs:
           bash -n scripts/install-server.sh
           bash -n scripts/deploy-agent.sh
           bash -n scripts/deploy-s5m-agent.sh
+          bash -n scripts/host-ingress/install-host-controller.sh scripts/host-ingress/uninstall-host-controller.sh
           bash -n scripts/s5m-deploy.sh
           bash -n scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh scripts/tests/verify-workflow-action-pins.sh
 
@@ -147,7 +150,7 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck errors
-        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/deploy-s5m-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh
+        run: shellcheck --severity=error scripts/install.sh scripts/install-server.sh scripts/deploy-agent.sh scripts/deploy-s5m-agent.sh scripts/s5m-deploy.sh scripts/tests/deploy-agent-rollback.sh scripts/tests/deploy-s5m-agent-rollback.sh scripts/host-ingress/install-host-controller.sh scripts/host-ingress/uninstall-host-controller.sh
 
       - name: Verify immutable GitHub Action references
         run: bash scripts/tests/verify-workflow-action-pins.sh
@@ -163,6 +166,13 @@ jobs:
 
       - name: Test legacy Agent redeploy rollback paths
         run: bash scripts/tests/deploy-s5m-agent-rollback.sh
+
+      - name: Validate routed DNS ingress host installer and lifecycle
+        run: |
+          python3 -m py_compile scripts/host-ingress/controller.py scripts/host-ingress/network-lifecycle.py
+          python3 -m unittest discover -s scripts/host-ingress -p 'test_*.py'
+          systemd-analyze verify scripts/host-ingress/s5m-agent-ingress.service scripts/host-ingress/s5m-agent-ingress.timer
+          rm -rf scripts/host-ingress/__pycache__
 
       - name: Check embedded web JavaScript syntax
         run: |
